@@ -151,7 +151,11 @@ class WolfTLSClient final : public WiFiClient {
   static void ensure_ctx() {
     if (s_ctx) return;
     wolfSSL_Init();
+    /* Do not tie to POTATO_MESH_DEBUG: meshcore/platformio.ini sets that globally for ingest.
+     * Opt-in only: add build flag -D POTATO_MESH_WOLFSSL_TRACE=1 (very verbose). */
+#if POTATO_MESH_WOLFSSL_TRACE
     wolfSSL_Debugging_ON();
+#endif
     s_ctx = wolfSSL_CTX_new(wolfTLSv1_2_client_method());
     if (!s_ctx) {
       POTATO_MESH_DBG_LN("WolfTLS: CTX alloc failed heap=%u blk=%u",
