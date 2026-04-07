@@ -32,6 +32,8 @@ public:
   bool getKnownWifiPassword(const char* ssid, char* out_pwd, size_t pwd_cap) const;
 
   void setWifi(const char* s, const char* p);
+  /** Remove SSID from saved known list; clears active ssid/pwd if it matched. */
+  bool forgetKnownWifi(const char* ssid);
   void setApiToken(const char* t);
   void setIngestOrigin(const char* u);
   void setDebug(bool on);

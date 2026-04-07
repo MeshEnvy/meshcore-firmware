@@ -215,6 +215,41 @@ static void put_string_pref(const char* key, const char* val) {
   prefs.end();
 }
 
+bool PotatoMeshConfig::forgetKnownWifi(const char* ssid) {
+  if (!ssid || !ssid[0]) {
+    return false;
+  }
+  bool found = false;
+  uint8_t w = 0;
+  for (uint8_t r = 0; r < _known_cnt; r++) {
+    if (strcmp(_known_ssid[r], ssid) == 0) {
+      found = true;
+      memset(_known_pwd[r], 0, sizeof(_known_pwd[r]));
+      continue;
+    }
+    if (w != r) {
+      strcpy(_known_ssid[w], _known_ssid[r]);
+      strcpy(_known_pwd[w], _known_pwd[r]);
+    }
+    w++;
+  }
+  if (!found) {
+    return false;
+  }
+  _known_cnt = w;
+
+  bool clear_active = (strcmp(_ssid, ssid) == 0);
+  if (clear_active) {
+    memset(_pwd, 0, sizeof(_pwd));
+    _ssid[0] = '\0';
+    put_string_pref("ssid", "");
+    put_string_pref("pwd", "");
+  }
+  persistKnownWifi();
+  POTATO_MESH_DBG_LN("potato mesh cfg: forgot wifi ssid=\"%.32s\" active_cleared=%d", ssid, clear_active ? 1 : 0);
+  return true;
+}
+
 void PotatoMeshConfig::setWifi(const char* s, const char* p) {
   const char* ss = s ? s : "";
   const char* pp = p ? p : "";
@@ -267,6 +302,8 @@ void PotatoMeshConfig::load() {}
 bool PotatoMeshConfig::isIngestReady() const { return false; }
 
 void PotatoMeshConfig::setWifi(const char*, const char*) {}
+
+bool PotatoMeshConfig::forgetKnownWifi(const char*) { return false; }
 
 bool PotatoMeshConfig::getKnownWifi(uint8_t, char*, size_t, char*, size_t) const { return false; }
 

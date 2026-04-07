@@ -24,6 +24,7 @@ static void formatPotatoAdminHelp(char* out, size_t cap, bool ingest_paused) {
            "Potato Core menu:\n\n"
            "/wifi  (no args: status + scan + networks)\n"
            "/wifi <n> [pwd]  (* = saved, pwd optional)\n"
+           "/wifi -<n>  (remove saved entry for line n)\n"
            "/wifi <ssid> [pwd]\n"
            "/auth <token>\n"
            "/endpoint <ingest URL>\n"
@@ -2411,6 +2412,29 @@ static bool potato_first_token_is_wifi_list_index(const char* tok, unsigned* out
   return true;
 }
 
+static bool potato_wifi_token_is_delete_line_syntax(const char* tok) {
+  if (!tok || tok[0] != '-' || !tok[1]) {
+    return false;
+  }
+  for (const char* q = tok + 1; *q; q++) {
+    if (*q < '0' || *q > '9') {
+      return false;
+    }
+  }
+  return true;
+}
+
+static unsigned potato_wifi_parse_unsigned_digit_token(const char* tok) {
+  unsigned n = 0;
+  for (const char* q = tok; *q; q++) {
+    n = n * 10u + (unsigned)(*q - '0');
+    if (n > 999u) {
+      return 1000u;
+    }
+  }
+  return n;
+}
+
 void MyMesh::sendPotatoWifiStatusAndScan(const ContactInfo& to) {
   POTATO_MESH_DBG_LN("admin /wifi: status+scan from=\"%.32s\"", to.name);
 
@@ -2625,6 +2649,44 @@ bool MyMesh::tryHandlePotatoAdminDm(const ContactInfo& from, const char* text) {
     p = skip_sp_dm(p);
     if (ssid[0] == '\0') {
       sendPotatoWifiStatusAndScan(from);
+      return true;
+    }
+    if (potato_wifi_token_is_delete_line_syntax(ssid)) {
+      if (p[0] != '\0') {
+        sendPotatoAdminReply(from, "Usage: /wifi -<n>  (no extra arguments)");
+        return true;
+      }
+      potato_wifi_fill_scan_dedup();
+      potato_wifi_rebuild_merged_list(cfg);
+      if (g_wifi_merged_count == 0) {
+        sendPotatoAdminReply(from, "WiFi: no networks list (run /wifi first).");
+        return true;
+      }
+      unsigned line = potato_wifi_parse_unsigned_digit_token(ssid + 1);
+      if (line < 1u || line > (unsigned)g_wifi_merged_count) {
+        char msg[96];
+        snprintf(msg, sizeof(msg), "WiFi: line must be 1..%u (from /wifi list).", (unsigned)g_wifi_merged_count);
+        sendPotatoAdminReply(from, msg);
+        return true;
+      }
+      if (!g_wifi_merged[line - 1].is_known) {
+        sendPotatoAdminReply(from, "WiFi: that line is not a saved network (*).");
+        return true;
+      }
+      const char* del_ssid = g_wifi_merged[line - 1].ssid;
+      if (!cfg.forgetKnownWifi(del_ssid)) {
+        sendPotatoAdminReply(from, "WiFi: could not remove saved network.");
+        return true;
+      }
+      POTATO_MESH_DBG_LN("admin /wifi: deleted saved line %u ssid=\"%.32s\"", line, del_ssid);
+      if (cfg.ssid()[0] == '\0') {
+        board.setInhibitSleep(true);
+        WiFi.mode(WIFI_STA);
+        WiFi.disconnect(true, false);
+      }
+      restartPotatoIngestAfterConfigChange();
+      sendPotatoAdminReply(from, "WiFi: saved network removed.");
+      updatePotatoIngestUiHint();
       return true;
     }
     potato_wifi_fill_scan_dedup();
