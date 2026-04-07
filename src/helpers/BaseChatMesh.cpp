@@ -216,11 +216,10 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
 
     if (flags == TXT_TYPE_PLAIN) {
       from.lastmod = getRTCClock()->getCurrentTime(); // update last heard time
-      onMessageRecv(from, packet, timestamp, (const char *) &data[5]);  // let UI know
-
       uint32_t ack_hash;    // calc truncated hash of the message timestamp + text + sender pub_key, to prove to sender that we got it
       mesh::Utils::sha256((uint8_t *) &ack_hash, 4, data, 5 + strlen((char *)&data[5]), from.id.pub_key, PUB_KEY_SIZE);
 
+      uint32_t sent0 = getNumSentDirect() + getNumSentFlood();
       if (packet->isRouteFlood()) {
         // let this sender know path TO here, so they can use sendDirect(), and ALSO encode the ACK
         mesh::Packet* path = createPathReturn(from.id, secret, packet->path, packet->path_len,
@@ -229,6 +228,9 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
       } else {
         sendAckTo(from, ack_hash);
       }
+      // processRecvPacket does not run checkSend() until we return; pump so the delivery ACK actually airs before slow onMessageRecv
+      pumpRadioUntilOutboundSince(sent0, 8000);
+      onMessageRecv(from, packet, timestamp, (const char *) &data[5]);  // let UI know
     } else if (flags == TXT_TYPE_CLI_DATA) {
       onCommandDataRecv(from, packet, timestamp, (const char *) &data[5]);  // let UI know
       // NOTE: no ack expected for CLI_DATA replies
@@ -243,11 +245,10 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
         from.sync_since = timestamp;
       }
       from.lastmod = getRTCClock()->getCurrentTime(); // update last heard time
-      onSignedMessageRecv(from, packet, timestamp, &data[5], (const char *) &data[9]);  // let UI know
-
       uint32_t ack_hash;    // calc truncated hash of the message timestamp + text + OUR pub_key, to prove to sender that we got it
       mesh::Utils::sha256((uint8_t *) &ack_hash, 4, data, 9 + strlen((char *)&data[9]), self_id.pub_key, PUB_KEY_SIZE);
 
+      uint32_t sent0 = getNumSentDirect() + getNumSentFlood();
       if (packet->isRouteFlood()) {
         // let this sender know path TO here, so they can use sendDirect(), and ALSO encode the ACK
         mesh::Packet* path = createPathReturn(from.id, secret, packet->path, packet->path_len,
@@ -256,6 +257,8 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
       } else {
         sendAckTo(from, ack_hash);
       }
+      pumpRadioUntilOutboundSince(sent0, 8000);
+      onSignedMessageRecv(from, packet, timestamp, &data[5], (const char *) &data[9]);  // let UI know
     } else {
       MESH_DEBUG_PRINTLN("onPeerDataRecv: unsupported message type: %u", (uint32_t) flags);
     }
@@ -874,14 +877,31 @@ namespace {
 uint8_t basechat_tx_pump_depth = 0;
 }
 
+void BaseChatMesh::pumpRadioUntilOutboundSince(uint32_t sent_baseline, uint32_t timeout_ms) {
+  if (basechat_tx_pump_depth >= 5) {
+    return;
+  }
+  unsigned long deadline = _ms->getMillis() + timeout_ms;
+  basechat_tx_pump_depth++;
+  while (_ms->getMillis() < deadline) {
+    Mesh::loop();
+    yield();
+    if (getNumSentDirect() + getNumSentFlood() > sent_baseline && _mgr->getOutboundTotal() == 0 &&
+        _radio->isSendComplete()) {
+      break;
+    }
+  }
+  basechat_tx_pump_depth--;
+}
+
 void BaseChatMesh::pumpRadioUntilMinFreePackets(int min_free, uint32_t timeout_ms) {
   if (basechat_tx_pump_depth >= 5) {
     return;
   }
   unsigned long deadline = _ms->getMillis() + timeout_ms;
   basechat_tx_pump_depth++;
-  int iter = 0;
-  while (iter++ < 800 && _ms->getMillis() < deadline) {
+  // Time-bounded only (no fixed loop count): ACK / pool recovery can need many more than 800 fast iterations.
+  while (_ms->getMillis() < deadline) {
     if (_mgr->getFreeCount() >= min_free) {
       break;
     }
@@ -890,6 +910,7 @@ void BaseChatMesh::pumpRadioUntilMinFreePackets(int min_free, uint32_t timeout_m
       onSendTimeout();
       txt_send_timeout = 0;
     }
+    yield();
   }
   basechat_tx_pump_depth--;
 }
@@ -900,14 +921,14 @@ void BaseChatMesh::pumpRadioUntilTxtSendIdle(uint32_t timeout_ms) {
   }
   unsigned long deadline = _ms->getMillis() + timeout_ms;
   basechat_tx_pump_depth++;
-  int iter = 0;
-  while (iter++ < 800 && txt_send_timeout != 0 && _ms->getMillis() < deadline) {
+  while (txt_send_timeout != 0 && _ms->getMillis() < deadline) {
     Mesh::loop();
     if (txt_send_timeout && millisHasNowPassed(txt_send_timeout)) {
       onSendTimeout();
       txt_send_timeout = 0;
       break;
     }
+    yield();
   }
   basechat_tx_pump_depth--;
 }

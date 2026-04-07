@@ -148,6 +148,14 @@ protected:
    */
   void pumpRadioUntilMinFreePackets(int min_free, uint32_t timeout_ms);
   void pumpRadioUntilTxtSendIdle(uint32_t timeout_ms);
+  /**
+   * Spin Mesh::loop() until at least one more packet has been sent than \a sent_baseline and the
+   * outbound queue is drained (used after queueing a delivery ACK while still inside processRecvPacket,
+   * because checkSend() does not run until that returns).
+   */
+  void pumpRadioUntilOutboundSince(uint32_t sent_baseline, uint32_t timeout_ms);
+  /** True while a text send is still waiting for ACK or mesh timeout (between sendMessage and clear). */
+  bool isTxtSendAckPending() const { return txt_send_timeout != 0; }
 
 public:
   mesh::Packet* createSelfAdvert(const char* name);

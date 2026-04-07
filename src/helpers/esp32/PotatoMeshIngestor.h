@@ -29,3 +29,8 @@ public:
   void setPaused(bool paused);
   bool isPaused() const;
 };
+
+#if defined(ESP32) && defined(POTATO_MESH_INGEST)
+/** Register once after WiFi.begin: logs STA disconnect (with reason), reconnect, and DHCP. */
+void potato_mesh_register_wifi_event_logging();
+#endif

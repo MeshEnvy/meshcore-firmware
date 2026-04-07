@@ -34,6 +34,7 @@ static uint32_t _atoi(const char* sp) {
   #if defined(POTATO_MESH_INGEST)
   #include <helpers/esp32/PotatoMeshConfig.h>
   #include <helpers/esp32/PotatoMeshDebug.h>
+  #include <helpers/esp32/PotatoMeshIngestor.h>
   #include <WiFi.h>
   #endif
   DataStore store(SPIFFS, rtc_clock);
@@ -249,6 +250,7 @@ void setup() {
       WiFi.mode(WIFI_STA);
       POTATO_MESH_DBG_LN("STA ingest: WiFi.begin ssid=%s", pc.ssid());
       WiFi.begin(pc.ssid(), pc.password());
+      potato_mesh_register_wifi_event_logging();
 #if POTATO_MESH_DEBUG
       potato_log_heap("6_after_WiFi.begin (STA may still be connecting)");
 #endif

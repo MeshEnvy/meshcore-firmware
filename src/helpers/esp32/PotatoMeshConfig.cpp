@@ -3,11 +3,14 @@
 #if defined(ESP32) && defined(POTATO_MESH_INGEST)
 
 #include <Preferences.h>
+#include <helpers/esp32/PotatoMeshDebug.h>
+#include <cstring>
 
 namespace {
 
 constexpr char kNs[] = "potatomesh";
 constexpr char kKeyVer[] = "pm_v";
+constexpr char kKeyKn[] = "kn";
 
 } // namespace
 
@@ -49,8 +52,50 @@ void PotatoMeshConfig::migrateFromBuildFlagsIfNeeded() {
   prefs.end();
 }
 
+void PotatoMeshConfig::migrateKnownProfilesIfNeeded() {
+  Preferences prefs;
+  if (!prefs.begin(kNs, false)) {
+    return;
+  }
+  uint8_t v = prefs.getUChar(kKeyVer, 0);
+  if (v >= 2) {
+    prefs.end();
+    return;
+  }
+  if (prefs.getUChar(kKeyKn, 0) == 0 && prefs.getString("ks0", "").length() == 0) {
+    String s = prefs.getString("ssid", "");
+    if (s.length() > 0) {
+      prefs.putString("ks0", s);
+      prefs.putString("kp0", prefs.getString("pwd", ""));
+      prefs.putUChar(kKeyKn, 1);
+      POTATO_MESH_DBG_LN("potato mesh cfg: migrated known WiFi from active ssid");
+    }
+  }
+  prefs.putUChar(kKeyVer, 2);
+  prefs.end();
+}
+
+void PotatoMeshConfig::loadKnownWifi(Preferences& prefs) {
+  _known_cnt = prefs.getUChar(kKeyKn, 0);
+  if (_known_cnt > KNOWN_WIFI_MAX) {
+    _known_cnt = KNOWN_WIFI_MAX;
+  }
+  for (uint8_t i = 0; i < KNOWN_WIFI_MAX; i++) {
+    char key[8];
+    snprintf(key, sizeof(key), "ks%u", (unsigned)i);
+    _known_ssid[i][0] = '\0';
+    memset(_known_pwd[i], 0, sizeof(_known_pwd[i]));
+    if (i < _known_cnt) {
+      prefs.getString(key, _known_ssid[i], sizeof(_known_ssid[i]));
+      snprintf(key, sizeof(key), "kp%u", (unsigned)i);
+      prefs.getString(key, _known_pwd[i], sizeof(_known_pwd[i]));
+    }
+  }
+}
+
 void PotatoMeshConfig::load() {
   migrateFromBuildFlagsIfNeeded();
+  migrateKnownProfilesIfNeeded();
 
   Preferences prefs;
   if (!prefs.begin(kNs, true)) {
@@ -63,8 +108,98 @@ void PotatoMeshConfig::load() {
   prefs.getString("url", _url, sizeof(_url));
   prefs.getString("token", _token, sizeof(_token));
   _debug = prefs.getBool("dbg", false);
+  loadKnownWifi(prefs);
   prefs.end();
   _loaded = true;
+}
+
+bool PotatoMeshConfig::getKnownWifi(uint8_t idx, char* out_ssid, size_t ssid_cap, char* out_pwd, size_t pwd_cap) const {
+  if (idx >= _known_cnt || !out_ssid || ssid_cap < 1) {
+    return false;
+  }
+  strncpy(out_ssid, _known_ssid[idx], ssid_cap - 1);
+  out_ssid[ssid_cap - 1] = '\0';
+  if (out_pwd && pwd_cap > 0) {
+    strncpy(out_pwd, _known_pwd[idx], pwd_cap - 1);
+    out_pwd[pwd_cap - 1] = '\0';
+  }
+  return true;
+}
+
+bool PotatoMeshConfig::isKnownWifiSsid(const char* ssid) const {
+  if (!ssid || !ssid[0]) {
+    return false;
+  }
+  for (uint8_t i = 0; i < _known_cnt; i++) {
+    if (strcmp(_known_ssid[i], ssid) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool PotatoMeshConfig::getKnownWifiPassword(const char* ssid, char* out_pwd, size_t pwd_cap) const {
+  if (!ssid || !ssid[0] || !out_pwd || pwd_cap < 1) {
+    return false;
+  }
+  for (uint8_t i = 0; i < _known_cnt; i++) {
+    if (strcmp(_known_ssid[i], ssid) == 0) {
+      strncpy(out_pwd, _known_pwd[i], pwd_cap - 1);
+      out_pwd[pwd_cap - 1] = '\0';
+      return true;
+    }
+  }
+  return false;
+}
+
+void PotatoMeshConfig::persistKnownWifi() {
+  Preferences prefs;
+  if (!prefs.begin(kNs, false)) {
+    return;
+  }
+  prefs.putUChar(kKeyKn, _known_cnt);
+  for (uint8_t i = 0; i < KNOWN_WIFI_MAX; i++) {
+    char key[8];
+    snprintf(key, sizeof(key), "ks%u", (unsigned)i);
+    prefs.putString(key, i < _known_cnt ? _known_ssid[i] : "");
+    snprintf(key, sizeof(key), "kp%u", (unsigned)i);
+    prefs.putString(key, i < _known_cnt ? _known_pwd[i] : "");
+  }
+  prefs.end();
+}
+
+void PotatoMeshConfig::rememberWifi(const char* ssid, const char* pwd) {
+  if (!ssid || !ssid[0]) {
+    return;
+  }
+  const char* pp = pwd ? pwd : "";
+
+  uint8_t w = 0;
+  for (uint8_t r = 0; r < _known_cnt; r++) {
+    if (strcmp(_known_ssid[r], ssid) == 0) {
+      continue;
+    }
+    if (w != r) {
+      strcpy(_known_ssid[w], _known_ssid[r]);
+      strcpy(_known_pwd[w], _known_pwd[r]);
+    }
+    w++;
+  }
+  _known_cnt = w;
+
+  if (_known_cnt < KNOWN_WIFI_MAX) {
+    _known_cnt++;
+  }
+  for (int i = (int)_known_cnt - 1; i > 0; i--) {
+    strcpy(_known_ssid[i], _known_ssid[i - 1]);
+    strcpy(_known_pwd[i], _known_pwd[i - 1]);
+  }
+  strncpy(_known_ssid[0], ssid, sizeof(_known_ssid[0]) - 1);
+  _known_ssid[0][sizeof(_known_ssid[0]) - 1] = '\0';
+  strncpy(_known_pwd[0], pp, sizeof(_known_pwd[0]) - 1);
+  _known_pwd[0][sizeof(_known_pwd[0]) - 1] = '\0';
+  persistKnownWifi();
+  POTATO_MESH_DBG_LN("potato mesh cfg: wifi known saved count=%u", (unsigned)_known_cnt);
 }
 
 bool PotatoMeshConfig::isIngestReady() const {
@@ -89,6 +224,7 @@ void PotatoMeshConfig::setWifi(const char* s, const char* p) {
   _pwd[sizeof(_pwd) - 1] = '\0';
   put_string_pref("ssid", _ssid);
   put_string_pref("pwd", _pwd);
+  rememberWifi(_ssid, _pwd);
 }
 
 void PotatoMeshConfig::setApiToken(const char* t) {
@@ -131,6 +267,12 @@ void PotatoMeshConfig::load() {}
 bool PotatoMeshConfig::isIngestReady() const { return false; }
 
 void PotatoMeshConfig::setWifi(const char*, const char*) {}
+
+bool PotatoMeshConfig::getKnownWifi(uint8_t, char*, size_t, char*, size_t) const { return false; }
+
+bool PotatoMeshConfig::isKnownWifiSsid(const char*) const { return false; }
+
+bool PotatoMeshConfig::getKnownWifiPassword(const char*, char*, size_t) const { return false; }
 
 void PotatoMeshConfig::setApiToken(const char*) {}
 
