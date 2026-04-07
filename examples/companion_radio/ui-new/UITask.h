@@ -33,6 +33,7 @@ class UITask : public AbstractUITask {
 #endif
   unsigned long _next_refresh, _auto_off;
   NodePrefs* _node_prefs;
+  bool _potato_ingest_needs_config;
   char _alert[80];
   unsigned long _alert_expiry;
   int _msgcount;
@@ -69,6 +70,7 @@ public:
     next_batt_chck = _next_refresh = 0;
     ui_started_at = 0;
     curr = NULL;
+    _potato_ingest_needs_config = false;
   }
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
 
@@ -98,4 +100,7 @@ public:
   void loop() override;
 
   void shutdown(bool restart = false);
+
+  bool potatoIngestNeedsConfig() const { return _potato_ingest_needs_config; }
+  void setPotatoIngestNeedsConfig(bool show) override;
 };

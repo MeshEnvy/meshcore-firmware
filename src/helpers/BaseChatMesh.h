@@ -142,6 +142,13 @@ protected:
   ContactInfo* checkConnectionsAck(const uint8_t* data);
   void checkConnections();
 
+  /**
+   * While handling inbound traffic, delay() does not run the mesh loop; TX stays queued and the
+   * packet pool can exhaust (drops). These helpers spin Mesh::loop() with a reentrancy cap.
+   */
+  void pumpRadioUntilMinFreePackets(int min_free, uint32_t timeout_ms);
+  void pumpRadioUntilTxtSendIdle(uint32_t timeout_ms);
+
 public:
   mesh::Packet* createSelfAdvert(const char* name);
   mesh::Packet* createSelfAdvert(const char* name, double lat, double lon);

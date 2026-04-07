@@ -870,6 +870,48 @@ bool ContactsIterator::hasNext(const BaseChatMesh* mesh, ContactInfo& dest) {
   return true;
 }
 
+namespace {
+uint8_t basechat_tx_pump_depth = 0;
+}
+
+void BaseChatMesh::pumpRadioUntilMinFreePackets(int min_free, uint32_t timeout_ms) {
+  if (basechat_tx_pump_depth >= 5) {
+    return;
+  }
+  unsigned long deadline = _ms->getMillis() + timeout_ms;
+  basechat_tx_pump_depth++;
+  int iter = 0;
+  while (iter++ < 800 && _ms->getMillis() < deadline) {
+    if (_mgr->getFreeCount() >= min_free) {
+      break;
+    }
+    Mesh::loop();
+    if (txt_send_timeout && millisHasNowPassed(txt_send_timeout)) {
+      onSendTimeout();
+      txt_send_timeout = 0;
+    }
+  }
+  basechat_tx_pump_depth--;
+}
+
+void BaseChatMesh::pumpRadioUntilTxtSendIdle(uint32_t timeout_ms) {
+  if (basechat_tx_pump_depth >= 5 || txt_send_timeout == 0) {
+    return;
+  }
+  unsigned long deadline = _ms->getMillis() + timeout_ms;
+  basechat_tx_pump_depth++;
+  int iter = 0;
+  while (iter++ < 800 && txt_send_timeout != 0 && _ms->getMillis() < deadline) {
+    Mesh::loop();
+    if (txt_send_timeout && millisHasNowPassed(txt_send_timeout)) {
+      onSendTimeout();
+      txt_send_timeout = 0;
+      break;
+    }
+  }
+  basechat_tx_pump_depth--;
+}
+
 void BaseChatMesh::loop() {
   Mesh::loop();
 

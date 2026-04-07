@@ -27,6 +27,7 @@ class UITask : public AbstractUITask {
   char _msg[80];
   char _alert[80];
   int _msgcount;
+  bool _potato_ingest_needs_config;
   bool _need_refresh = true;
   bool _displayWasOn = false;  // Track display state before button press
   unsigned long ui_started_at;
@@ -57,6 +58,7 @@ public:
   UITask(mesh::MainBoard* board, BaseSerialInterface* serial) : AbstractUITask(board, serial), _display(NULL), _sensors(NULL) {
       _next_refresh = 0;
       ui_started_at = 0;
+      _potato_ingest_needs_config = false;
   }
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
 
@@ -70,4 +72,7 @@ public:
   void loop() override;
 
   void shutdown(bool restart = false);
+
+  bool potatoIngestNeedsConfig() const { return _potato_ingest_needs_config; }
+  void setPotatoIngestNeedsConfig(bool show) override;
 };

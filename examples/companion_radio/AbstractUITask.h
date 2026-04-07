@@ -43,4 +43,7 @@ public:
   virtual void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) = 0;
   virtual void notify(UIEventType t = UIEventType::none) = 0;
   virtual void loop() = 0;
+
+  /** When true, show on-screen hint that potato-mesh ingest needs DM configuration. */
+  virtual void setPotatoIngestNeedsConfig(bool show) { (void)show; }
 };

@@ -34,6 +34,11 @@
 #include <helpers/StaticPoolPacketManager.h>
 #include <target.h>
 
+#if defined(ESP32) && defined(POTATO_MESH_INGEST)
+#include <helpers/esp32/PotatoMeshIngestor.h>
+#include <helpers/esp32/PotatoMeshConfig.h>
+#endif
+
 /* ---------------------------------- CONFIGURATION ------------------------------------- */
 
 #ifndef LORA_FREQ
@@ -208,6 +213,18 @@ private:
   unsigned long dirty_contacts_expiry;
 
   TransportKey send_scope;
+
+#if defined(ESP32) && defined(POTATO_MESH_INGEST)
+  PotatoMeshIngestor _potato_ingest;
+  /** -1 = idle; else next contact index to enqueue for initial potato-mesh sync */
+  int32_t _potato_bootstrap_next;
+  bool tryHandlePotatoAdminDm(const ContactInfo& from, const char* text);
+  void sendPotatoAdminReply(const ContactInfo& to, const char* msg);
+  void sendPotatoInfoReplies(const ContactInfo& to);
+  void updatePotatoIngestUiHint();
+  void restartPotatoIngestAfterConfigChange();
+  bool _potato_ui_needs_config;
+#endif
 
   uint8_t cmd_frame[MAX_FRAME_SIZE + 1];
   uint8_t out_frame[MAX_FRAME_SIZE + 1];

@@ -3,6 +3,40 @@
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
 
+#if defined(ESP32) && defined(POTATO_MESH_INGEST)
+#include <WiFi.h>
+#include <Esp.h>
+
+#ifndef POTATO_MESH_INGEST_QUEUE_DEPTH
+#define POTATO_MESH_INGEST_QUEUE_DEPTH 8
+#endif
+
+/* Chunked by sendPotatoAdminReply(); /pause vs /resume line is mutually exclusive. */
+static void formatPotatoAdminHelp(char* out, size_t cap, bool ingest_paused) {
+  const char* pause_or_resume = ingest_paused ? "/resume\n" : "/pause\n";
+  snprintf(out, cap,
+           "Potato Core menu:\n\n"
+           "/wifi <ssid> <pwd>\n"
+           "/auth <token>\n"
+           "/endpoint <ingest URL>\n"
+           "%s"
+           "/debug\n"
+           "/info\n"
+           "/help",
+           pause_or_resume);
+}
+
+static void potato_log_dm_trace(const char* kind, const ContactInfo& from, const char* text,
+                                const char* outcome) {
+  const char* t = text;
+  while (t && (*t == ' ' || *t == '\t')) t++;
+  unsigned slash_cmd = (t && *t == '/') ? 1u : 0u;
+  unsigned fav = (from.flags & 0x01) ? 1u : 0u;
+  Serial.printf("PotatoMesh: %s from=\"%.32s\" fav=%u slash_cmd=%u -> %s\n", kind, from.name, fav, slash_cmd,
+                outcome);
+}
+#endif
+
 #define CMD_APP_START                 1
 #define CMD_SEND_TXT_MSG              2
 #define CMD_SEND_CHANNEL_TXT_MSG      3
@@ -375,6 +409,14 @@ void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path
   }
 
   if (!is_new) dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY); // only schedule lazy write for contacts that are in contacts[]
+
+#if defined(ESP32) && defined(POTATO_MESH_INGEST)
+  POTATO_MESH_DBG_LN(
+      "discover !%02x%02x%02x%02x is_new=%d type=%u path_len=%u name=\"%.32s\"",
+      contact.id.pub_key[0], contact.id.pub_key[1], contact.id.pub_key[2], contact.id.pub_key[3], (int)is_new,
+      (unsigned)contact.type, (unsigned)path_len, contact.name);
+  _potato_ingest.postContactDiscovered(self_id.pub_key, contact);
+#endif
 }
 
 static int sort_by_recent(const void *a, const void *b) {
@@ -500,18 +542,63 @@ void MyMesh::sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pk
 void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                            const char *text) {
   markConnectionActive(from); // in case this is from a server, and we have a connection
+#if defined(ESP32) && defined(POTATO_MESH_INGEST)
+  if ((from.flags & 0x01) == 0) {
+    sendPotatoAdminReply(from, "I only talk to favorited nodes.");
+    potato_log_dm_trace("DM", from, text, "denied_not_favorited");
+    return;
+  }
+  bool potato_handled = tryHandlePotatoAdminDm(from, text);
+  if (potato_handled) {
+    potato_log_dm_trace("DM", from, text, "admin_cmd");
+    return;
+  }
+  sendPotatoAdminReply(from, POTATO_ADMIN_HELP);
+  potato_log_dm_trace("DM", from, text, "help_unrecognized");
+  return;
+#endif
   queueMessage(from, TXT_TYPE_PLAIN, pkt, sender_timestamp, NULL, 0, text);
 }
 
 void MyMesh::onCommandDataRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                                const char *text) {
   markConnectionActive(from); // in case this is from a server, and we have a connection
+#if defined(ESP32) && defined(POTATO_MESH_INGEST)
+  if ((from.flags & 0x01) == 0) {
+    sendPotatoAdminReply(from, "I only talk to favorited nodes.");
+    potato_log_dm_trace("CLI_DM", from, text, "denied_not_favorited");
+    return;
+  }
+  bool potato_handled = tryHandlePotatoAdminDm(from, text);
+  if (potato_handled) {
+    potato_log_dm_trace("CLI_DM", from, text, "admin_cmd");
+    return;
+  }
+  sendPotatoAdminReply(from, POTATO_ADMIN_HELP);
+  potato_log_dm_trace("CLI_DM", from, text, "help_unrecognized");
+  return;
+#endif
   queueMessage(from, TXT_TYPE_CLI_DATA, pkt, sender_timestamp, NULL, 0, text);
 }
 
 void MyMesh::onSignedMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                                  const uint8_t *sender_prefix, const char *text) {
   markConnectionActive(from);
+#if defined(ESP32) && defined(POTATO_MESH_INGEST)
+  if ((from.flags & 0x01) == 0) {
+    sendPotatoAdminReply(from, "I only talk to favorited nodes.");
+    potato_log_dm_trace("signed DM", from, text, "denied_not_favorited");
+    return;
+  }
+  bool potato_handled = tryHandlePotatoAdminDm(from, text);
+  if (potato_handled) {
+    potato_log_dm_trace("signed DM", from, text, "admin_cmd");
+    return;
+  }
+  sendPotatoAdminReply(from, POTATO_ADMIN_HELP);
+  potato_log_dm_trace("signed DM", from, text, "help_unrecognized");
+  return;
+#endif
   // from.sync_since change needs to be persisted
   dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
   queueMessage(from, TXT_TYPE_SIGNED_PLAIN, pkt, sender_timestamp, sender_prefix, 4, text);
@@ -796,7 +883,7 @@ uint32_t MyMesh::calcDirectTimeoutMillisFor(uint32_t pkt_airtime_millis, uint8_t
 void MyMesh::onSendTimeout() {}
 
 MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui)
-    : BaseChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(16), tables),
+    : BaseChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(32), tables),
       _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _ui(ui) {
   _iter_started = false;
   _cli_rescue = false;
@@ -808,6 +895,11 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   dirty_contacts_expiry = 0;
   memset(advert_paths, 0, sizeof(advert_paths));
   memset(send_scope.key, 0, sizeof(send_scope.key));
+
+#if defined(ESP32) && defined(POTATO_MESH_INGEST)
+  _potato_bootstrap_next = -1;
+  _potato_ui_needs_config = false;
+#endif
 
   // defaults
   memset(&_prefs, 0, sizeof(_prefs));
@@ -889,6 +981,10 @@ void MyMesh::begin(bool has_display) {
   resetContacts();
   _store->loadContacts(this);
   bootstrapRTCfromContacts();
+#if defined(ESP32) && defined(POTATO_MESH_INGEST)
+  _potato_bootstrap_next = 0;
+  POTATO_MESH_DBG_LN("potato bootstrap: will enqueue %d stored contacts", getNumContacts());
+#endif
   addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure Andy's public channel
   _store->loadChannels(this);
 
@@ -2030,14 +2126,347 @@ void MyMesh::checkSerialInterface() {
   }
 }
 
+#if defined(ESP32) && defined(POTATO_MESH_INGEST)
+
+static const char* skip_sp_dm(const char* p) {
+  while (*p == ' ' || *p == '\t') {
+    p++;
+  }
+  return p;
+}
+
+void MyMesh::restartPotatoIngestAfterConfigChange() {
+  _potato_ingest.restartAfterConfigChange();
+  _potato_bootstrap_next = 0;
+  POTATO_MESH_DBG_LN("potato ingest: queue cleared, re-bootstrap contacts from index 0");
+}
+
+void MyMesh::sendPotatoAdminReply(const ContactInfo& to, const char* msg) {
+  if (!msg) {
+    return;
+  }
+  const size_t cap = MAX_TEXT_LEN;
+  char chunk[MAX_TEXT_LEN + 1];
+  const char* s = msg;
+  while (*s) {
+    size_t rest = strlen(s);
+    size_t take = rest <= cap ? rest : cap;
+    if (take < rest) {
+      const char* win_end = s + take;
+      const char* last_nl = nullptr;
+      for (const char* q = s; q < win_end; q++) {
+        if (*q == '\n') {
+          last_nl = q;
+        }
+      }
+      if (last_nl != nullptr && last_nl >= s) {
+        take = (size_t)(last_nl - s) + 1;
+      }
+    }
+    memcpy(chunk, s, take);
+    chunk[take] = '\0';
+    pumpRadioUntilMinFreePackets(4, 4000);
+    uint32_t expected_ack = 0;
+    uint32_t est_timeout = 0;
+    uint32_t ts = getRTCClock()->getCurrentTimeUnique();
+    int rc = sendMessage(to, ts, 0, chunk, expected_ack, est_timeout);
+    if (rc == MSG_SEND_FAILED) {
+      Serial.printf("PotatoMesh: admin reply chunk failed len=%u\n", (unsigned)take);
+      return;
+    }
+    pumpRadioUntilTxtSendIdle(est_timeout + 500);
+    s += take;
+  }
+}
+
+void MyMesh::sendPotatoInfoReplies(const ContactInfo& to) {
+  uint32_t up = (uint32_t)(_ms->getMillis() / 1000U);
+  uint16_t batt = board.getBattMilliVolts();
+  uint32_t heap = ESP.getFreeHeap();
+  int nct = getNumContacts();
+  int nfav = 0;
+  for (int i = 0; i < nct; i++) {
+    ContactInfo c;
+    if (getContactByIdx((uint32_t)i, c) && (c.flags & 0x01) != 0) {
+      nfav++;
+    }
+  }
+  int nheard = 0;
+  for (int i = 0; i < ADVERT_PATH_TABLE_SIZE; i++) {
+    if (advert_paths[i].recv_timestamp != 0) {
+      nheard++;
+    }
+  }
+
+  auto& cfg = PotatoMeshConfig::instance();
+  unsigned iq = (unsigned)_potato_ingest.pendingQueueDepth();
+  wl_status_t wl = WiFi.status();
+  char assoc_ssid[33] = "";
+  if (wl == WL_CONNECTED) {
+    String ws = WiFi.SSID();
+    if (ws.length() > 0) {
+      snprintf(assoc_ssid, sizeof(assoc_ssid), "%s", ws.c_str());
+    }
+  }
+  const char* saved_ssid = cfg.ssid();
+  if (!saved_ssid) {
+    saved_ssid = "";
+  }
+
+  uint32_t prx = radio_driver.getPacketsRecv();
+  uint32_t ptx = radio_driver.getPacketsSent();
+  unsigned ob = (unsigned)_mgr->getOutboundTotal();
+  int noise = (int)_radio->getNoiseFloor();
+  uint32_t mesh_rx = getNumRecvFlood() + getNumRecvDirect();
+  uint32_t mesh_tx = getNumSentFlood() + getNumSentDirect();
+
+  const char* ingest_line =
+      cfg.isIngestReady() ? "Ingest: configured, can post to server." : "Ingest: not ready (use /wifi, /auth, /endpoint).";
+  const char* dbg_line = cfg.debugEnabled() ? "Serial debug: on." : "Serial debug: off.";
+
+  char info_buf[640];
+  int o = snprintf(
+      info_buf, sizeof(info_buf),
+      "Potato radio\n"
+      "Uptime: %lu s\n"
+      "Battery: %u mV\n"
+      "Heap free: %u bytes\n"
+      "\n"
+      "Contacts: %d (%d favorites)\n"
+      "Advert paths in table: %d\n"
+      "\n",
+      (unsigned long)up, (unsigned)batt, (unsigned)heap, nct, nfav, nheard);
+  if (o < 0 || (size_t)o >= sizeof(info_buf)) {
+    o = (int)sizeof(info_buf) - 1;
+  }
+
+  if (wl == WL_CONNECTED) {
+    int n = snprintf(info_buf + o, sizeof(info_buf) - (size_t)o,
+                     "Wi-Fi: connected\n"
+                     "Current SSID: %s\n"
+                     "Signal: %d dBm\n"
+                     "\n",
+                     assoc_ssid[0] ? assoc_ssid : "(unknown)", WiFi.RSSI());
+    if (n > 0) {
+      o += n;
+    }
+  } else {
+    int n = snprintf(info_buf + o, sizeof(info_buf) - (size_t)o,
+                     "Wi-Fi: not connected\n"
+                     "SSID saved in device: %s\n"
+                     "\n",
+                     saved_ssid[0] ? saved_ssid : "(none)");
+    if (n > 0) {
+      o += n;
+    }
+  }
+
+  if (o >= 0 && (size_t)o < sizeof(info_buf)) {
+    int n = snprintf(info_buf + o, sizeof(info_buf) - (size_t)o,
+                     "%s\n"
+                     "Ingest queue: %u of %u waiting\n"
+                     "%s\n"
+                     "\n"
+                     "LoRa driver packets RX / TX: %lu / %lu\n"
+                     "Mesh packets RX / TX: %lu / %lu\n"
+                     "Mesh send queue waiting: %u\n"
+                     "Noise floor: %d dBm\n",
+                     ingest_line, iq, (unsigned)POTATO_MESH_INGEST_QUEUE_DEPTH, dbg_line, (unsigned long)prx,
+                     (unsigned long)ptx, (unsigned long)mesh_rx, (unsigned long)mesh_tx, ob, noise);
+    (void)n;
+  }
+
+  sendPotatoAdminReply(to, info_buf);
+}
+
+bool MyMesh::tryHandlePotatoAdminDm(const ContactInfo& from, const char* text) {
+  if (!text) {
+    return false;
+  }
+  const char* p = skip_sp_dm(text);
+  if (*p != '/') {
+    return false;
+  }
+
+  auto& cfg = PotatoMeshConfig::instance();
+
+  if (strncmp(p, "/wifi", 5) == 0 && (p[5] == '\0' || p[5] == ' ' || p[5] == '\t')) {
+    p = skip_sp_dm(p + 5);
+    char ssid[33];
+    size_t si = 0;
+    while (*p && *p != ' ' && *p != '\t' && si + 1 < sizeof(ssid)) {
+      ssid[si++] = *p++;
+    }
+    ssid[si] = '\0';
+    p = skip_sp_dm(p);
+    if (ssid[0] == '\0') {
+      sendPotatoAdminReply(from, "Usage: /wifi <ssid> <pwd>");
+      return true;
+    }
+    char pwd[65];
+    size_t pi = 0;
+    while (*p && pi + 1 < sizeof(pwd)) {
+      pwd[pi++] = *p++;
+    }
+    pwd[pi] = '\0';
+    cfg.setWifi(ssid, pwd);
+    board.setInhibitSleep(true);
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect(true, false);
+    delay(100);
+    WiFi.begin(cfg.ssid(), cfg.password());
+    restartPotatoIngestAfterConfigChange();
+    sendPotatoAdminReply(from, "WiFi updated, connecting.");
+    updatePotatoIngestUiHint();
+    return true;
+  }
+
+  if (strncmp(p, "/auth", 5) == 0 && (p[5] == '\0' || p[5] == ' ' || p[5] == '\t')) {
+    p = skip_sp_dm(p + 5);
+    if (*p == '\0') {
+      sendPotatoAdminReply(from, "Usage: /auth <authToken>");
+      return true;
+    }
+    cfg.setApiToken(p);
+    restartPotatoIngestAfterConfigChange();
+    sendPotatoAdminReply(from, "Auth token saved.");
+    updatePotatoIngestUiHint();
+    return true;
+  }
+
+  if (strncmp(p, "/endpoint", 9) == 0 && (p[9] == '\0' || p[9] == ' ' || p[9] == '\t')) {
+    p = skip_sp_dm(p + 9);
+    if (*p == '\0') {
+      sendPotatoAdminReply(from, "Usage: /endpoint <ingest URL>");
+      return true;
+    }
+    cfg.setIngestOrigin(p);
+    restartPotatoIngestAfterConfigChange();
+    sendPotatoAdminReply(from, "Ingest URL saved.");
+    updatePotatoIngestUiHint();
+    return true;
+  }
+
+  if (strncmp(p, "/pause", 6) == 0 && (p[6] == '\0' || p[6] == ' ' || p[6] == '\t')) {
+    p = skip_sp_dm(p + 6);
+    if (*p != '\0') {
+      sendPotatoAdminReply(from, "Usage: /pause");
+      return true;
+    }
+    if (_potato_ingest.isPaused()) {
+      sendPotatoAdminReply(from, "Ingest already paused.");
+      return true;
+    }
+    _potato_ingest.setPaused(true);
+    sendPotatoAdminReply(from, "HTTP ingest paused (queue kept). Use /resume.");
+    return true;
+  }
+
+  if (strncmp(p, "/resume", 7) == 0 && (p[7] == '\0' || p[7] == ' ' || p[7] == '\t')) {
+    p = skip_sp_dm(p + 7);
+    if (*p != '\0') {
+      sendPotatoAdminReply(from, "Usage: /resume");
+      return true;
+    }
+    if (!_potato_ingest.isPaused()) {
+      sendPotatoAdminReply(from, "Ingest already running.");
+      return true;
+    }
+    _potato_ingest.setPaused(false);
+    sendPotatoAdminReply(from, "HTTP ingest resumed.");
+    return true;
+  }
+
+  if (strncmp(p, "/debug", 6) == 0 && (p[6] == '\0' || p[6] == ' ' || p[6] == '\t')) {
+    p = skip_sp_dm(p + 6);
+    if (*p != '\0') {
+      sendPotatoAdminReply(from, "Usage: /debug");
+      return true;
+    }
+    cfg.toggleDebug();
+    sendPotatoAdminReply(from, cfg.debugEnabled() ? "Debug on." : "Debug off.");
+    return true;
+  }
+
+  if (strncmp(p, "/info", 5) == 0 && (p[5] == '\0' || p[5] == ' ' || p[5] == '\t')) {
+    p = skip_sp_dm(p + 5);
+    if (*p != '\0') {
+      sendPotatoAdminReply(from, "Usage: /info");
+      return true;
+    }
+    sendPotatoInfoReplies(from);
+    return true;
+  }
+
+  if (strncmp(p, "/help", 5) == 0 && (p[5] == '\0' || p[5] == ' ' || p[5] == '\t')) {
+    char help_buf[256];
+    formatPotatoAdminHelp(help_buf, sizeof(help_buf), _potato_ingest.isPaused());
+    sendPotatoAdminReply(from, help_buf);
+    return true;
+  }
+
+  {
+    char help_buf[256];
+    formatPotatoAdminHelp(help_buf, sizeof(help_buf), _potato_ingest.isPaused());
+    char ubuf[320];
+    int un = snprintf(ubuf, sizeof(ubuf), "Unknown command.\n\n%s", help_buf);
+    if (un > 0 && un < (int)sizeof(ubuf)) {
+      sendPotatoAdminReply(from, ubuf);
+    } else {
+      sendPotatoAdminReply(from, help_buf);
+    }
+  }
+  return true;
+}
+
+void MyMesh::updatePotatoIngestUiHint() {
+  bool need = !PotatoMeshConfig::instance().isIngestReady();
+  if (need == _potato_ui_needs_config) {
+    return;
+  }
+  _potato_ui_needs_config = need;
+#ifdef DISPLAY_CLASS
+  if (_ui) {
+    _ui->setPotatoIngestNeedsConfig(need);
+  }
+#endif
+}
+
+#endif // ESP32 && POTATO_MESH_INGEST
+
 void MyMesh::loop() {
   BaseChatMesh::loop();
 
+  /* Companion link (BLE/USB) before potato HTTP: ingest uses blocking HTTPClient::POST(),
+   * which would otherwise starve checkRecvFrame()/notify for the whole request timeout. */
   if (_cli_rescue) {
     checkCLIRescueCmd();
   } else {
     checkSerialInterface();
   }
+
+#if defined(ESP32) && defined(POTATO_MESH_INGEST)
+  updatePotatoIngestUiHint();
+  if (_potato_bootstrap_next >= 0) {
+    while ((uint32_t)_potato_bootstrap_next < (uint32_t)getNumContacts()) {
+      ContactInfo c;
+      if (!getContactByIdx((uint32_t)_potato_bootstrap_next, c)) {
+        _potato_bootstrap_next++;
+        continue;
+      }
+      if (_potato_ingest.tryEnqueueContact(self_id.pub_key, c)) {
+        _potato_bootstrap_next++;
+        break;
+      }
+      break;
+    }
+    if (getNumContacts() == 0 || (uint32_t)_potato_bootstrap_next >= (uint32_t)getNumContacts()) {
+      POTATO_MESH_DBG_LN("potato bootstrap: finished enqueuing %d contacts", getNumContacts());
+      _potato_bootstrap_next = -1;
+    }
+  }
+  _potato_ingest.service();
+#endif
 
   // is there are pending dirty contacts write needed?
   if (dirty_contacts_expiry && millisHasNowPassed(dirty_contacts_expiry)) {

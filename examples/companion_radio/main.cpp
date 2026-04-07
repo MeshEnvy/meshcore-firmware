@@ -31,6 +31,11 @@ static uint32_t _atoi(const char* sp) {
   DataStore store(LittleFS, rtc_clock);
 #elif defined(ESP32)
   #include <SPIFFS.h>
+  #if defined(POTATO_MESH_INGEST)
+  #include <helpers/esp32/PotatoMeshConfig.h>
+  #include <helpers/esp32/PotatoMeshDebug.h>
+  #include <WiFi.h>
+  #endif
   DataStore store(SPIFFS, rtc_clock);
 #endif
 
@@ -105,10 +110,28 @@ void halt() {
   while (1) ;
 }
 
+#if defined(ESP32) && POTATO_MESH_DEBUG
+#include <Esp.h>
+/** Dynamic heap only — static .bss/.data (contacts table, ingest queue, etc.) is not included. */
+static void potato_log_heap(const char* stage) {
+  Serial.printf("PotatoMesh: heap [%s] free=%u max_blk=%u min_ever=%u\n", stage, (unsigned)ESP.getFreeHeap(),
+                (unsigned)ESP.getMaxAllocHeap(), (unsigned)ESP.getMinFreeHeap());
+}
+#else
+#define potato_log_heap(STAGE) ((void)0)
+#endif
+
 void setup() {
   Serial.begin(115200);
+#if defined(ESP32) && POTATO_MESH_DEBUG
+  delay(50);
+  potato_log_heap("1_after_Serial.begin (globals+Arduino+IDF already ran)");
+#endif
 
   board.begin();
+#if POTATO_MESH_DEBUG
+  potato_log_heap("2_after_board.begin");
+#endif
 
 #ifdef DISPLAY_CLASS
   DisplayDriver* disp = NULL;
@@ -124,6 +147,9 @@ void setup() {
 #endif
 
   if (!radio_init()) { halt(); }
+#if POTATO_MESH_DEBUG
+  potato_log_heap("3_after_radio_init");
+#endif
 
   fast_rng.begin(radio_get_rng_seed());
 
@@ -185,6 +211,9 @@ void setup() {
 #elif defined(ESP32)
   SPIFFS.begin(true);
   store.begin();
+#if defined(POTATO_MESH_INGEST)
+  PotatoMeshConfig::instance().load();
+#endif
   the_mesh.begin(
     #ifdef DISPLAY_CLASS
         disp != NULL
@@ -192,6 +221,9 @@ void setup() {
         false
     #endif
   );
+#if POTATO_MESH_DEBUG
+  potato_log_heap("4_after_SPIFFS_store_mesh.begin");
+#endif
 
 #ifdef WIFI_SSID
   board.setInhibitSleep(true);   // prevent sleep when WiFi is active
@@ -199,6 +231,9 @@ void setup() {
   serial_interface.begin(TCP_PORT);
 #elif defined(BLE_PIN_CODE)
   serial_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
+#if POTATO_MESH_DEBUG
+  potato_log_heap("5_after_BLE_serial_interface.begin");
+#endif
 #elif defined(SERIAL_RX)
   companion_serial.setPins(SERIAL_RX, SERIAL_TX);
   companion_serial.begin(115200);
@@ -206,15 +241,42 @@ void setup() {
 #else
   serial_interface.begin(Serial);
 #endif
+#if defined(POTATO_MESH_INGEST) && !defined(WIFI_SSID)
+  {
+    auto& pc = PotatoMeshConfig::instance();
+    if (pc.ssid()[0] != '\0') {
+      board.setInhibitSleep(true);
+      WiFi.mode(WIFI_STA);
+      POTATO_MESH_DBG_LN("STA ingest: WiFi.begin ssid=%s", pc.ssid());
+      WiFi.begin(pc.ssid(), pc.password());
+#if POTATO_MESH_DEBUG
+      potato_log_heap("6_after_WiFi.begin (STA may still be connecting)");
+#endif
+    }
+  }
+#endif
   the_mesh.startInterface(serial_interface);
+#if POTATO_MESH_DEBUG
+  potato_log_heap("7_after_startInterface");
+#endif
 #else
   #error "need to define filesystem"
 #endif
 
   sensors.begin();
+#if POTATO_MESH_DEBUG
+  potato_log_heap("8_after_sensors.begin");
+#endif
 
 #ifdef DISPLAY_CLASS
   ui_task.begin(disp, &sensors, the_mesh.getNodePrefs());  // still want to pass this in as dependency, as prefs might be moved
+#if POTATO_MESH_DEBUG
+  potato_log_heap("9_after_ui_task.begin");
+#endif
+#endif
+
+#if POTATO_MESH_DEBUG
+  potato_log_heap("10_setup_done");
 #endif
 }
 

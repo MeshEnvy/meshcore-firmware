@@ -226,6 +226,13 @@ public:
         sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
         display.drawTextCentered(display.width() / 2, 43, tmp);
       }
+#if defined(POTATO_MESH_INGEST)
+      if (_task->potatoIngestNeedsConfig()) {
+        display.setColor(DisplayDriver::YELLOW);
+        display.setTextSize(1);
+        display.drawTextCentered(display.width() / 2, 56, "DM to configure.");
+      }
+#endif
     } else if (_page == HomePage::RECENT) {
       the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);
       display.setColor(DisplayDriver::GREEN);
@@ -597,6 +604,10 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 void UITask::showAlert(const char* text, int duration_millis) {
   strcpy(_alert, text);
   _alert_expiry = millis() + duration_millis;
+}
+
+void UITask::setPotatoIngestNeedsConfig(bool show) {
+  _potato_ingest_needs_config = show;
 }
 
 void UITask::notify(UIEventType t) {
