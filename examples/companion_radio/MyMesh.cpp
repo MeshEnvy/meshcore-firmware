@@ -35,6 +35,8 @@ static void potato_log_dm_trace(const char* kind, const ContactInfo& from, const
   Serial.printf("PotatoMesh: %s from=\"%.32s\" fav=%u slash_cmd=%u -> %s\n", kind, from.name, fav, slash_cmd,
                 outcome);
 }
+
+static bool is_potato_slash_cmd(const char* text);
 #endif
 
 #define CMD_APP_START                 1
@@ -543,21 +545,23 @@ void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t 
                            const char *text) {
   markConnectionActive(from); // in case this is from a server, and we have a connection
 #if defined(ESP32) && defined(POTATO_MESH_INGEST)
-  if ((from.flags & 0x01) == 0) {
-    sendPotatoAdminReply(from, "I only talk to favorited nodes.");
-    potato_log_dm_trace("DM", from, text, "denied_not_favorited");
+  if (is_potato_slash_cmd(text)) {
+    if ((from.flags & 0x01) == 0) {
+      sendPotatoAdminReply(from, "I only talk to favorited nodes.");
+      potato_log_dm_trace("DM", from, text, "denied_not_favorited");
+      return;
+    }
+    bool potato_handled = tryHandlePotatoAdminDm(from, text);
+    if (potato_handled) {
+      potato_log_dm_trace("DM", from, text, "admin_cmd");
+      return;
+    }
+    char help_buf_dm[256];
+    formatPotatoAdminHelp(help_buf_dm, sizeof(help_buf_dm), _potato_ingest.isPaused());
+    sendPotatoAdminReply(from, help_buf_dm);
+    potato_log_dm_trace("DM", from, text, "help_unrecognized");
     return;
   }
-  bool potato_handled = tryHandlePotatoAdminDm(from, text);
-  if (potato_handled) {
-    potato_log_dm_trace("DM", from, text, "admin_cmd");
-    return;
-  }
-  char help_buf_dm[256];
-  formatPotatoAdminHelp(help_buf_dm, sizeof(help_buf_dm), _potato_ingest.isPaused());
-  sendPotatoAdminReply(from, help_buf_dm);
-  potato_log_dm_trace("DM", from, text, "help_unrecognized");
-  return;
 #endif
   queueMessage(from, TXT_TYPE_PLAIN, pkt, sender_timestamp, NULL, 0, text);
 }
@@ -566,21 +570,23 @@ void MyMesh::onCommandDataRecv(const ContactInfo &from, mesh::Packet *pkt, uint3
                                const char *text) {
   markConnectionActive(from); // in case this is from a server, and we have a connection
 #if defined(ESP32) && defined(POTATO_MESH_INGEST)
-  if ((from.flags & 0x01) == 0) {
-    sendPotatoAdminReply(from, "I only talk to favorited nodes.");
-    potato_log_dm_trace("CLI_DM", from, text, "denied_not_favorited");
+  if (is_potato_slash_cmd(text)) {
+    if ((from.flags & 0x01) == 0) {
+      sendPotatoAdminReply(from, "I only talk to favorited nodes.");
+      potato_log_dm_trace("CLI_DM", from, text, "denied_not_favorited");
+      return;
+    }
+    bool potato_handled = tryHandlePotatoAdminDm(from, text);
+    if (potato_handled) {
+      potato_log_dm_trace("CLI_DM", from, text, "admin_cmd");
+      return;
+    }
+    char help_buf_cli[256];
+    formatPotatoAdminHelp(help_buf_cli, sizeof(help_buf_cli), _potato_ingest.isPaused());
+    sendPotatoAdminReply(from, help_buf_cli);
+    potato_log_dm_trace("CLI_DM", from, text, "help_unrecognized");
     return;
   }
-  bool potato_handled = tryHandlePotatoAdminDm(from, text);
-  if (potato_handled) {
-    potato_log_dm_trace("CLI_DM", from, text, "admin_cmd");
-    return;
-  }
-  char help_buf_cli[256];
-  formatPotatoAdminHelp(help_buf_cli, sizeof(help_buf_cli), _potato_ingest.isPaused());
-  sendPotatoAdminReply(from, help_buf_cli);
-  potato_log_dm_trace("CLI_DM", from, text, "help_unrecognized");
-  return;
 #endif
   queueMessage(from, TXT_TYPE_CLI_DATA, pkt, sender_timestamp, NULL, 0, text);
 }
@@ -589,21 +595,23 @@ void MyMesh::onSignedMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uin
                                  const uint8_t *sender_prefix, const char *text) {
   markConnectionActive(from);
 #if defined(ESP32) && defined(POTATO_MESH_INGEST)
-  if ((from.flags & 0x01) == 0) {
-    sendPotatoAdminReply(from, "I only talk to favorited nodes.");
-    potato_log_dm_trace("signed DM", from, text, "denied_not_favorited");
+  if (is_potato_slash_cmd(text)) {
+    if ((from.flags & 0x01) == 0) {
+      sendPotatoAdminReply(from, "I only talk to favorited nodes.");
+      potato_log_dm_trace("signed DM", from, text, "denied_not_favorited");
+      return;
+    }
+    bool potato_handled = tryHandlePotatoAdminDm(from, text);
+    if (potato_handled) {
+      potato_log_dm_trace("signed DM", from, text, "admin_cmd");
+      return;
+    }
+    char help_buf_sig[256];
+    formatPotatoAdminHelp(help_buf_sig, sizeof(help_buf_sig), _potato_ingest.isPaused());
+    sendPotatoAdminReply(from, help_buf_sig);
+    potato_log_dm_trace("signed DM", from, text, "help_unrecognized");
     return;
   }
-  bool potato_handled = tryHandlePotatoAdminDm(from, text);
-  if (potato_handled) {
-    potato_log_dm_trace("signed DM", from, text, "admin_cmd");
-    return;
-  }
-  char help_buf_sig[256];
-  formatPotatoAdminHelp(help_buf_sig, sizeof(help_buf_sig), _potato_ingest.isPaused());
-  sendPotatoAdminReply(from, help_buf_sig);
-  potato_log_dm_trace("signed DM", from, text, "help_unrecognized");
-  return;
 #endif
   // from.sync_since change needs to be persisted
   dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
@@ -2139,6 +2147,13 @@ static const char* skip_sp_dm(const char* p) {
     p++;
   }
   return p;
+}
+
+static bool is_potato_slash_cmd(const char* text) {
+  if (!text) {
+    return false;
+  }
+  return *skip_sp_dm(text) == '/';
 }
 
 void MyMesh::restartPotatoIngestAfterConfigChange() {
