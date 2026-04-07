@@ -220,6 +220,7 @@ private:
   int32_t _potato_bootstrap_next;
   bool tryHandlePotatoAdminDm(const ContactInfo& from, const char* text);
   void sendPotatoAdminReply(const ContactInfo& to, const char* msg);
+  void sendPotatoWifiStatusAndScan(const ContactInfo& to);
   void sendPotatoInfoReplies(const ContactInfo& to);
   void updatePotatoIngestUiHint();
   void restartPotatoIngestAfterConfigChange();

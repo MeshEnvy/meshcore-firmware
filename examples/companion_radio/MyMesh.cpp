@@ -5,18 +5,26 @@
 
 #if defined(ESP32) && defined(POTATO_MESH_INGEST)
 #include <WiFi.h>
+extern "C" {
+#include <esp_wifi.h>
+}
 #include <Esp.h>
+#include <helpers/esp32/PotatoMeshDebug.h>
 
 #ifndef POTATO_MESH_INGEST_QUEUE_DEPTH
 #define POTATO_MESH_INGEST_QUEUE_DEPTH 8
 #endif
+#define POTATO_WIFI_CACHE_MAX 32
+#define POTATO_WIFI_MERGED_MAX (POTATO_WIFI_CACHE_MAX + 8)
 
 /* Chunked by sendPotatoAdminReply(); /pause vs /resume line is mutually exclusive. */
 static void formatPotatoAdminHelp(char* out, size_t cap, bool ingest_paused) {
   const char* pause_or_resume = ingest_paused ? "/resume\n" : "/pause\n";
   snprintf(out, cap,
            "Potato Core menu:\n\n"
-           "/wifi <ssid> <pwd>\n"
+           "/wifi  (no args: status + scan + networks)\n"
+           "/wifi <n> [pwd]  (* = saved, pwd optional)\n"
+           "/wifi <ssid> [pwd]\n"
            "/auth <token>\n"
            "/endpoint <ingest URL>\n"
            "%s"
@@ -2200,6 +2208,301 @@ void MyMesh::sendPotatoAdminReply(const ContactInfo& to, const char* msg) {
   }
 }
 
+/** Map 802.11 RSSI to four segments, e.g. "[|||.]" (| stronger, . weaker). */
+static void potato_wifi_rssi_bars(int32_t rssi, char out[8]) {
+  int level;
+  if (rssi >= -50) {
+    level = 4;
+  } else if (rssi >= -65) {
+    level = 3;
+  } else if (rssi >= -75) {
+    level = 2;
+  } else if (rssi >= -85) {
+    level = 1;
+  } else {
+    level = 0;
+  }
+  out[0] = '[';
+  for (int b = 0; b < 4; b++) {
+    out[1 + b] = (b < level) ? '|' : '.';
+  }
+  out[5] = ']';
+  out[6] = '\0';
+}
+
+static void potato_wifi_rssi_bars_or_unknown(int32_t rssi, bool seen_in_scan, char out[8]) {
+  if (!seen_in_scan) {
+    snprintf(out, 8, "  —  ");
+    return;
+  }
+  potato_wifi_rssi_bars(rssi, out);
+}
+
+/** Same strategy as earlier potato-mesh scan: STA must be idle or esp_wifi_scan_start returns -2. */
+static int16_t potato_wifi_scan_after_disconnect_idle() {
+  (void)esp_wifi_scan_stop();
+  delay(50);
+  if ((WiFi.getMode() & WIFI_MODE_STA) != 0) {
+    WiFi.disconnect(false, false);
+    delay(350);
+  }
+  WiFi.scanDelete();
+  return WiFi.scanNetworks();
+}
+
+struct PotatoWifiListEntry {
+  char ssid[33];
+  int32_t rssi;
+  bool is_known;
+};
+
+static PotatoWifiListEntry g_wifi_scan_dedup[POTATO_WIFI_CACHE_MAX];
+static uint8_t g_wifi_scan_dedup_count;
+static PotatoWifiListEntry g_wifi_merged[POTATO_WIFI_MERGED_MAX];
+static uint8_t g_wifi_merged_count;
+
+static void potato_wifi_fill_scan_dedup() {
+  g_wifi_scan_dedup_count = 0;
+  WiFi.mode(WIFI_STA);
+  delay(100);
+  POTATO_MESH_DBG_LN("admin /wifi: scan start");
+
+  PotatoMeshConfig& cfg = PotatoMeshConfig::instance();
+  const char* saved = cfg.ssid();
+  if (!saved) {
+    saved = "";
+  }
+  bool need_resume = false;
+
+  int16_t n = -1;
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFi.scanDelete();
+    n = WiFi.scanNetworks(false, false, true, 360);
+    if (n < 0 || n == 0) {
+      POTATO_MESH_DBG_LN("admin /wifi: passive scan while connected n=%d", (int)n);
+      WiFi.scanDelete();
+      return;
+    }
+  } else {
+    n = potato_wifi_scan_after_disconnect_idle();
+    if (n < 0) {
+      n = potato_wifi_scan_after_disconnect_idle();
+    }
+    if (n < 0) {
+      POTATO_MESH_DBG_LN("admin /wifi: scan still n=%d, trying passive", (int)n);
+      (void)esp_wifi_scan_stop();
+      delay(100);
+      if ((WiFi.getMode() & WIFI_MODE_STA) != 0) {
+        WiFi.disconnect(false, false);
+        delay(200);
+      }
+      WiFi.scanDelete();
+      n = WiFi.scanNetworks(false, false, true, 360);
+    }
+    need_resume = saved[0] != '\0';
+    if (n < 0) {
+      POTATO_MESH_DBG_LN("admin /wifi: scan failed n=%d", (int)n);
+      WiFi.scanDelete();
+      if (need_resume) {
+        WiFi.mode(WIFI_STA);
+        WiFi.begin(cfg.ssid(), cfg.password());
+      }
+      return;
+    }
+  }
+
+  for (int i = 0; i < n; i++) {
+    yield();
+    String ss = WiFi.SSID(i);
+    if (ss.length() == 0) {
+      continue;
+    }
+    int32_t rssi = WiFi.RSSI(i);
+    int found = -1;
+    for (uint8_t j = 0; j < g_wifi_scan_dedup_count; j++) {
+      if (strcmp(g_wifi_scan_dedup[j].ssid, ss.c_str()) == 0) {
+        found = (int)j;
+        break;
+      }
+    }
+    if (found >= 0) {
+      if (rssi > g_wifi_scan_dedup[found].rssi) {
+        g_wifi_scan_dedup[found].rssi = rssi;
+      }
+    } else if (g_wifi_scan_dedup_count < POTATO_WIFI_CACHE_MAX) {
+      snprintf(g_wifi_scan_dedup[g_wifi_scan_dedup_count].ssid, sizeof(g_wifi_scan_dedup[0].ssid), "%s", ss.c_str());
+      g_wifi_scan_dedup[g_wifi_scan_dedup_count].rssi = rssi;
+      g_wifi_scan_dedup[g_wifi_scan_dedup_count].is_known = false;
+      g_wifi_scan_dedup_count++;
+    }
+  }
+  for (uint8_t a = 0; a < g_wifi_scan_dedup_count; a++) {
+    for (uint8_t b = a + 1; b < g_wifi_scan_dedup_count; b++) {
+      if (g_wifi_scan_dedup[b].rssi > g_wifi_scan_dedup[a].rssi) {
+        PotatoWifiListEntry t = g_wifi_scan_dedup[a];
+        g_wifi_scan_dedup[a] = g_wifi_scan_dedup[b];
+        g_wifi_scan_dedup[b] = t;
+      }
+    }
+  }
+  WiFi.scanDelete();
+  if (need_resume && saved[0]) {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(cfg.ssid(), cfg.password());
+    POTATO_MESH_DBG_LN("admin /wifi: WiFi.begin after scan (resume association)");
+  }
+  POTATO_MESH_DBG_LN("admin /wifi: scan done unique=%u", (unsigned)g_wifi_scan_dedup_count);
+}
+
+static void potato_wifi_rebuild_merged_list(PotatoMeshConfig& cfg) {
+  g_wifi_merged_count = 0;
+  constexpr int32_t kNotInScan = -127;
+
+  for (uint8_t ki = 0; ki < cfg.knownWifiCount() && g_wifi_merged_count < POTATO_WIFI_MERGED_MAX; ki++) {
+    char kssid[33];
+    char kpwd[65];
+    if (!cfg.getKnownWifi(ki, kssid, sizeof(kssid), kpwd, sizeof(kpwd)) || !kssid[0]) {
+      continue;
+    }
+    int32_t rssi = kNotInScan;
+    for (uint8_t j = 0; j < g_wifi_scan_dedup_count; j++) {
+      if (strcmp(g_wifi_scan_dedup[j].ssid, kssid) == 0) {
+        rssi = g_wifi_scan_dedup[j].rssi;
+        break;
+      }
+    }
+    snprintf(g_wifi_merged[g_wifi_merged_count].ssid, sizeof(g_wifi_merged[0].ssid), "%s", kssid);
+    g_wifi_merged[g_wifi_merged_count].rssi = rssi;
+    g_wifi_merged[g_wifi_merged_count].is_known = true;
+    g_wifi_merged_count++;
+  }
+
+  for (uint8_t j = 0; j < g_wifi_scan_dedup_count && g_wifi_merged_count < POTATO_WIFI_MERGED_MAX; j++) {
+    if (cfg.isKnownWifiSsid(g_wifi_scan_dedup[j].ssid)) {
+      continue;
+    }
+    snprintf(g_wifi_merged[g_wifi_merged_count].ssid, sizeof(g_wifi_merged[0].ssid), "%s", g_wifi_scan_dedup[j].ssid);
+    g_wifi_merged[g_wifi_merged_count].rssi = g_wifi_scan_dedup[j].rssi;
+    g_wifi_merged[g_wifi_merged_count].is_known = false;
+    g_wifi_merged_count++;
+  }
+}
+
+static bool potato_first_token_is_wifi_list_index(const char* tok, unsigned* out_one_based) {
+  if (!tok || !tok[0] || !out_one_based || g_wifi_merged_count == 0) {
+    return false;
+  }
+  for (const char* q = tok; *q; q++) {
+    if (*q < '0' || *q > '9') {
+      return false;
+    }
+  }
+  unsigned n = 0;
+  for (const char* q = tok; *q; q++) {
+    n = n * 10u + (unsigned)(*q - '0');
+    if (n > 999u) {
+      return false;
+    }
+  }
+  if (n < 1u || n > (unsigned)g_wifi_merged_count) {
+    return false;
+  }
+  *out_one_based = n;
+  return true;
+}
+
+void MyMesh::sendPotatoWifiStatusAndScan(const ContactInfo& to) {
+  POTATO_MESH_DBG_LN("admin /wifi: status+scan from=\"%.32s\"", to.name);
+
+  auto& cfg = PotatoMeshConfig::instance();
+  const char* saved_ssid = cfg.ssid();
+  if (!saved_ssid) {
+    saved_ssid = "";
+  }
+
+  potato_wifi_fill_scan_dedup();
+  potato_wifi_rebuild_merged_list(cfg);
+
+  static char buf[2048];
+  wl_status_t wl = WiFi.status();
+  int o = 0;
+
+  if (wl == WL_CONNECTED) {
+    char assoc_ssid[33] = "";
+    char sig_bars[8];
+    potato_wifi_rssi_bars(WiFi.RSSI(), sig_bars);
+    String ws = WiFi.SSID();
+    if (ws.length() > 0) {
+      snprintf(assoc_ssid, sizeof(assoc_ssid), "%s", ws.c_str());
+    }
+    o = snprintf(buf, sizeof(buf),
+                 "Wi-Fi: connected\n"
+                 "Current SSID: %s\n"
+                 "IP: %s\n"
+                 "Signal: %s\n"
+                 "\n",
+                 assoc_ssid[0] ? assoc_ssid : "(unknown)", WiFi.localIP().toString().c_str(), sig_bars);
+  } else {
+    o = snprintf(buf, sizeof(buf),
+                 "Wi-Fi: not connected\n"
+                 "SSID saved in device: %s\n"
+                 "\n",
+                 saved_ssid[0] ? saved_ssid : "(none)");
+  }
+  if (o < 0 || (size_t)o >= sizeof(buf)) {
+    o = (int)sizeof(buf) - 1;
+  }
+
+  constexpr int32_t kNotInScan = -127;
+  size_t rem = sizeof(buf) - (size_t)o;
+
+  if (g_wifi_merged_count == 0) {
+    int hn = snprintf(buf + o, rem,
+                      "No saved networks and no APs seen in scan.\n"
+                      "\n"
+                      "Connect: /wifi <n> [pwd] or /wifi <ssid> [pwd]\n");
+    if (hn > 0) {
+      o += hn;
+    }
+  } else {
+    int head = snprintf(buf + o, rem,
+                        "* = saved network (password optional)\n"
+                        "Networks (%u):\n",
+                        (unsigned)g_wifi_merged_count);
+    if (head > 0 && (size_t)head < rem) {
+      o += head;
+    }
+    for (uint8_t i = 0; i < g_wifi_merged_count; i++) {
+      yield();
+      rem = sizeof(buf) - (size_t)o;
+      if (rem < 56) {
+        snprintf(buf + o, rem, "… (truncated)\n");
+        break;
+      }
+      char bars[8];
+      const bool seen_in_scan = !g_wifi_merged[i].is_known || g_wifi_merged[i].rssi != kNotInScan;
+      potato_wifi_rssi_bars_or_unknown(g_wifi_merged[i].rssi, seen_in_scan, bars);
+      const char* star = g_wifi_merged[i].is_known ? "* " : "  ";
+      int ln = snprintf(buf + o, rem, "%u. %s%s  %s\n", (unsigned)(i + 1), star, g_wifi_merged[i].ssid, bars);
+      if (ln < 0 || (size_t)ln >= rem) {
+        snprintf(buf + o, rem, "… (truncated)\n");
+        break;
+      }
+      o += ln;
+    }
+    rem = sizeof(buf) - (size_t)o;
+    int foot = snprintf(buf + o, rem,
+                        "\n"
+                        "Use: /wifi <n> [pwd]  (n = number above)\n");
+    if (foot > 0) {
+      o += foot;
+    }
+  }
+
+  POTATO_MESH_DBG_LN("admin /wifi: sending reply total_len=%u", (unsigned)strlen(buf));
+  sendPotatoAdminReply(to, buf);
+}
+
 void MyMesh::sendPotatoInfoReplies(const ContactInfo& to) {
   uint32_t up = (uint32_t)(_ms->getMillis() / 1000U);
   uint16_t batt = board.getBattMilliVolts();
@@ -2321,8 +2624,15 @@ bool MyMesh::tryHandlePotatoAdminDm(const ContactInfo& from, const char* text) {
     ssid[si] = '\0';
     p = skip_sp_dm(p);
     if (ssid[0] == '\0') {
-      sendPotatoAdminReply(from, "Usage: /wifi <ssid> <pwd>");
+      sendPotatoWifiStatusAndScan(from);
       return true;
+    }
+    potato_wifi_fill_scan_dedup();
+    potato_wifi_rebuild_merged_list(cfg);
+    unsigned idx_pick = 0;
+    if (potato_first_token_is_wifi_list_index(ssid, &idx_pick)) {
+      snprintf(ssid, sizeof(ssid), "%s", g_wifi_merged[idx_pick - 1].ssid);
+      POTATO_MESH_DBG_LN("admin /wifi: list #%u -> ssid=\"%.32s\"", idx_pick, ssid);
     }
     char pwd[65];
     size_t pi = 0;
@@ -2330,12 +2640,19 @@ bool MyMesh::tryHandlePotatoAdminDm(const ContactInfo& from, const char* text) {
       pwd[pi++] = *p++;
     }
     pwd[pi] = '\0';
+    if (pwd[0] == '\0' && !cfg.getKnownWifiPassword(ssid, pwd, sizeof(pwd))) {
+      POTATO_MESH_DBG_LN("admin /wifi: no password and no saved profile for ssid=\"%.32s\"", ssid);
+      sendPotatoAdminReply(from, "WiFi: add a password, or save this SSID first with /wifi <ssid> <pwd>.");
+      return true;
+    }
+    POTATO_MESH_DBG_LN("admin /wifi: set credentials ssid=\"%.32s\" pwd_set=%d", ssid, pwd[0] != '\0' ? 1 : 0);
     cfg.setWifi(ssid, pwd);
     board.setInhibitSleep(true);
     WiFi.mode(WIFI_STA);
     WiFi.disconnect(true, false);
     delay(100);
     WiFi.begin(cfg.ssid(), cfg.password());
+    potato_mesh_register_wifi_event_logging();
     restartPotatoIngestAfterConfigChange();
     sendPotatoAdminReply(from, "WiFi updated, connecting.");
     updatePotatoIngestUiHint();

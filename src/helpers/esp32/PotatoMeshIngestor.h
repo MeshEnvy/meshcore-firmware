@@ -31,6 +31,8 @@ public:
 };
 
 #if defined(ESP32) && defined(POTATO_MESH_INGEST)
+/** Register once at startup: on STA GOT_IP, set DNS to 1.1.1.1 and 8.8.8.8 (avoids broken DHCP DNS for ingest). */
+void potato_mesh_register_sta_dns_override();
 /** Register once after WiFi.begin: logs STA disconnect (with reason), reconnect, and DHCP. */
 void potato_mesh_register_wifi_event_logging();
 #endif

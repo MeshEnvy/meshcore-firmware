@@ -214,6 +214,7 @@ void setup() {
   store.begin();
 #if defined(POTATO_MESH_INGEST)
   PotatoMeshConfig::instance().load();
+  potato_mesh_register_sta_dns_override();
 #endif
   the_mesh.begin(
     #ifdef DISPLAY_CLASS
