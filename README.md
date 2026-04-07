@@ -2,6 +2,8 @@
 
 > A MeshScore ingestor for [Potato Mesh](https://github.com/l5yth/potato-mesh)
 
+This project is a fork of MeshCore with Potato Mesh ingestor support built in. No laptop or python sidecar needed.
+
 ## Requirements
 
 * A spare MeshCore device with WiFi (will become PotatoCore)
@@ -50,4 +52,46 @@ DM these slash commands individually to your PotatoCore device:
 ```
 
 That's it. You should start seeing your nodes populating on your Potato Mesh instance.
+
+## Device Testing (please contribute)
+
+MeshCore in this tree builds for many **WiFi-capable** boards (ESP32 / ESP32-C6 targets under `meshcore/variants/`, plus Raspberry Pi Pico W). Use this matrix for **Potato Mesh HTTP ingest / PotatoCore** on WiFi.
+
+| Device | Status |
+| ------ | :----: |
+| Ebyte EORA S3 | ❓ |
+| Generic E22 (ESP32) | ❓ |
+| Generic ESP32-C3 (ESP-NOW / devkit) | ❓ |
+| Heltec CT62 | ❓ |
+| Heltec E213 ePaper | ❓ |
+| Heltec E290 | ❓ |
+| Heltec LoRa32 v2 | ❓ |
+| Heltec LoRa32 v3 / WSL3 | ✅ |
+| Heltec LoRa32 v4 / V4 TFT | ❓ |
+| Heltec T190 | ❓ |
+| Heltec Wireless Paper | ❓ |
+| Heltec Wireless Tracker | ❓ |
+| Heltec Wireless Tracker v2 | ❓ |
+| LilyGo T-Beam 1W | ❓ |
+| LilyGo T-Beam (SX1262) | ❓ |
+| LilyGo T-Beam (SX1276) | ❓ |
+| LilyGo T-Beam S3 Supreme (SX1262) | ❓ |
+| LilyGo T-Deck | ❓ |
+| LilyGo T-LoRa (ESP32-C6) | ❓ |
+| LilyGo T-LoRa v2.1 | ❓ |
+| LilyGo T3-S3 | ❓ |
+| LilyGo T3-S3 (SX1276) | ❓ |
+| M5Stack Unit C6L | ❓ |
+| Meshadventurer | ❓ |
+| Nibble Screen Connect | ❓ |
+| RAK3112 | ❓ |
+| Raspberry Pi Pico W | ❓ |
+| Seeed XIAO ESP32-C3 | ❓ |
+| Seeed XIAO ESP32-C6 | ❓ |
+| Seeed XIAO ESP32S3 + Wio SX1262 | ❓ |
+| SenseCAP Indicator (ESP-NOW) | ❓ |
+| Station G2 | ❓ |
+| Tenstar C3 | ❓ |
+| ThinkNode M2 | ❓ |
+| ThinkNode M5 | ❓ |
 
