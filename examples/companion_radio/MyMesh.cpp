@@ -2443,8 +2443,7 @@ void MyMesh::updatePotatoIngestUiHint() {
 void MyMesh::loop() {
   BaseChatMesh::loop();
 
-  /* Companion link (BLE/USB) before potato HTTP: ingest uses blocking HTTPClient::POST(),
-   * which would otherwise starve checkRecvFrame()/notify for the whole request timeout. */
+  /* Service BLE/USB companion before potato ingest; HTTP POST runs on the potato-ingest FreeRTOS task. */
   if (_cli_rescue) {
     checkCLIRescueCmd();
   } else {

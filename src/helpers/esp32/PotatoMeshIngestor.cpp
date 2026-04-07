@@ -68,6 +68,61 @@ void ensure_worker();
 
 bool is_https_origin(const char* base) { return strncmp(base, "https://", 8) == 0; }
 
+/** Long-lived HTTP + TCP/TLS: avoids HTTPClient destructor calling stop() every POST, enables keep-alive. */
+static WiFiClientSecure g_ingest_tls;
+static WiFiClient g_ingest_plain;
+static HTTPClient g_ingest_http;
+static bool g_ingest_tls_insecure = false;
+
+struct IngestHttpSession {
+  char full_url[256];
+  char origin[257];
+  char token[129];
+  char ssid[33];
+  uint32_t ip4;
+  bool active;
+};
+
+static IngestHttpSession g_ingest_sess{};
+
+static void reset_ingest_http_session() {
+  g_ingest_http.setReuse(false);
+  g_ingest_http.end();
+  g_ingest_tls.stop();
+  g_ingest_plain.stop();
+  g_ingest_sess.active = false;
+  g_ingest_sess.full_url[0] = '\0';
+}
+
+static bool ingest_http_session_matches(const char* full_url) {
+  if (!g_ingest_sess.active) {
+    return false;
+  }
+  PotatoMeshConfig& cfg = PotatoMeshConfig::instance();
+  if (strcmp(g_ingest_sess.full_url, full_url) != 0 || strcmp(g_ingest_sess.origin, cfg.ingestOrigin()) != 0 ||
+      strcmp(g_ingest_sess.token, cfg.apiToken()) != 0 || strcmp(g_ingest_sess.ssid, cfg.ssid()) != 0) {
+    return false;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    return false;
+  }
+  return (uint32_t)WiFi.localIP() == g_ingest_sess.ip4;
+}
+
+static void capture_ingest_http_session(const char* full_url) {
+  PotatoMeshConfig& cfg = PotatoMeshConfig::instance();
+  strncpy(g_ingest_sess.full_url, full_url, sizeof(g_ingest_sess.full_url) - 1);
+  g_ingest_sess.full_url[sizeof(g_ingest_sess.full_url) - 1] = '\0';
+  strncpy(g_ingest_sess.origin, cfg.ingestOrigin(), sizeof(g_ingest_sess.origin) - 1);
+  g_ingest_sess.origin[sizeof(g_ingest_sess.origin) - 1] = '\0';
+  strncpy(g_ingest_sess.token, cfg.apiToken(), sizeof(g_ingest_sess.token) - 1);
+  g_ingest_sess.token[sizeof(g_ingest_sess.token) - 1] = '\0';
+  strncpy(g_ingest_sess.ssid, cfg.ssid(), sizeof(g_ingest_sess.ssid) - 1);
+  g_ingest_sess.ssid[sizeof(g_ingest_sess.ssid) - 1] = '\0';
+  g_ingest_sess.ip4 = (uint32_t)WiFi.localIP();
+  g_ingest_sess.active = true;
+}
+
 /** Join ingest origin (NVS or build default) + POTATO_MESH_INGEST_API_PATH. */
 bool build_ingest_post_url(char* full, size_t cap) {
   const char* base = PotatoMeshConfig::instance().ingestOrigin();
@@ -93,53 +148,60 @@ bool try_post_once(const char node_id[12], const char* body, uint16_t n) {
     return false;
   }
 
-  HTTPClient http;
-  http.setConnectTimeout((int32_t)POTATO_MESH_HTTP_CONNECT_TIMEOUT_MS);
-  http.setTimeout((uint32_t)POTATO_MESH_HTTP_TIMEOUT_MS);
+  if (!ingest_http_session_matches(full_url)) {
+    reset_ingest_http_session();
+  }
+
+  g_ingest_http.setReuse(true);
+  g_ingest_http.setConnectTimeout((int32_t)POTATO_MESH_HTTP_CONNECT_TIMEOUT_MS);
+  g_ingest_http.setTimeout((uint32_t)POTATO_MESH_HTTP_TIMEOUT_MS);
 
   const char* origin = PotatoMeshConfig::instance().ingestOrigin();
   bool ok_begin = false;
-  if (is_https_origin(origin)) {
-    // One long-lived TLS client: HTTPClient's https:// begin() path can allocate
-    // a fresh TLS context per request; reuse cuts peak heap / fragmentation.
-    // -32512 is MBEDTLS_ERR_SSL_ALLOC_FAILED (mbedtls_calloc returned NULL).
-    static WiFiClientSecure tls_client;
-    static bool tls_configured = false;
-    if (!tls_configured) {
-      tls_client.setInsecure();
-      tls_configured = true;
+  if (g_ingest_sess.active) {
+    ok_begin = true;
+  } else if (is_https_origin(origin)) {
+    if (!g_ingest_tls_insecure) {
+      g_ingest_tls.setInsecure();
+      g_ingest_tls_insecure = true;
     }
-    ok_begin = http.begin(tls_client, full_url);
+    ok_begin = g_ingest_http.begin(g_ingest_tls, full_url);
   } else {
-    ok_begin = http.begin(full_url);
+    ok_begin = g_ingest_http.begin(g_ingest_plain, full_url);
   }
 
   if (!ok_begin) {
     POTATO_MESH_DBG_LN("post %s: http.begin() failed URL=%s", node_id, full_url);
+    reset_ingest_http_session();
     return false;
   }
 
-  if (strstr(origin, "ngrok") != nullptr) {
-    http.addHeader("ngrok-skip-browser-warning", "true");
+  if (!g_ingest_sess.active) {
+    capture_ingest_http_session(full_url);
   }
-  http.addHeader("Content-Type", "application/json");
+
+  if (strstr(origin, "ngrok") != nullptr) {
+    g_ingest_http.addHeader("ngrok-skip-browser-warning", "true");
+  }
+  g_ingest_http.addHeader("Content-Type", "application/json");
   char auth_hdr[200];
   snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", PotatoMeshConfig::instance().apiToken());
-  http.addHeader("Authorization", auth_hdr);
+  g_ingest_http.addHeader("Authorization", auth_hdr);
 
   POTATO_MESH_DBG_LN("post %s: heap=%u max_blk=%u POST %u bytes to %s", node_id, (unsigned)ESP.getFreeHeap(),
                       (unsigned)ESP.getMaxAllocHeap(), (unsigned)n, full_url);
 
-  int code = http.POST((uint8_t*)body, (size_t)n);
+  int code = g_ingest_http.POST((uint8_t*)body, (size_t)n);
 
   if (code >= 200 && code < 300) {
     POTATO_MESH_DBG_LN("post %s: HTTP %d ok", node_id, code);
-    http.end();
+    /* Must drain the body for keep-alive; do not call end() while session stays valid. */
+    (void)g_ingest_http.getString();
     return true;
   }
 
   /* One read: works for HTTP error responses; sometimes non-empty even when code < 0 (proxy/ngrok body). */
-  String resp = http.getString();
+  String resp = g_ingest_http.getString();
   constexpr unsigned kRespLogMax = 512;
   if (resp.length() > 0) {
     unsigned plen = resp.length() > kRespLogMax ? kRespLogMax : resp.length();
@@ -147,11 +209,14 @@ bool try_post_once(const char node_id[12], const char* body, uint16_t n) {
                         (int)plen, resp.c_str());
   }
   if (code < 0) {
-    POTATO_MESH_DBG_LN("post %s: transport error %d (%s)", node_id, code, http.errorToString(code).c_str());
+    POTATO_MESH_DBG_LN("post %s: transport error %d (%s)", node_id, code, g_ingest_http.errorToString(code).c_str());
   } else {
     POTATO_MESH_DBG_LN("post %s: HTTP %d (will retry)", node_id, code);
   }
-  http.end();
+  /* Drop connection after errors or auth failure so the next attempt re-syncs TLS / credentials. */
+  if (code < 0 || code == 401) {
+    reset_ingest_http_session();
+  }
   return false;
 }
 
@@ -160,6 +225,11 @@ void enqueue_pending(const char node_id[12], const char* body, uint16_t n) {
     POTATO_MESH_DBG_LN("post %s: payload too large for queue (%u)", node_id, (unsigned)n);
     return;
   }
+  ensure_worker();
+  if (!g_q_mtx) {
+    return;
+  }
+  xSemaphoreTake(g_q_mtx, portMAX_DELAY);
   if (g_q.count >= kQueueDepth) {
     g_q.head = (uint8_t)((g_q.head + 1) % kQueueDepth);
     g_q.count--;
@@ -173,13 +243,21 @@ void enqueue_pending(const char node_id[12], const char* body, uint16_t n) {
   g_q.tail = (uint8_t)((g_q.tail + 1) % kQueueDepth);
   g_q.count++;
   POTATO_MESH_DBG_LN("post %s: queued (%u in queue)", node_id, (unsigned)g_q.count);
+  xSemaphoreGive(g_q_mtx);
+  notify_worker();
 }
 
 bool enqueue_pending_try(const char node_id[12], const char* body, uint16_t n) {
   if (n >= kBodyCap) {
     return true;
   }
+  ensure_worker();
+  if (!g_q_mtx) {
+    return false;
+  }
+  xSemaphoreTake(g_q_mtx, portMAX_DELAY);
   if (g_q.count >= kQueueDepth) {
+    xSemaphoreGive(g_q_mtx);
     return false;
   }
   uint8_t slot = g_q.tail;
@@ -189,15 +267,134 @@ bool enqueue_pending_try(const char node_id[12], const char* body, uint16_t n) {
   snprintf(g_q.node_id[slot], sizeof(g_q.node_id[slot]), "%s", node_id);
   g_q.tail = (uint8_t)((g_q.tail + 1) % kQueueDepth);
   g_q.count++;
+  xSemaphoreGive(g_q_mtx);
+  notify_worker();
   return true;
 }
 
-uint8_t potato_ingest_queue_depth() { return g_q.count; }
+uint8_t potato_ingest_queue_depth() {
+  if (!g_q_mtx) {
+    return g_q.count;
+  }
+  xSemaphoreTake(g_q_mtx, portMAX_DELAY);
+  uint8_t c = g_q.count;
+  xSemaphoreGive(g_q_mtx);
+  return c;
+}
 
 void potato_ingest_clear_queue() {
+  reset_ingest_http_session();
+  if (!g_q_mtx) {
+    g_q.head = g_q.tail = g_q.count = 0;
+    g_q.next_retry_ms = 0;
+    POTATO_MESH_DBG_LN("ingest queue cleared (config change)");
+    return;
+  }
+  xSemaphoreTake(g_q_mtx, portMAX_DELAY);
   g_q.head = g_q.tail = g_q.count = 0;
   g_q.next_retry_ms = 0;
+  xSemaphoreGive(g_q_mtx);
   POTATO_MESH_DBG_LN("ingest queue cleared (config change)");
+  notify_worker();
+}
+
+bool ingest_try_step() {
+  char local_body[kBodyCap];
+  char local_nid[12];
+  uint16_t plen = 0;
+
+  xSemaphoreTake(g_q_mtx, portMAX_DELAY);
+  if (g_paused) {
+    xSemaphoreGive(g_q_mtx);
+    return false;
+  }
+  if (!PotatoMeshConfig::instance().isIngestReady()) {
+    xSemaphoreGive(g_q_mtx);
+    return false;
+  }
+  if (g_q.count == 0) {
+    xSemaphoreGive(g_q_mtx);
+    return false;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    xSemaphoreGive(g_q_mtx);
+    vTaskDelay(pdMS_TO_TICKS(200));
+    return true;
+  }
+  uint32_t now = millis();
+  if ((int32_t)(now - g_q.next_retry_ms) < 0) {
+    uint32_t wait = g_q.next_retry_ms - now;
+    xSemaphoreGive(g_q_mtx);
+    if (wait > 0) {
+      vTaskDelay(pdMS_TO_TICKS(wait));
+    }
+    return true;
+  }
+
+  plen = g_q.len[g_q.head];
+  memcpy(local_body, g_q.body[g_q.head], plen);
+  local_body[plen] = '\0';
+  memcpy(local_nid, g_q.node_id[g_q.head], sizeof(local_nid));
+
+  xSemaphoreGive(g_q_mtx);
+
+  bool ok = try_post_once(local_nid, local_body, plen);
+
+  xSemaphoreTake(g_q_mtx, portMAX_DELAY);
+  if (g_q.count > 0 && g_q.len[g_q.head] == plen && memcmp(g_q.node_id[g_q.head], local_nid, 12) == 0) {
+    if (ok) {
+      g_q.head = (uint8_t)((g_q.head + 1) % kQueueDepth);
+      g_q.count--;
+      g_q.next_retry_ms = 0;
+    } else {
+      g_q.next_retry_ms = millis() + (uint32_t)POTATO_MESH_HTTP_RETRY_DELAY_MS;
+    }
+  }
+  bool more = g_q.count > 0 && !g_paused;
+  xSemaphoreGive(g_q_mtx);
+  return more;
+}
+
+void ingest_worker_entry(void*) {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    while (ingest_try_step()) {
+    }
+  }
+}
+
+void notify_worker() {
+  if (g_worker) {
+    xTaskNotifyGive(g_worker);
+  }
+}
+
+void ensure_worker() {
+  if (g_worker) {
+    return;
+  }
+  if (!g_q_mtx) {
+    g_q_mtx = xSemaphoreCreateMutex();
+  }
+  if (!g_q_mtx) {
+    return;
+  }
+
+  TaskHandle_t created = nullptr;
+  if (xTaskCreate(ingest_worker_entry, "potato-ingest", POTATO_MESH_INGEST_WORKER_STACK, nullptr, 1, &created) !=
+      pdPASS) {
+    POTATO_MESH_DBG_LN("ingest worker xTaskCreate failed");
+    return;
+  }
+
+  portENTER_CRITICAL(&g_worker_init);
+  if (!g_worker) {
+    g_worker = created;
+    portEXIT_CRITICAL(&g_worker_init);
+  } else {
+    portEXIT_CRITICAL(&g_worker_init);
+    vTaskDelete(created);
+  }
 }
 
 } // namespace
@@ -435,27 +632,16 @@ void PotatoMeshIngestor::service() {
   if (!PotatoMeshConfig::instance().isIngestReady()) {
     return;
   }
-  if (g_q.count == 0) {
+  ensure_worker();
+  if (!g_q_mtx || !g_worker) {
     return;
   }
-  if (WiFi.status() != WL_CONNECTED) {
-    return;
-  }
-  uint32_t now = millis();
-  if ((int32_t)(now - g_q.next_retry_ms) < 0) {
-    return;
-  }
-
-  const char* nid = g_q.node_id[g_q.head];
-  const char* payload = g_q.body[g_q.head];
-  uint16_t plen = g_q.len[g_q.head];
-
-  if (try_post_once(nid, payload, plen)) {
-    g_q.head = (uint8_t)((g_q.head + 1) % kQueueDepth);
-    g_q.count--;
-    g_q.next_retry_ms = 0;
-  } else {
-    g_q.next_retry_ms = now + (uint32_t)POTATO_MESH_HTTP_RETRY_DELAY_MS;
+  bool pending = false;
+  xSemaphoreTake(g_q_mtx, portMAX_DELAY);
+  pending = g_q.count > 0;
+  xSemaphoreGive(g_q_mtx);
+  if (pending && WiFi.status() == WL_CONNECTED) {
+    notify_worker();
   }
 }
 

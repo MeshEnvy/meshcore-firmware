@@ -19,7 +19,7 @@ public:
   void postContactDiscovered(const uint8_t self_pub_key[PUB_KEY_SIZE], const ContactInfo& contact);
   /** Enqueue one contact if ingest is ready and queue has space. Returns false if full or ingest not configured yet (retry later). */
   bool tryEnqueueContact(const uint8_t self_pub_key[PUB_KEY_SIZE], const ContactInfo& contact);
-  /** Call from main loop: retries queued POSTs with backoff until they succeed (never drops except queue overflow). */
+  /** Call from main loop: pokes the background worker when WiFi is up and the queue is non-empty (POST runs on a FreeRTOS task). */
   void service();
   /** Pending HTTP ingest payloads (0 .. POTATO_MESH_INGEST_QUEUE_DEPTH). */
   uint8_t pendingQueueDepth() const;
