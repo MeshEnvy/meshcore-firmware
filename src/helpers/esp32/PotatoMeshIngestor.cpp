@@ -7,6 +7,9 @@
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 #include <cstdio>
 #include <cstring>
 
@@ -25,12 +28,15 @@
 #ifndef POTATO_MESH_HTTP_RETRY_DELAY_MS
 #define POTATO_MESH_HTTP_RETRY_DELAY_MS 400
 #endif
-/** Overall HTTP transfer timeout (ms). Keep modest: POST runs on the main loop and blocks BLE/USB polling. */
+/** Overall HTTP read/transfer timeout (ms). POST runs on a dedicated task, not the companion loop. */
 #ifndef POTATO_MESH_HTTP_TIMEOUT_MS
-#define POTATO_MESH_HTTP_TIMEOUT_MS 6000
+#define POTATO_MESH_HTTP_TIMEOUT_MS 12000
 #endif
 #ifndef POTATO_MESH_HTTP_CONNECT_TIMEOUT_MS
-#define POTATO_MESH_HTTP_CONNECT_TIMEOUT_MS 5000
+#define POTATO_MESH_HTTP_CONNECT_TIMEOUT_MS 8000
+#endif
+#ifndef POTATO_MESH_INGEST_WORKER_STACK
+#define POTATO_MESH_INGEST_WORKER_STACK 12288
 #endif
 #ifndef POTATO_MESH_INGEST_QUEUE_DEPTH
 #define POTATO_MESH_INGEST_QUEUE_DEPTH 8
@@ -53,6 +59,12 @@ struct IngestQueue {
 
 IngestQueue g_q{};
 bool g_paused = false;
+SemaphoreHandle_t g_q_mtx = nullptr;
+TaskHandle_t g_worker = nullptr;
+portMUX_TYPE g_worker_init = portMUX_INITIALIZER_UNLOCKED;
+
+void notify_worker();
+void ensure_worker();
 
 bool is_https_origin(const char* base) { return strncmp(base, "https://", 8) == 0; }
 
@@ -82,7 +94,8 @@ bool try_post_once(const char node_id[12], const char* body, uint16_t n) {
   }
 
   HTTPClient http;
-  http.setTimeout(15000);
+  http.setConnectTimeout((int32_t)POTATO_MESH_HTTP_CONNECT_TIMEOUT_MS);
+  http.setTimeout((uint32_t)POTATO_MESH_HTTP_TIMEOUT_MS);
 
   const char* origin = PotatoMeshConfig::instance().ingestOrigin();
   bool ok_begin = false;
