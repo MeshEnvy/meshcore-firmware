@@ -553,7 +553,9 @@ void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t 
     potato_log_dm_trace("DM", from, text, "admin_cmd");
     return;
   }
-  sendPotatoAdminReply(from, POTATO_ADMIN_HELP);
+  char help_buf_dm[256];
+  formatPotatoAdminHelp(help_buf_dm, sizeof(help_buf_dm), _potato_ingest.isPaused());
+  sendPotatoAdminReply(from, help_buf_dm);
   potato_log_dm_trace("DM", from, text, "help_unrecognized");
   return;
 #endif
@@ -574,7 +576,9 @@ void MyMesh::onCommandDataRecv(const ContactInfo &from, mesh::Packet *pkt, uint3
     potato_log_dm_trace("CLI_DM", from, text, "admin_cmd");
     return;
   }
-  sendPotatoAdminReply(from, POTATO_ADMIN_HELP);
+  char help_buf_cli[256];
+  formatPotatoAdminHelp(help_buf_cli, sizeof(help_buf_cli), _potato_ingest.isPaused());
+  sendPotatoAdminReply(from, help_buf_cli);
   potato_log_dm_trace("CLI_DM", from, text, "help_unrecognized");
   return;
 #endif
@@ -595,7 +599,9 @@ void MyMesh::onSignedMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uin
     potato_log_dm_trace("signed DM", from, text, "admin_cmd");
     return;
   }
-  sendPotatoAdminReply(from, POTATO_ADMIN_HELP);
+  char help_buf_sig[256];
+  formatPotatoAdminHelp(help_buf_sig, sizeof(help_buf_sig), _potato_ingest.isPaused());
+  sendPotatoAdminReply(from, help_buf_sig);
   potato_log_dm_trace("signed DM", from, text, "help_unrecognized");
   return;
 #endif
