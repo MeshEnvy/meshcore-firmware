@@ -1,3 +1,13 @@
+## PotatoCore
+
+Have you ever been like, "damn, I don't want to burn a laptop or RPi just to ingest to the mesh"?
+
+Yeah, me too. So here is a MeshCore version that fixes that for you. If your device has WiFi capability, this little gem will ingest to Potato Mesh for you!
+
+
+
+--------------
+
 ## About MeshCore
 
 MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.
