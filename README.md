@@ -1,44 +1,57 @@
 ## PotatoCore
 
-**PotatoCore** is a MeshCore fork aimed at [Potato Mesh](https://github.com/l5yth/potato-mesh): a federated dashboard for LoRa mesh nodes. On **ESP32 companion radios with Wi‑Fi**, firmware can **POST discovered nodes** to your Potato Mesh instance over HTTP, so you do not need a separate laptop or Raspberry Pi running an ingest script just to feed the map.
+**PotatoCore** is a MeshCore fork wired for [Potato Mesh](https://github.com/l5yth/potato-mesh): a federated dashboard for LoRa mesh nodes. On **ESP32 companion radios that also have Wi‑Fi**, the firmware can **POST discovered mesh nodes** to your Potato Mesh server over HTTP, so you do not need a separate computer on your LAN running the Python ingestor.
 
-- **What it does:** While the radio is in Wi‑Fi station mode and ingest is configured, the device sends node snapshots to Potato Mesh’s `POST /api/nodes` endpoint (same contract as the Python ingestor). Discovery traffic on LoRa still works as in upstream MeshCore; **Wi‑Fi is only used for HTTP**, not for the phone link (that remains BLE / USB / serial as in the companion example).
-- **What you run:** Deploy or run the Potato Mesh web app (see the `potato-mesh` repo README), set `API_TOKEN` there, and point the radio at that server’s origin with the same token.
+**Wi‑Fi is only used to reach Potato Mesh** (HTTP). Your phone or laptop still talks to the companion over **BLE / USB / serial**, like any other MeshCore companion.
 
-### Building firmware with ingest
+### You need two nodes on the mesh
 
-Potato ingest is enabled when **`POTATO_MESH_INGEST`** is defined (this repo sets it in the shared `arduino_base` section of `platformio.ini`). Companion builds that compile `helpers/esp32/*.cpp` link in **`PotatoMeshIngestor`** and **`PotatoMeshConfig`**.
+Remote configuration uses **direct messages** to the ingestor radio. The firmware **only accepts Potato admin commands from contacts you have marked as favorites** on **that** radio.
 
-For day‑to‑day development on Heltec LoRa32 v3, use the BLE companion environment (Wi‑Fi used only for ingest):
+That means you need **two distinct MeshCore identities** that can reach each other over LoRa:
+
+1. **Ingestor node** — the PotatoCore companion (e.g. Heltec LoRa32 v3) that will join Wi‑Fi and POST to Potato Mesh.
+2. **Admin node** — a **second** MeshCore device (another companion, or any node you can use from a MeshCore app to send a DM **to** the ingestor). This is often “your everyday radio” paired to the same phone app, while the ingestor sits in a window or on the roof.
+
+**Workflow:** Pair/configure the ingestor as usual. On the **ingestor’s** contact list, add the **admin node** and turn on **favorite** for that contact. From the MeshCore client connected to the **admin** node, send **direct messages** to the ingestor containing the slash commands below. If you only ever had one radio, you would have no trusted sender the ingestor could accept commands from.
+
+**Favorites vs the map:** Favoriting only gates **who may send `/wifi`, `/auth`, etc.** It does **not** restrict which overheard nodes get sent to Potato Mesh; discovery still drives ingest.
+
+### Potato Mesh server
+
+Run or deploy Potato Mesh (see the **`potato-mesh`** repo README). You will use the same **`API_TOKEN`** (or equivalent shared secret) on the server and in `/auth` on the radio. The radio posts to **`POST /api/nodes`** on your instance (same shape as the official ingestor).
+
+### Configure the ingestor (after favoriting the admin node)
+
+Ingest starts only when **all three** are stored on the device: **Wi‑Fi SSID + password**, **ingest base URL** (scheme + host and optional port, **no path**), and **API token**.
+
+Send each line as a **DM** to the ingestor from your **favorited admin** node:
+
+| Command | Purpose |
+|--------|---------|
+| `/wifi <ssid> <password>` | Save Wi‑Fi credentials and reconnect |
+| `/auth <token>` | Save the Potato Mesh API token (`Bearer` on HTTP) |
+| `/endpoint <url>` | Base URL only, e.g. `http://192.168.1.10:41447` or `https://your-host` — the path is added by firmware (default `/api/nodes`) |
+| `/pause` / `/resume` | Stop or resume HTTP uploads (queue is kept) |
+| `/debug` | Toggle extra `PotatoMesh:` lines on USB serial |
+| `/info` | Wi‑Fi status, whether ingest is ready, queue depth, radio counters |
+| `/help` | Short command list |
+
+After **`/wifi`**, **`/auth`**, or **`/endpoint`**, the device clears the ingest queue and **re-posts stored contacts** so nothing is stuck after a settings change.
+
+If the build has a display, you may see a hint that ingest **still needs configuration** until all three values are set.
+
+### Development and local testing
+
+For **building** PotatoCore yourself, ingest is compiled when **`POTATO_MESH_INGEST`** is set (this repo enables it in the shared `arduino_base` block in `platformio.ini`). Companion environments that include **`helpers/esp32/*.cpp`** link **`PotatoMeshIngestor`** and **`PotatoMeshConfig`** (e.g. Heltec `Heltec_v3_companion_radio_ble` or `_wifi`; USB-only companion targets may omit those sources).
 
 ```bash
 pio run -e Heltec_v3_companion_radio_ble
 ```
 
-Optional **compile-time defaults** (seeded into NVS on first boot if NVS is empty): `POTATO_MESH_INGEST_URL`, `POTATO_MESH_API_TOKEN`, `POTATO_MESH_WIFI_SSID`, `POTATO_MESH_WIFI_PWD`. Other useful defines include `POTATO_MESH_INGEST_API_PATH` (default `/api/nodes`), queue depth, and HTTP timeouts—see `src/helpers/esp32/PotatoMeshIngestor.cpp` and `PotatoMeshConfig.cpp`.
+**Local Potato Mesh:** Run the web app on your machine, note host and port, set `API_TOKEN`, then `/endpoint http://<your-LAN-IP>:<port>` and `/auth <same token>` from the mesh. For HTTPS tunnels (e.g. ngrok), use the tunnel origin as `/endpoint`; the client adds a header for ngrok where needed.
 
-### Configuring ingest (NVS + DMs)
-
-Settings are stored in ESP32 **NVS** under the namespace `potatomesh`. Ingest is considered **ready** only when **all three** are set: Wi‑Fi SSID, ingest **origin** (scheme + host, optional port), and **API token** (sent as `Authorization: Bearer …`).
-
-1. **From a MeshCore client:** Mark your **admin phone/user** as a **favorite** on this radio’s contact list (the companion app’s favorite flag). **Only favorited contacts** may send the slash commands below; everyone else gets a short refusal. Favoriting does **not** limit which mesh nodes are posted to Potato Mesh—**discovered nodes are ingested**; favorites gate **remote configuration** only.
-2. **Over the mesh:** Send a **direct message** to the radio with one line starting with:
-
-   | Command | Purpose |
-   |--------|---------|
-   | `/wifi <ssid> <password>` | Save STA credentials and reconnect |
-   | `/auth <token>` | Save Potato Mesh `API_TOKEN` |
-   | `/endpoint <url>` | Save ingest origin only, e.g. `http://192.168.1.10:41447` or `https://your-host` (path is fixed by `POTATO_MESH_INGEST_API_PATH`, default `/api/nodes`) |
-   | `/pause` / `/resume` | Pause or resume HTTP POSTs (queue kept) |
-   | `/debug` | Toggle extra `PotatoMesh:` serial logging (also see `POTATO_MESH_DEBUG` at build time) |
-   | `/info` | Status: Wi‑Fi, ingest readiness, queue depth, radio stats |
-   | `/help` | Short menu |
-
-After `/wifi`, `/auth`, or `/endpoint`, the ingest queue is cleared and contacts are **re‑bootstrapped** from storage so nodes can be posted again.
-
-### On-device hints
-
-If the display build supports it, the UI can show that ingest **needs configuration** until SSID, URL, and token are all set.
+**Compile-time NVS seeds** (written on first boot if the corresponding NVS keys are still empty): `POTATO_MESH_INGEST_URL`, `POTATO_MESH_API_TOKEN`, `POTATO_MESH_WIFI_SSID`, `POTATO_MESH_WIFI_PWD`. Other knobs: `POTATO_MESH_INGEST_API_PATH`, queue depth, HTTP timeouts — see `src/helpers/esp32/PotatoMeshIngestor.cpp` and `PotatoMeshConfig.cpp`. Persisted settings live in ESP32 **NVS** namespace **`potatomesh`**.
 
 ---
 
