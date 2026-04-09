@@ -16,9 +16,22 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <time.h>
 
 #ifndef POTATO_MESH_INGEST_API_PATH
 #define POTATO_MESH_INGEST_API_PATH "/api/nodes"
+#endif
+/** Matches Python :func:`queue_ingestor_heartbeat` → ``POST /api/ingestors``. */
+#ifndef POTATO_MESH_INGESTORS_API_PATH
+#define POTATO_MESH_INGESTORS_API_PATH "/api/ingestors"
+#endif
+/** Ingestor ``version`` field (required by web ``upsert_ingestor``); override at build time if needed. */
+#ifndef POTATO_MESH_INGESTOR_VERSION
+#define POTATO_MESH_INGESTOR_VERSION "meshcore-esp32"
+#endif
+/** Default aligns with :data:`HEARTBEAT_INTERVAL_SECS` in ``data/mesh_ingestor/ingestors.py``. */
+#ifndef POTATO_MESH_INGESTOR_HEARTBEAT_MS
+#define POTATO_MESH_INGESTOR_HEARTBEAT_MS (60UL * 60UL * 1000UL)
 #endif
 #ifndef POTATO_MESH_HTTP_RETRY_DELAY_MS
 #define POTATO_MESH_HTTP_RETRY_DELAY_MS 400
@@ -73,6 +86,10 @@ static char g_build_merge_tmp[kBodyCap];
 static uint32_t g_last_wifi_down_log_ms = 0;
 bool g_paused = false;
 static int g_last_http_code = 0;
+/** Wall-clock start_time for ingestor payload; set first time we see plausible Unix time. */
+static uint32_t g_ingestor_start_unix = 0;
+/** millis() of last successful ``POST /api/ingestors`` (reference: Python ingestor heartbeat). */
+static uint32_t g_ingestor_heartbeat_ok_ms = 0;
 SemaphoreHandle_t g_q_mtx = nullptr;
 TaskHandle_t g_worker = nullptr;
 portMUX_TYPE g_worker_init = portMUX_INITIALIZER_UNLOCKED;
@@ -241,10 +258,9 @@ static void capture_ingest_http_session(const char* full_url) {
   g_ingest_sess.active = true;
 }
 
-static bool build_ingest_post_url(char* full, size_t cap) {
+static bool build_ingest_post_url_for_path(char* full, size_t cap, const char* path) {
   const char* base = PotatoMeshConfig::instance().ingestOrigin();
   if (!base || base[0] == '\0') return false;
-  const char* path = POTATO_MESH_INGEST_API_PATH;
   if (!path || path[0] != '/') return false;
   size_t blen = strlen(base);
   while (blen > 0 && base[blen - 1] == '/') blen--;
@@ -252,9 +268,13 @@ static bool build_ingest_post_url(char* full, size_t cap) {
   return n > 0 && (size_t)n < cap;
 }
 
-bool try_post_once(const char* post_label, const char* body, uint16_t n) {
+static bool build_ingest_post_url(char* full, size_t cap) {
+  return build_ingest_post_url_for_path(full, cap, POTATO_MESH_INGEST_API_PATH);
+}
+
+static bool try_post_once_at_path(const char* api_path, const char* post_label, const char* body, uint16_t n) {
   char full_url[256];
-  if (!build_ingest_post_url(full_url, sizeof(full_url))) {
+  if (!build_ingest_post_url_for_path(full_url, sizeof(full_url), api_path)) {
     POTATO_MESH_DBG_LN("post %s: ingest URL build failed", post_label);
     return false;
   }
@@ -326,6 +346,10 @@ bool try_post_once(const char* post_label, const char* body, uint16_t n) {
   return false;
 }
 
+static bool try_post_once(const char* post_label, const char* body, uint16_t n) {
+  return try_post_once_at_path(POTATO_MESH_INGEST_API_PATH, post_label, body, n);
+}
+
 uint8_t potato_ingest_queue_depth() {
   if (!g_q_mtx) return g_batch_n;
   xSemaphoreTake(g_q_mtx, portMAX_DELAY);
@@ -336,6 +360,7 @@ uint8_t potato_ingest_queue_depth() {
 
 void potato_ingest_clear_queue() {
   reset_ingest_http_session();
+  g_ingestor_heartbeat_ok_ms = 0;
   if (!g_q_mtx) {
     g_batch_len = 0;
     g_batch_n = 0;
@@ -422,6 +447,75 @@ static const char* adv_type_to_role_pre(uint8_t adv_type) {
 static void format_node_id_pre(char out[12], const uint8_t pub_key[PUB_KEY_SIZE]) {
   out[0] = '!';
   bin_to_hex_lower_pre(pub_key, 4, out + 1);
+}
+
+static bool self_pub_key_nonzero(const uint8_t pk[PUB_KEY_SIZE]) {
+  for (size_t i = 0; i < PUB_KEY_SIZE; i++) {
+    if (pk[i] != 0) return true;
+  }
+  return false;
+}
+
+static bool build_ingestor_heartbeat_body(const uint8_t self_pub[PUB_KEY_SIZE], char* buf, size_t cap,
+                                          uint16_t* out_len) {
+  char node_id[12];
+  format_node_id_pre(node_id, self_pub);
+  time_t t = time(nullptr);
+  const bool unix_plausible = (t > (time_t)1700000000);
+  int n;
+  if (unix_plausible) {
+    if (g_ingestor_start_unix == 0) g_ingestor_start_unix = (uint32_t)t;
+    n = snprintf(buf, cap,
+                 "{\"node_id\":\"%s\",\"start_time\":%lu,\"last_seen_time\":%lu,\"version\":\"%s\","
+                 "\"protocol\":\"meshcore\"}",
+                 node_id, (unsigned long)g_ingestor_start_unix, (unsigned long)t, POTATO_MESH_INGESTOR_VERSION);
+  } else {
+    n = snprintf(buf, cap,
+                 "{\"node_id\":\"%s\",\"version\":\"%s\",\"protocol\":\"meshcore\"}",
+                 node_id, POTATO_MESH_INGESTOR_VERSION);
+  }
+  if (n <= 0 || (size_t)n >= cap) return false;
+  *out_len = (uint16_t)n;
+  return true;
+}
+
+/** Before node batches, register like Python ``queue_ingestor_heartbeat`` (meshcore ``_process_self_info``). */
+static void maybe_post_ingestor_heartbeat(const uint8_t self_pub[PUB_KEY_SIZE]) {
+  if (!self_pub_key_nonzero(self_pub)) return;
+  uint32_t now_ms = millis();
+  if (g_ingestor_heartbeat_ok_ms != 0) {
+    uint32_t elapsed = now_ms - g_ingestor_heartbeat_ok_ms;
+    if (elapsed < POTATO_MESH_INGESTOR_HEARTBEAT_MS) return;
+  }
+
+  char body[320];
+  uint16_t blen = 0;
+  if (!build_ingestor_heartbeat_body(self_pub, body, sizeof(body), &blen)) {
+    POTATO_MESH_DBG_LN("potato ingest: ingestor heartbeat JSON build failed");
+    return;
+  }
+
+  char full_url[256];
+  if (!build_ingest_post_url_for_path(full_url, sizeof(full_url), POTATO_MESH_INGESTORS_API_PATH)) {
+    POTATO_MESH_DBG_LN("potato ingest: ingestor URL build failed");
+    return;
+  }
+
+  const char* origin = PotatoMeshConfig::instance().ingestOrigin();
+  bool ok = false;
+  if (is_https_origin(origin)) {
+    log_ingest_dns_for_host(full_url);
+    ok = try_post_https_esp_http(full_url, "ingestor", body, blen);
+  } else {
+    ok = try_post_once_at_path(POTATO_MESH_INGESTORS_API_PATH, "ingestor", body, blen);
+  }
+
+  if (ok) {
+    g_ingestor_heartbeat_ok_ms = millis();
+    POTATO_MESH_DBG_LN("potato ingest: ingestor registered (meshcore)");
+  } else {
+    POTATO_MESH_DBG_LN("potato ingest: ingestor POST failed (nodes will retry; protocol may default)");
+  }
 }
 
 static bool append_json_escaped_name_pre(char* dest, size_t dest_size, const char* name) {
@@ -574,6 +668,7 @@ bool ingest_try_step() {
   PotatoNodeStore* local_store = nullptr;
   char post_label[96];
   char batch_ids[kBatchMaxSlots][12];
+  uint8_t local_self_pk[PUB_KEY_SIZE]{};
 
   xSemaphoreTake(g_q_mtx, portMAX_DELAY);
   if (g_paused || !PotatoMeshConfig::instance().isIngestReady() || g_batch_len == 0) {
@@ -607,10 +702,12 @@ bool ingest_try_step() {
   memcpy(local_slots, g_batch_slots, local_n * sizeof(uint16_t));
   local_store = g_batch_store;
   for (uint8_t i = 0; i < local_n; i++) memcpy(batch_ids[i], g_batch_node_ids[i], 12);
+  memcpy(local_self_pk, g_batch_self_pk, PUB_KEY_SIZE);
 
   format_ingest_post_label(post_label, sizeof(post_label), batch_ids, local_n);
   xSemaphoreGive(g_q_mtx);
 
+  maybe_post_ingestor_heartbeat(local_self_pk);
   bool ok = try_post_once(post_label, local_body, local_len);
 
   xSemaphoreTake(g_q_mtx, portMAX_DELAY);

@@ -11,7 +11,6 @@
 #ifndef POTATO_NODE_STORE_MAX
 #define POTATO_NODE_STORE_MAX 4000
 #endif
-
 /** How often each node is re-posted to potato-mesh to keep lastHeard fresh (ms). */
 #ifndef POTATO_NODE_REPOST_MS
 #define POTATO_NODE_REPOST_MS (15UL * 60UL * 1000UL)
@@ -36,21 +35,24 @@ static_assert(sizeof(PotatoNodeRecord) == 84, "PotatoNodeRecord layout changed")
 #define POTATO_NODE_MAGIC 0x504F5441u
 
 /**
- * Persistent flat-file node store for potato-mesh ingest.
+ * Persistent node store for potato-mesh ingest on SPIFFS (/potato-nodes.bin).
  *
- * Stores up to POTATO_NODE_STORE_MAX nodes in a fixed-size binary file on
- * SPIFFS (/potato-nodes.bin). Each occupied slot is 84 bytes.
+ * On-disk **dense** layout: 8-byte header + occupancy bitmap + one 84-byte record per
+ * occupied logical slot (in slot order). Empty slots omit records, so disk use scales with
+ * how many nodes are stored (plus a fixed bitmap, ~(MAX/8) bytes).
  *
- * An in-memory index tracks {pub_key prefix, last_advert, last_posted_ms}
- * for fast dedup and LRU eviction without reading the file on every advert.
+ * If `/potato-nodes.bin` does not start with the dense magic sentinel, it is removed on boot
+ * and replaced with an empty store (no legacy flat format).
  *
- * Ingest batches all due nodes (see dueForIngest) into one HTTP POST from the
- * potato ingest worker; the mesh loop only updates this store and services the ingestor.
+ * An in-memory index tracks {pub_key prefix, last_advert, last_posted_ms} for fast dedup
+ * and LRU eviction. Ingest batches due nodes into one HTTP POST from the ingest worker.
  */
 class PotatoNodeStore {
 public:
   static constexpr int    MAX         = POTATO_NODE_STORE_MAX;
   static constexpr size_t RECORD_SIZE = sizeof(PotatoNodeRecord);
+  /** Occupancy bitmap size in bytes (one bit per logical slot). */
+  static constexpr size_t BITMAP_BYTES = (MAX + 7) / 8;
   static constexpr const char* PATH   = "/potato-nodes.bin";
 
   /**
