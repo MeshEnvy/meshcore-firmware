@@ -3,7 +3,8 @@
 #ifdef ESP32
 
 #include <Arduino.h>
-#include <helpers/ContactInfo.h>
+
+class PotatoNodeStore;
 
 /**
  * Register once at startup: optional STA DNS policy after GOT_IP.
@@ -16,13 +17,14 @@ void potato_mesh_register_wifi_event_logging();
 
 class PotatoMeshIngestor {
 public:
-  /** Enqueue contact for HTTP POST. Call from onAdvertRecv after dedupe. */
-  void postContactDiscovered(const uint8_t self_pub_key[PUB_KEY_SIZE], const ContactInfo& contact);
-  /** Call every loop: wakes the FreeRTOS worker when WiFi is up and the queue is non-empty. */
-  void service();
-  /** Pending HTTP ingest payloads (0 .. queue depth). */
+  /**
+   * Call every mesh loop with the node store and self public key so due nodes are batched into
+   * one HTTP POST. Passing nullptr skips batch scheduling (only wakes worker if a batch is pending).
+   */
+  void service(PotatoNodeStore* node_store = nullptr, const uint8_t* self_pub_key = nullptr);
+  /** Nodes in the current pending batch (0 if none). */
   uint8_t pendingQueueDepth() const;
-  /** Drop queued POSTs and reset retry timer after URL/token/WiFi settings change. */
+  /** Drop pending batch and reset retry timer after URL/token/WiFi settings change. */
   void restartAfterConfigChange();
   void setPaused(bool paused);
   bool isPaused() const;

@@ -4,6 +4,8 @@
 
 #include <Arduino.h>
 #include <FS.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 /** Maximum number of nodes persisted to SPIFFS. Override via build flag. */
 #ifndef POTATO_NODE_STORE_MAX
@@ -13,16 +15,6 @@
 /** How often each node is re-posted to potato-mesh to keep lastHeard fresh (ms). */
 #ifndef POTATO_NODE_REPOST_MS
 #define POTATO_NODE_REPOST_MS (15UL * 60UL * 1000UL)
-#endif
-
-/** Minimum gap between successive POSTs of the same node from a fresh advert (ms). */
-#ifndef POTATO_NODE_COOLOFF_MS
-#define POTATO_NODE_COOLOFF_MS 60000UL
-#endif
-
-/** How many slots the sweep advances per loop() call. */
-#ifndef POTATO_NODE_SWEEP_PER_LOOP
-#define POTATO_NODE_SWEEP_PER_LOOP 5
 #endif
 
 /**
@@ -52,9 +44,8 @@ static_assert(sizeof(PotatoNodeRecord) == 84, "PotatoNodeRecord layout changed")
  * An in-memory index tracks {pub_key prefix, last_advert, last_posted_ms}
  * for fast dedup and LRU eviction without reading the file on every advert.
  *
- * A periodic incremental sweep re-posts all known nodes to potato-mesh
- * (POTATO_NODE_REPOST_MS interval), advancing POTATO_NODE_SWEEP_PER_LOOP
- * slots per loop() call so it never blocks the mesh radio loop.
+ * Ingest batches all due nodes (see dueForIngest) into one HTTP POST from the
+ * potato ingest worker; the mesh loop only updates this store and services the ingestor.
  */
 class PotatoNodeStore {
 public:
@@ -75,13 +66,10 @@ public:
   int put(const uint8_t* pub_key, const char* name, uint8_t type,
           uint32_t last_advert, int32_t lat, int32_t lon);
 
-  /**
-   * True if enough time has passed to POST this slot (cooloff or repost window).
-   * Use after put() to decide whether to call postContactDiscovered immediately.
-   */
-  bool shouldPost(int slot, uint32_t now_ms) const;
+  /** True if this occupied slot should be included in the next ingest batch (refresh TTL elapsed). */
+  bool dueForIngest(int slot, uint32_t now_ms) const;
 
-  /** Record that slot was just posted at now_ms. */
+  /** Record that slot was successfully posted at now_ms (in-memory refresh deadline only). */
   void markPosted(int slot, uint32_t now_ms);
 
   /** Read the full on-disk record for slot. Returns false on I/O error. */
@@ -90,23 +78,11 @@ public:
   /** Total number of occupied slots. */
   int count() const { return _count; }
 
-  /** Reset all post timers so every node is re-posted on the next sweep pass. */
-  void resetPostTimers() {
-    for (int i = 0; i < MAX; i++) _index[i].last_posted_ms = 0;
-  }
+  /** Reset all post timers so every node is due on the next ingest batch. */
+  void resetPostTimers();
 
   /** Log !id list for occupied slots when debug is on (truncated if very many nodes). */
   void logFlushTargetsDebug() const;
-
-  /**
-   * Call once per loop(). Advances the sweep cursor by POTATO_NODE_SWEEP_PER_LOOP
-   * slots, reads and returns the next slot due for re-posting (or -1 if none
-   * ready this pass). Caller should read that slot's record and post it.
-   *
-   * Returns the slot index that needs re-posting, or -1.
-   * When non-negative, caller must call markPosted(slot, millis()) after posting.
-   */
-  int sweepNext(uint32_t now_ms);
 
 private:
   struct Entry {
@@ -115,10 +91,10 @@ private:
     uint32_t last_posted_ms;  // millis() when last posted (0 = never this session)
   };
 
-  fs::FS* _fs        = nullptr;
-  int     _count     = 0;
-  int     _sweep_cur = 0; // next slot to inspect during sweep
+  fs::FS* _fs = nullptr;
+  int     _count = 0;
   Entry   _index[MAX]{};
+  mutable SemaphoreHandle_t _idx_mtx = nullptr;
 
   int  findSlot(const uint8_t* pub_key) const;
   int  findEmptySlot() const;

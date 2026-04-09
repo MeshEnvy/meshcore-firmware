@@ -8,10 +8,17 @@
 
 void PotatoNodeStore::begin(fs::FS* fs) {
   _fs = fs;
+  if (!_idx_mtx) _idx_mtx = xSemaphoreCreateMutex();
   _count = 0;
-  _sweep_cur = 0;
   memset(_index, 0, sizeof(_index));
   loadIndex();
+}
+
+void PotatoNodeStore::resetPostTimers() {
+  if (!_idx_mtx) return;
+  xSemaphoreTake(_idx_mtx, portMAX_DELAY);
+  for (int i = 0; i < MAX; i++) _index[i].last_posted_ms = 0;
+  xSemaphoreGive(_idx_mtx);
 }
 
 void PotatoNodeStore::loadIndex() {
@@ -211,8 +218,10 @@ int PotatoNodeStore::put(const uint8_t* pub_key, const char* name, uint8_t type,
                          uint32_t last_advert, int32_t lat, int32_t lon) {
   if (!_fs || !pub_key) return -1;
 
-  int slot = findSlot(pub_key);
+  int slot = -1;
   int slot_mode = 0; // 0=update, 1=new empty, 2=evict
+  if (_idx_mtx) xSemaphoreTake(_idx_mtx, portMAX_DELAY);
+  slot = findSlot(pub_key);
   if (slot < 0) {
     if (_count < MAX) {
       slot = findEmptySlot();
@@ -224,6 +233,7 @@ int PotatoNodeStore::put(const uint8_t* pub_key, const char* name, uint8_t type,
       POTATO_MESH_DBG_LN("node store: store full, evicted LRU slot %d", slot);
     }
   }
+  if (_idx_mtx) xSemaphoreGive(_idx_mtx);
 
   PotatoNodeRecord rec;
   memcpy(rec.pub_key, pub_key, 32);
@@ -241,15 +251,22 @@ int PotatoNodeStore::put(const uint8_t* pub_key, const char* name, uint8_t type,
                       (unsigned)_count, (unsigned long)last_advert, (unsigned)type,
                       (unsigned)ESP.getFreeHeap());
 
+  PotatoNodeRecord existing{};
+  if (readRecord(slot, existing) && memcmp(&existing, &rec, RECORD_SIZE) == 0) {
+    return slot;
+  }
+
   if (!writeRecord(slot, rec)) {
     POTATO_MESH_DBG_LN("node store: write failed slot=%d", slot);
     return -1;
   }
 
+  if (_idx_mtx) xSemaphoreTake(_idx_mtx, portMAX_DELAY);
   bool is_new = (_index[slot].last_advert == 0);
   memcpy(_index[slot].key, pub_key, 4);
   _index[slot].last_advert = last_advert;
   if (is_new) _count++;
+  if (_idx_mtx) xSemaphoreGive(_idx_mtx);
 
   return slot;
 }
@@ -293,17 +310,23 @@ void PotatoNodeStore::logFlushTargetsDebug() const {
   }
 }
 
-bool PotatoNodeStore::shouldPost(int slot, uint32_t now_ms) const {
-  if (slot < 0 || slot >= MAX) return false;
+bool PotatoNodeStore::dueForIngest(int slot, uint32_t now_ms) const {
+  if (slot < 0 || slot >= MAX || !_idx_mtx) return false;
+  xSemaphoreTake(_idx_mtx, portMAX_DELAY);
+  bool empty = (_index[slot].last_advert == 0);
   uint32_t lp = _index[slot].last_posted_ms;
-  if (lp == 0) return true; // never posted this session
-  return (int32_t)(now_ms - lp) >= (int32_t)POTATO_NODE_COOLOFF_MS;
+  xSemaphoreGive(_idx_mtx);
+  if (empty) return false;
+  if (lp == 0) return true;
+  return (int32_t)(now_ms - lp) >= (int32_t)POTATO_NODE_REPOST_MS;
 }
 
 void PotatoNodeStore::markPosted(int slot, uint32_t now_ms) {
-  if (slot >= 0 && slot < MAX) {
-    _index[slot].last_posted_ms = now_ms;
-  }
+  if (slot < 0 || slot >= MAX) return;
+  if (!_idx_mtx) return;
+  xSemaphoreTake(_idx_mtx, portMAX_DELAY);
+  _index[slot].last_posted_ms = now_ms;
+  xSemaphoreGive(_idx_mtx);
 }
 
 bool PotatoNodeStore::readRecord(int slot, PotatoNodeRecord& out) const {
@@ -314,20 +337,6 @@ bool PotatoNodeStore::readRecord(int slot, PotatoNodeRecord& out) const {
   bool ok = (f.read((uint8_t*)&out, RECORD_SIZE) == (int)RECORD_SIZE);
   f.close();
   return ok && (out.magic == POTATO_NODE_MAGIC);
-}
-
-int PotatoNodeStore::sweepNext(uint32_t now_ms) {
-  int checked = 0;
-  while (checked < POTATO_NODE_SWEEP_PER_LOOP) {
-    if (_sweep_cur >= MAX) _sweep_cur = 0;
-    int slot = _sweep_cur++;
-    checked++;
-    if (_index[slot].last_advert == 0) continue; // empty slot
-    uint32_t lp = _index[slot].last_posted_ms;
-    bool due = (lp == 0) || ((int32_t)(now_ms - lp) >= (int32_t)POTATO_NODE_REPOST_MS);
-    if (due) return slot;
-  }
-  return -1;
 }
 
 #endif // ESP32

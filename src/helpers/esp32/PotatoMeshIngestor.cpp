@@ -2,9 +2,11 @@
 
 #ifdef ESP32
 
+#include <MeshCore.h>
 #include <helpers/AdvertDataHelpers.h>
 #include <helpers/esp32/PotatoMeshConfig.h>
 #include <helpers/esp32/PotatoMeshDebug.h>
+#include <helpers/esp32/PotatoNodeStore.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <esp_http_client.h>
@@ -30,12 +32,13 @@
 #ifndef POTATO_MESH_INGEST_WORKER_STACK
 #define POTATO_MESH_INGEST_WORKER_STACK 12288
 #endif
-#ifndef POTATO_MESH_INGEST_QUEUE_DEPTH
-#define POTATO_MESH_INGEST_QUEUE_DEPTH 8
+/** Max JSON body size for one /api/nodes batch POST (ESP32 heap). */
+#ifndef POTATO_MESH_INGEST_BODY_CAP
+#define POTATO_MESH_INGEST_BODY_CAP 4096
 #endif
-/** Merge up to this many queued single-node JSON bodies into one POST (server accepts multi-key /api/nodes). */
-#ifndef POTATO_MESH_INGEST_BATCH_MAX
-#define POTATO_MESH_INGEST_BATCH_MAX 8
+/** Max node entries merged into one POST (also limited by body cap). */
+#ifndef POTATO_MESH_INGEST_BATCH_MAX_SLOTS
+#define POTATO_MESH_INGEST_BATCH_MAX_SLOTS 48
 #endif
 #ifndef POTATO_MESH_WIFI_DOWN_LOG_INTERVAL_MS
 #define POTATO_MESH_WIFI_DOWN_LOG_INTERVAL_MS 8000
@@ -49,21 +52,24 @@ extern "C" esp_err_t arduino_esp_crt_bundle_attach(void* conf);
 
 namespace {
 
-constexpr size_t kBodyCap = 1800;
-constexpr size_t kQueueDepth = POTATO_MESH_INGEST_QUEUE_DEPTH;
+constexpr size_t kBodyCap = POTATO_MESH_INGEST_BODY_CAP;
+constexpr size_t kBatchMaxSlots = POTATO_MESH_INGEST_BATCH_MAX_SLOTS;
 
-struct IngestQueue {
-  char body[kQueueDepth][kBodyCap];
-  uint16_t len[kQueueDepth];
-  char node_id[kQueueDepth][12];
-  uint8_t head;
-  uint8_t tail;
-  uint8_t count;
-  uint32_t next_retry_ms;
-  uint32_t fail_backoff_ms;
-};
+char g_batch_body[kBodyCap]{};
+uint16_t g_batch_len = 0;
+uint8_t g_batch_n = 0;
+uint16_t g_batch_slots[kBatchMaxSlots]{};
+char g_batch_node_ids[kBatchMaxSlots][12]{};
+PotatoNodeStore* g_batch_store = nullptr;
+uint8_t g_batch_self_pk[PUB_KEY_SIZE]{};
+uint32_t g_batch_next_retry_ms = 0;
+uint32_t g_batch_fail_backoff_ms = 0;
 
-IngestQueue g_q{};
+/** Scratch for try_build_batch_from_store — must not live on loopTask stack (~12KB would overflow). */
+static char g_build_merged[kBodyCap];
+static char g_build_frag[kBodyCap];
+static char g_build_merge_tmp[kBodyCap];
+
 static uint32_t g_last_wifi_down_log_ms = 0;
 bool g_paused = false;
 static int g_last_http_code = 0;
@@ -320,52 +326,31 @@ bool try_post_once(const char* post_label, const char* body, uint16_t n) {
   return false;
 }
 
-void enqueue_pending(const char node_id[12], const char* body, uint16_t n) {
-  if (n >= kBodyCap) {
-    POTATO_MESH_DBG_LN("post %s: payload too large (%u)", node_id, (unsigned)n);
-    return;
-  }
-  ensure_worker();
-  if (!g_q_mtx) return;
-  xSemaphoreTake(g_q_mtx, portMAX_DELAY);
-  if (g_q.count >= kQueueDepth) {
-    g_q.head = (uint8_t)((g_q.head + 1) % kQueueDepth);
-    g_q.count--;
-    POTATO_MESH_DBG_LN("ingest queue full, dropped oldest pending");
-  }
-  uint8_t slot = g_q.tail;
-  memcpy(g_q.body[slot], body, n);
-  g_q.body[slot][n] = '\0';
-  g_q.len[slot] = n;
-  snprintf(g_q.node_id[slot], sizeof(g_q.node_id[slot]), "%s", node_id);
-  g_q.tail = (uint8_t)((g_q.tail + 1) % kQueueDepth);
-  g_q.count++;
-  POTATO_MESH_DBG_LN("post %s: queued (%u in queue)", node_id, (unsigned)g_q.count);
-  xSemaphoreGive(g_q_mtx);
-  notify_worker();
-}
-
 uint8_t potato_ingest_queue_depth() {
-  if (!g_q_mtx) return g_q.count;
+  if (!g_q_mtx) return g_batch_n;
   xSemaphoreTake(g_q_mtx, portMAX_DELAY);
-  uint8_t c = g_q.count;
+  uint8_t n = g_batch_n;
   xSemaphoreGive(g_q_mtx);
-  return c;
+  return n;
 }
 
 void potato_ingest_clear_queue() {
   reset_ingest_http_session();
   if (!g_q_mtx) {
-    g_q.head = g_q.tail = g_q.count = 0;
-    g_q.next_retry_ms = g_q.fail_backoff_ms = 0;
-    POTATO_MESH_DBG_LN("ingest queue cleared");
+    g_batch_len = 0;
+    g_batch_n = 0;
+    g_batch_store = nullptr;
+    g_batch_next_retry_ms = g_batch_fail_backoff_ms = 0;
+    POTATO_MESH_DBG_LN("ingest batch cleared");
     return;
   }
   xSemaphoreTake(g_q_mtx, portMAX_DELAY);
-  g_q.head = g_q.tail = g_q.count = 0;
-  g_q.next_retry_ms = g_q.fail_backoff_ms = 0;
+  g_batch_len = 0;
+  g_batch_n = 0;
+  g_batch_store = nullptr;
+  g_batch_next_retry_ms = g_batch_fail_backoff_ms = 0;
   xSemaphoreGive(g_q_mtx);
-  POTATO_MESH_DBG_LN("ingest queue cleared");
+  POTATO_MESH_DBG_LN("ingest batch cleared");
   notify_worker();
 }
 
@@ -413,27 +398,194 @@ static void format_ingest_post_label(char* out, size_t cap, const char (*ids)[12
   }
 }
 
-bool ingest_try_step() {
-  char merged[kBodyCap];
-  char merge_tmp[kBodyCap];
-  char post_label[96];
-  char local_nid[12];
-  char batch_ids[POTATO_MESH_INGEST_BATCH_MAX][12];
+// --- JSON build (used by batch builder; defined before ingest_try_step) ---
+
+static void bin_to_hex_lower_pre(const uint8_t* b, size_t n, char* out) {
+  static const char* hexd = "0123456789abcdef";
+  for (size_t i = 0; i < n; i++) {
+    out[i * 2] = hexd[b[i] >> 4];
+    out[i * 2 + 1] = hexd[b[i] & 0x0f];
+  }
+  out[n * 2] = '\0';
+}
+
+static const char* adv_type_to_role_pre(uint8_t adv_type) {
+  switch (adv_type) {
+    case ADV_TYPE_CHAT:     return "COMPANION";
+    case ADV_TYPE_REPEATER: return "REPEATER";
+    case ADV_TYPE_ROOM:     return "ROOM_SERVER";
+    case ADV_TYPE_SENSOR:   return "SENSOR";
+    default:                return nullptr;
+  }
+}
+
+static void format_node_id_pre(char out[12], const uint8_t pub_key[PUB_KEY_SIZE]) {
+  out[0] = '!';
+  bin_to_hex_lower_pre(pub_key, 4, out + 1);
+}
+
+static bool append_json_escaped_name_pre(char* dest, size_t dest_size, const char* name) {
+  if (dest_size < 3) return false;
+  char* p = dest;
+  char* end = dest + dest_size - 1;
+  *p++ = '"';
+  while (name && *name && p < end - 1) {
+    unsigned char c = (unsigned char)*name++;
+    if (c == '"' || c == '\\') {
+      if (p >= end - 2) break;
+      *p++ = '\\';
+      *p++ = (char)c;
+    } else if (c >= 32 && c < 127) {
+      *p++ = (char)c;
+    } else {
+      *p++ = '?';
+    }
+  }
+  if (p >= end) return false;
+  *p++ = '"';
+  *p = '\0';
+  return true;
+}
+
+static bool build_record_ingest_json(const uint8_t self_pub_key[PUB_KEY_SIZE], const PotatoNodeRecord& rec,
+                                     char* body, size_t body_cap, uint16_t* out_len, char node_id[12]) {
+  format_node_id_pre(node_id, rec.pub_key);
+  char ingestor_id[12];
+  char pub_hex[65];
+  char name_json[40];
+  char short_hex[5];
+
+  format_node_id_pre(ingestor_id, self_pub_key);
+  bin_to_hex_lower_pre(rec.pub_key, PUB_KEY_SIZE, pub_hex);
+  if (!append_json_escaped_name_pre(name_json, sizeof(name_json), rec.name)) {
+    strncpy(name_json, "\"?\"", sizeof(name_json));
+    name_json[sizeof(name_json) - 1] = '\0';
+  }
+  bin_to_hex_lower_pre(rec.pub_key, 2, short_hex);
+
+  uint32_t num = ((uint32_t)rec.pub_key[0] << 24) | ((uint32_t)rec.pub_key[1] << 16) |
+                 ((uint32_t)rec.pub_key[2] << 8) | (uint32_t)rec.pub_key[3];
+  uint32_t last_heard = rec.last_advert;
+  if (last_heard == 0) last_heard = (uint32_t)(millis() / 1000);
+
+  const char* role = adv_type_to_role_pre(rec.type);
+  int n;
+
+  if (rec.gps_lat != 0 || rec.gps_lon != 0) {
+    double lat = (double)rec.gps_lat / 1000000.0;
+    double lon = (double)rec.gps_lon / 1000000.0;
+    if (role) {
+      n = snprintf(body, body_cap,
+                   "{\"%s\":{\"num\":%lu,\"lastHeard\":%lu,\"protocol\":\"meshcore\","
+                   "\"user\":{\"longName\":%s,\"shortName\":\"%s\",\"publicKey\":\"%s\",\"role\":\"%s\"},"
+                   "\"position\":{\"latitude\":%.6f,\"longitude\":%.6f,\"time\":%lu}},"
+                   "\"ingestor\":\"%s\"}",
+                   node_id, (unsigned long)num, (unsigned long)last_heard, name_json, short_hex, pub_hex, role, lat,
+                   lon, (unsigned long)last_heard, ingestor_id);
+    } else {
+      n = snprintf(body, body_cap,
+                   "{\"%s\":{\"num\":%lu,\"lastHeard\":%lu,\"protocol\":\"meshcore\","
+                   "\"user\":{\"longName\":%s,\"shortName\":\"%s\",\"publicKey\":\"%s\"},"
+                   "\"position\":{\"latitude\":%.6f,\"longitude\":%.6f,\"time\":%lu}},"
+                   "\"ingestor\":\"%s\"}",
+                   node_id, (unsigned long)num, (unsigned long)last_heard, name_json, short_hex, pub_hex, lat, lon,
+                   (unsigned long)last_heard, ingestor_id);
+    }
+  } else {
+    if (role) {
+      n = snprintf(body, body_cap,
+                   "{\"%s\":{\"num\":%lu,\"lastHeard\":%lu,\"protocol\":\"meshcore\","
+                   "\"user\":{\"longName\":%s,\"shortName\":\"%s\",\"publicKey\":\"%s\",\"role\":\"%s\"}},"
+                   "\"ingestor\":\"%s\"}",
+                   node_id, (unsigned long)num, (unsigned long)last_heard, name_json, short_hex, pub_hex, role,
+                   ingestor_id);
+    } else {
+      n = snprintf(body, body_cap,
+                   "{\"%s\":{\"num\":%lu,\"lastHeard\":%lu,\"protocol\":\"meshcore\","
+                   "\"user\":{\"longName\":%s,\"shortName\":\"%s\",\"publicKey\":\"%s\"}},"
+                   "\"ingestor\":\"%s\"}",
+                   node_id, (unsigned long)num, (unsigned long)last_heard, name_json, short_hex, pub_hex,
+                   ingestor_id);
+    }
+  }
+
+  if (n <= 0 || (size_t)n >= body_cap) return false;
+  *out_len = (uint16_t)n;
+  return true;
+}
+
+/** Fill g_batch_* from store (caller holds g_q_mtx). */
+static void try_build_batch_from_store(PotatoNodeStore& store, const uint8_t self_pk[PUB_KEY_SIZE]) {
+  if (g_batch_len > 0) return;
+
+  char batch_ids[kBatchMaxSlots][12];
   uint16_t merged_len = 0;
-  uint16_t first_plen = 0;
-  uint8_t n_batch = 0;
+  uint8_t n = 0;
+  uint16_t slots[kBatchMaxSlots];
+  uint32_t now_ms = millis();
+
+  for (int slot = 0; slot < PotatoNodeStore::MAX; slot++) {
+    if (!store.dueForIngest(slot, now_ms)) continue;
+    PotatoNodeRecord rec{};
+    if (!store.readRecord(slot, rec)) continue;
+    char nid[12];
+    uint16_t flen = 0;
+    if (!build_record_ingest_json(self_pk, rec, g_build_frag, sizeof(g_build_frag), &flen, nid)) continue;
+
+    if (n == 0) {
+      memcpy(g_build_merged, g_build_frag, flen + 1);
+      merged_len = flen;
+      memcpy(batch_ids[0], nid, 12);
+      slots[0] = (uint16_t)slot;
+      n = 1;
+      continue;
+    }
+    if (n >= kBatchMaxSlots) break;
+    uint16_t new_len = 0;
+    if (!merge_ingest_bodies(g_build_merged, g_build_frag, flen, g_build_merge_tmp, sizeof(g_build_merge_tmp),
+                             &new_len))
+      break;
+    memcpy(g_build_merged, g_build_merge_tmp, new_len + 1);
+    merged_len = new_len;
+    memcpy(batch_ids[n], nid, 12);
+    slots[n] = (uint16_t)slot;
+    n++;
+  }
+
+  if (n == 0) return;
+
+  memcpy(g_batch_body, g_build_merged, merged_len + 1);
+  g_batch_len = merged_len;
+  g_batch_n = n;
+  memcpy(g_batch_slots, slots, n * sizeof(uint16_t));
+  for (uint8_t i = 0; i < n; i++) memcpy(g_batch_node_ids[i], batch_ids[i], 12);
+  memcpy(g_batch_self_pk, self_pk, PUB_KEY_SIZE);
+  g_batch_store = &store;
+  if (potato_mesh_dbg_active()) {
+    POTATO_MESH_DBG_LN("potato ingest: built batch %u nodes %u bytes", (unsigned)n, (unsigned)merged_len);
+  }
+}
+
+bool ingest_try_step() {
+  static char local_body[kBodyCap];
+  static uint16_t local_slots[kBatchMaxSlots];
+  uint16_t local_len = 0;
+  uint8_t local_n = 0;
+  PotatoNodeStore* local_store = nullptr;
+  char post_label[96];
+  char batch_ids[kBatchMaxSlots][12];
 
   xSemaphoreTake(g_q_mtx, portMAX_DELAY);
-  if (g_paused || !PotatoMeshConfig::instance().isIngestReady() || g_q.count == 0) {
+  if (g_paused || !PotatoMeshConfig::instance().isIngestReady() || g_batch_len == 0) {
     xSemaphoreGive(g_q_mtx);
     return false;
   }
   if (WiFi.status() != WL_CONNECTED) {
     if (potato_mesh_dbg_active()) {
-      uint32_t now = millis();
+      uint32_t t = millis();
       if (g_last_wifi_down_log_ms == 0 ||
-          (int32_t)(now - g_last_wifi_down_log_ms) >= (int32_t)POTATO_MESH_WIFI_DOWN_LOG_INTERVAL_MS) {
-        g_last_wifi_down_log_ms = now;
+          (int32_t)(t - g_last_wifi_down_log_ms) >= (int32_t)POTATO_MESH_WIFI_DOWN_LOG_INTERVAL_MS) {
+        g_last_wifi_down_log_ms = t;
         POTATO_MESH_DBG_LN("ingest: waiting on WiFi (status=%d)", (int)WiFi.status());
       }
     }
@@ -442,63 +594,50 @@ bool ingest_try_step() {
     return true;
   }
   uint32_t now = millis();
-  if ((int32_t)(now - g_q.next_retry_ms) < 0) {
-    uint32_t wait = g_q.next_retry_ms - now;
+  if ((int32_t)(now - g_batch_next_retry_ms) < 0) {
+    uint32_t wait = g_batch_next_retry_ms - now;
     xSemaphoreGive(g_q_mtx);
     if (wait > 0) vTaskDelay(pdMS_TO_TICKS(wait));
     return true;
   }
 
-  first_plen = g_q.len[g_q.head];
-  merged_len = first_plen;
-  memcpy(merged, g_q.body[g_q.head], merged_len);
-  merged[merged_len] = '\0';
-  memcpy(local_nid, g_q.node_id[g_q.head], sizeof(local_nid));
-  memcpy(batch_ids[0], g_q.node_id[g_q.head], 12);
-  n_batch = 1;
+  local_len = g_batch_len;
+  memcpy(local_body, g_batch_body, local_len + 1);
+  local_n = g_batch_n;
+  memcpy(local_slots, g_batch_slots, local_n * sizeof(uint16_t));
+  local_store = g_batch_store;
+  for (uint8_t i = 0; i < local_n; i++) memcpy(batch_ids[i], g_batch_node_ids[i], 12);
 
-  while (n_batch < POTATO_MESH_INGEST_BATCH_MAX && n_batch < g_q.count) {
-    uint8_t idx = (uint8_t)((g_q.head + n_batch) % kQueueDepth);
-    uint16_t next_len = g_q.len[idx];
-    uint16_t new_len = 0;
-    if (!merge_ingest_bodies(merged, g_q.body[idx], next_len, merge_tmp, sizeof(merge_tmp), &new_len)) break;
-    memcpy(merged, merge_tmp, new_len + 1);
-    merged_len = new_len;
-    memcpy(batch_ids[n_batch], g_q.node_id[idx], 12);
-    n_batch++;
-  }
-
-  format_ingest_post_label(post_label, sizeof(post_label), batch_ids, n_batch);
-  if (potato_mesh_dbg_active() && n_batch > 1) {
-    POTATO_MESH_DBG_LN("potato ingest: coalesced %u node POSTs into one (%u bytes)", (unsigned)n_batch,
-                        (unsigned)merged_len);
-  }
+  format_ingest_post_label(post_label, sizeof(post_label), batch_ids, local_n);
   xSemaphoreGive(g_q_mtx);
 
-  bool ok = try_post_once(post_label, merged, merged_len);
+  bool ok = try_post_once(post_label, local_body, local_len);
 
   xSemaphoreTake(g_q_mtx, portMAX_DELAY);
-  if (g_q.count >= n_batch && g_q.len[g_q.head] == first_plen &&
-      memcmp(g_q.node_id[g_q.head], local_nid, 12) == 0) {
-    if (ok) {
-      for (uint8_t pops = n_batch; pops > 0; pops--) {
-        g_q.head = (uint8_t)((g_q.head + 1) % kQueueDepth);
-        g_q.count--;
+  if (ok && g_batch_len == local_len && g_batch_n == local_n && g_batch_store == local_store &&
+      memcmp(g_batch_body, local_body, local_len) == 0) {
+    uint32_t posted_ms = millis();
+    if (local_store) {
+      for (uint8_t i = 0; i < local_n; i++) {
+        local_store->markPosted(local_slots[i], posted_ms);
       }
-      g_q.next_retry_ms = 0;
-      g_q.fail_backoff_ms = (uint32_t)POTATO_MESH_HTTP_RETRY_DELAY_MS;
-    } else {
-      uint32_t b = g_q.fail_backoff_ms;
-      if (b < (uint32_t)POTATO_MESH_HTTP_RETRY_DELAY_MS) {
-        b = (uint32_t)POTATO_MESH_HTTP_RETRY_DELAY_MS;
-      } else {
-        b = std::min(b * 2, (uint32_t)10000);
-      }
-      g_q.fail_backoff_ms = b;
-      g_q.next_retry_ms = millis() + b;
     }
+    g_batch_len = 0;
+    g_batch_n = 0;
+    g_batch_store = nullptr;
+    g_batch_next_retry_ms = 0;
+    g_batch_fail_backoff_ms = (uint32_t)POTATO_MESH_HTTP_RETRY_DELAY_MS;
+  } else if (!ok) {
+    uint32_t b = g_batch_fail_backoff_ms;
+    if (b < (uint32_t)POTATO_MESH_HTTP_RETRY_DELAY_MS) {
+      b = (uint32_t)POTATO_MESH_HTTP_RETRY_DELAY_MS;
+    } else {
+      b = std::min(b * 2, (uint32_t)10000);
+    }
+    g_batch_fail_backoff_ms = b;
+    g_batch_next_retry_ms = millis() + b;
   }
-  bool more = g_q.count > 0 && !g_paused;
+  bool more = (g_batch_len > 0) && !g_paused;
   xSemaphoreGive(g_q_mtx);
   return more;
 }
@@ -533,117 +672,6 @@ void ensure_worker() {
     portEXIT_CRITICAL(&g_worker_init);
     vTaskDelete(created);
   }
-}
-
-// --- JSON build helpers ---
-
-static void bin_to_hex_lower(const uint8_t* b, size_t n, char* out) {
-  static const char* hexd = "0123456789abcdef";
-  for (size_t i = 0; i < n; i++) { out[i * 2] = hexd[b[i] >> 4]; out[i * 2 + 1] = hexd[b[i] & 0x0f]; }
-  out[n * 2] = '\0';
-}
-
-static const char* adv_type_to_role(uint8_t adv_type) {
-  switch (adv_type) {
-    case ADV_TYPE_CHAT:     return "COMPANION";
-    case ADV_TYPE_REPEATER: return "REPEATER";
-    case ADV_TYPE_ROOM:     return "ROOM_SERVER";
-    case ADV_TYPE_SENSOR:   return "SENSOR";
-    default:                return nullptr;
-  }
-}
-
-static void format_node_id(char out[12], const uint8_t pub_key[PUB_KEY_SIZE]) {
-  out[0] = '!';
-  bin_to_hex_lower(pub_key, 4, out + 1);
-}
-
-static bool append_json_escaped_name(char* dest, size_t dest_size, const char* name) {
-  if (dest_size < 3) return false;
-  char* p = dest;
-  char* end = dest + dest_size - 1;
-  *p++ = '"';
-  while (name && *name && p < end - 1) {
-    unsigned char c = (unsigned char)*name++;
-    if (c == '"' || c == '\\') {
-      if (p >= end - 2) break;
-      *p++ = '\\'; *p++ = (char)c;
-    } else if (c >= 32 && c < 127) {
-      *p++ = (char)c;
-    } else {
-      *p++ = '?';
-    }
-  }
-  if (p >= end) return false;
-  *p++ = '"'; *p = '\0';
-  return true;
-}
-
-static bool build_contact_ingest_json(const uint8_t self_pub_key[PUB_KEY_SIZE], const ContactInfo& contact,
-                                      char* body, size_t body_cap, uint16_t* out_len, char node_id[12]) {
-  format_node_id(node_id, contact.id.pub_key);
-  char ingestor_id[12];
-  char pub_hex[65];
-  char name_json[40];
-  char short_hex[5];
-
-  format_node_id(ingestor_id, self_pub_key);
-  bin_to_hex_lower(contact.id.pub_key, PUB_KEY_SIZE, pub_hex);
-  if (!append_json_escaped_name(name_json, sizeof(name_json), contact.name)) {
-    strncpy(name_json, "\"?\"", sizeof(name_json));
-    name_json[sizeof(name_json) - 1] = '\0';
-  }
-  bin_to_hex_lower(contact.id.pub_key, 2, short_hex);
-
-  uint32_t num = ((uint32_t)contact.id.pub_key[0] << 24) | ((uint32_t)contact.id.pub_key[1] << 16) |
-                 ((uint32_t)contact.id.pub_key[2] << 8)  | (uint32_t)contact.id.pub_key[3];
-  uint32_t last_heard = contact.last_advert_timestamp;
-  if (last_heard == 0) last_heard = (uint32_t)(millis() / 1000);
-
-  const char* role = adv_type_to_role(contact.type);
-  int n;
-
-  if (contact.gps_lat != 0 || contact.gps_lon != 0) {
-    double lat = (double)contact.gps_lat / 1000000.0;
-    double lon = (double)contact.gps_lon / 1000000.0;
-    if (role) {
-      n = snprintf(body, body_cap,
-        "{\"%s\":{\"num\":%lu,\"lastHeard\":%lu,\"protocol\":\"meshcore\","
-        "\"user\":{\"longName\":%s,\"shortName\":\"%s\",\"publicKey\":\"%s\",\"role\":\"%s\"},"
-        "\"position\":{\"latitude\":%.6f,\"longitude\":%.6f,\"time\":%lu}},"
-        "\"ingestor\":\"%s\"}",
-        node_id, (unsigned long)num, (unsigned long)last_heard, name_json,
-        short_hex, pub_hex, role, lat, lon, (unsigned long)last_heard, ingestor_id);
-    } else {
-      n = snprintf(body, body_cap,
-        "{\"%s\":{\"num\":%lu,\"lastHeard\":%lu,\"protocol\":\"meshcore\","
-        "\"user\":{\"longName\":%s,\"shortName\":\"%s\",\"publicKey\":\"%s\"},"
-        "\"position\":{\"latitude\":%.6f,\"longitude\":%.6f,\"time\":%lu}},"
-        "\"ingestor\":\"%s\"}",
-        node_id, (unsigned long)num, (unsigned long)last_heard, name_json,
-        short_hex, pub_hex, lat, lon, (unsigned long)last_heard, ingestor_id);
-    }
-  } else {
-    if (role) {
-      n = snprintf(body, body_cap,
-        "{\"%s\":{\"num\":%lu,\"lastHeard\":%lu,\"protocol\":\"meshcore\","
-        "\"user\":{\"longName\":%s,\"shortName\":\"%s\",\"publicKey\":\"%s\",\"role\":\"%s\"}},"
-        "\"ingestor\":\"%s\"}",
-        node_id, (unsigned long)num, (unsigned long)last_heard, name_json,
-        short_hex, pub_hex, role, ingestor_id);
-    } else {
-      n = snprintf(body, body_cap,
-        "{\"%s\":{\"num\":%lu,\"lastHeard\":%lu,\"protocol\":\"meshcore\","
-        "\"user\":{\"longName\":%s,\"shortName\":\"%s\",\"publicKey\":\"%s\"}},"
-        "\"ingestor\":\"%s\"}",
-        node_id, (unsigned long)num, (unsigned long)last_heard, name_json,
-        short_hex, pub_hex, ingestor_id);
-    }
-  }
-
-  if (n <= 0 || (size_t)n >= body_cap) return false;
-  *out_len = (uint16_t)n;
-  return true;
 }
 
 } // namespace
@@ -697,46 +725,22 @@ void potato_mesh_register_wifi_event_logging() {
 
 // --- Public PotatoMeshIngestor methods ---
 
-static void mesh_pk_short2_hex(const uint8_t pk[PUB_KEY_SIZE], char out[5]) {
-  static const char* hx = "0123456789abcdef";
-  out[0] = hx[pk[0] >> 4];
-  out[1] = hx[pk[0] & 0x0f];
-  out[2] = hx[pk[1] >> 4];
-  out[3] = hx[pk[1] & 0x0f];
-  out[4] = '\0';
-}
-
-void PotatoMeshIngestor::postContactDiscovered(const uint8_t self_pub_key[PUB_KEY_SIZE],
-                                               const ContactInfo& contact) {
-  if (g_paused || !PotatoMeshConfig::instance().isIngestReady()) return;
-  char node_id[12];
-  char body[1800];
-  uint16_t n;
-  if (!build_contact_ingest_json(self_pub_key, contact, body, sizeof(body), &n, node_id)) {
-    POTATO_MESH_DBG_LN("post abort %s: JSON build failed", node_id);
-    return;
-  }
-  char short2[5];
-  mesh_pk_short2_hex(contact.id.pub_key, short2);
-  POTATO_MESH_DBG_LN(
-      "post %s short=%s name=\"%.20s\" type=%u last_heard=%lu gps=(%ld,%ld)", node_id, short2,
-      contact.name, (unsigned)contact.type, (unsigned long)contact.last_advert_timestamp,
-      (long)contact.gps_lat, (long)contact.gps_lon);
-  enqueue_pending(node_id, body, n);
-}
-
 uint8_t PotatoMeshIngestor::pendingQueueDepth() const { return potato_ingest_queue_depth(); }
 
 void PotatoMeshIngestor::restartAfterConfigChange() { potato_ingest_clear_queue(); }
 
-void PotatoMeshIngestor::service() {
+void PotatoMeshIngestor::service(PotatoNodeStore* node_store, const uint8_t* self_pub_key) {
   if (g_paused || !PotatoMeshConfig::instance().isIngestReady()) return;
   ensure_worker();
   if (!g_q_mtx || !g_worker) return;
-  bool pending = false;
+
   xSemaphoreTake(g_q_mtx, portMAX_DELAY);
-  pending = g_q.count > 0;
+  if (node_store && self_pub_key && g_batch_len == 0) {
+    try_build_batch_from_store(*node_store, self_pub_key);
+  }
+  bool pending = g_batch_len > 0;
   xSemaphoreGive(g_q_mtx);
+
   if (pending && WiFi.status() == WL_CONNECTED) notify_worker();
 }
 

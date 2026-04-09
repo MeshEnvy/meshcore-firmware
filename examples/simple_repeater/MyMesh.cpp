@@ -654,25 +654,7 @@ void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32
                         id_hex, name, (unsigned)atype, (unsigned)packet->path_len,
                         (unsigned long)timestamp, parser.hasLatLon() ? "yes" : "no");
     int slot = _node_store.put(id.pub_key, name, atype, timestamp, lat, lon);
-    uint32_t now_ms = millis();
     POTATO_MESH_DBG_LN("advert: !%s stored slot=%d (total=%d)", id_hex, slot, _node_store.count());
-    if (slot >= 0 && _node_store.shouldPost(slot, now_ms)) {
-      ContactInfo contact;
-      memcpy(&contact.id, &id, sizeof(mesh::Identity));
-      contact.type = parser.getType();
-      contact.last_advert_timestamp = timestamp;
-      contact.gps_lat = lat;
-      contact.gps_lon = lon;
-      contact.flags = 0;
-      contact.out_path_len = 0;
-      contact.shared_secret_valid = false;
-      contact.lastmod = 0;
-      contact.sync_since = 0;
-      strncpy(contact.name, name, sizeof(contact.name) - 1);
-      contact.name[sizeof(contact.name) - 1] = '\0';
-      _ingestor.postContactDiscovered(self_id.pub_key, contact);
-      _node_store.markPosted(slot, now_ms);
-    }
   }
 #endif
 }
@@ -1598,10 +1580,9 @@ void MyMesh::handlePotatoCommand(char* args, char* reply) {
 
   // potato contacts
   } else if (strcmp(args, "contacts") == 0) {
-    snprintf(reply, MyMesh::kCliReplyCap, "Nodes: %d/%d\nRepost: %lus\nCooloff: %lus\nFile: %s",
+    snprintf(reply, MyMesh::kCliReplyCap, "Nodes: %d/%d\nRepost: %lus\nFile: %s",
              _node_store.count(), PotatoNodeStore::MAX,
              (unsigned long)(POTATO_NODE_REPOST_MS / 1000),
-             (unsigned long)(POTATO_NODE_COOLOFF_MS / 1000),
              PotatoNodeStore::PATH);
 
   // potato flush — re-post all known nodes on next sweep
@@ -1628,34 +1609,8 @@ void MyMesh::loop() {
   mesh::Mesh::loop();
 
 #ifdef ESP32
-  _ingestor.service();
-
-  // Incremental sweep: re-post nodes whose lastHeard is stale in potato-mesh.
-  // Advances POTATO_NODE_SWEEP_PER_LOOP slots per loop — never blocks the radio.
-  {
-    uint32_t now_ms = millis();
-    int slot = _node_store.sweepNext(now_ms);
-    if (slot >= 0) {
-      PotatoNodeRecord rec;
-      if (_node_store.readRecord(slot, rec)) {
-        ContactInfo contact;
-        memcpy(contact.id.pub_key, rec.pub_key, PUB_KEY_SIZE);
-        contact.type = rec.type;
-        contact.last_advert_timestamp = rec.last_advert;
-        contact.gps_lat = rec.gps_lat;
-        contact.gps_lon = rec.gps_lon;
-        contact.flags = 0;
-        contact.out_path_len = 0;
-        contact.shared_secret_valid = false;
-        contact.lastmod = 0;
-        contact.sync_since = 0;
-        strncpy(contact.name, rec.name, sizeof(contact.name) - 1);
-        contact.name[sizeof(contact.name) - 1] = '\0';
-        _ingestor.postContactDiscovered(self_id.pub_key, contact);
-        _node_store.markPosted(slot, now_ms);
-      }
-    }
-  }
+  // Batch all due nodes from the store into one ingest POST (worker task).
+  _ingestor.service(&_node_store, self_id.pub_key);
 #endif
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
