@@ -86,6 +86,21 @@ struct NeighbourInfo {
 
 #define PACKET_LOG_FILE  "/packet_log"
 
+/** One logical CLI reply queued for deferred, chunked mesh delivery.
+ *  Allocated on heap; freed when fully drained from the FIFO. */
+struct CliReplyJob {
+  CliReplyJob*  next;
+  char*         text;           ///< heap copy of full reply (new char[total_len+1])
+  size_t        total_len;      ///< strlen(text)
+  size_t        offset;         ///< bytes already sent
+  uint32_t      sender_ts;      ///< original command timestamp (uniqueness guard); 0 for async-push jobs
+  unsigned long next_send_at;   ///< millis() deadline for next chunk
+  int           acl_idx;        ///< ClientACL index (peer id + shared_secret)
+  uint8_t       out_path[MAX_PATH_SIZE];
+  uint8_t       out_path_len;   ///< OUT_PATH_UNKNOWN = flood
+  uint8_t       path_hash_size;
+};
+
 class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   FILESYSTEM* _fs;
   uint32_t last_millis;
@@ -130,6 +145,12 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   /** Reply buffer size is `kCliReplyCap` (see main.cpp and onPeerDataRecv temp slice). */
   void handlePotatoCommand(char* args, char* reply);
 #endif
+
+  CliReplyJob* _cli_reply_root;  ///< head of outbound CLI reply FIFO (nullptr = empty)
+  CliReplyJob* _cli_reply_tip;   ///< tail of outbound CLI reply FIFO
+
+  void serviceCliReplyQueue();   ///< called from loop(); sends one chunk from the head job
+  void clearCliReplyQueue();     ///< frees all pending jobs (shutdown / factory-reset)
 
   void putNeighbour(const mesh::Identity& id, uint32_t timestamp, float snr);
   void sendNodeDiscoverReq();
@@ -189,6 +210,13 @@ protected:
 public:
   /** Serial + mesh admin TXT_MSG reply; must match main.cpp `reply[]` and `temp[5 + …]` in onPeerDataRecv. */
   static constexpr size_t kCliReplyCap = 320;
+  /** Max text bytes per TXT_MSG chunk; sized for createDatagram's MAX_PACKET_PAYLOAD limit. */
+  static constexpr size_t kMaxTxtChunk = 160;
+
+  /** Append a full CLI reply to the outbound FIFO for chunked deferred delivery.
+   *  Heap-allocates a copy of @p text; returns false on OOM (reply is dropped). */
+  bool enqueueTxtCliReply(int acl_idx, uint8_t out_path_len, const uint8_t* out_path,
+                          uint8_t path_hash_size, uint32_t sender_ts, const char* text);
 
   MyMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables);
 

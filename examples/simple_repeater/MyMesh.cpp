@@ -11,6 +11,19 @@ static bool potato_cli_continuation(const char* after_potato) {
   unsigned char c = static_cast<unsigned char>(after_potato[0]);
   return after_potato[0] == '\0' || isspace(c) != 0 || c == '?';
 }
+
+/** True while a long-running async CLI op holds the session; mesh commands are rejected while set. */
+static bool s_async_cli_busy = false;
+/** Scan timeout: abort if stuck in Scanning phase longer than this. */
+static constexpr uint32_t kWifiScanTimeoutMs = 30000;
+/** Routing snapshot set at command-receive time; persists for async completion push. */
+static struct {
+  bool    valid;
+  int     acl_idx;
+  uint8_t out_path[MAX_PATH_SIZE];
+  uint8_t out_path_len;
+  uint8_t path_hash_size;
+} s_scan_reply_target = {};
 #endif
 
 /* ------------------------------ Config -------------------------------- */
@@ -742,33 +755,32 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
         *reply = 0;
       } else {
 #ifdef ESP32
-        char mesh_cli_snap[MyMesh::kCliReplyCap];
-        strncpy(mesh_cli_snap, command, sizeof(mesh_cli_snap) - 1);
-        mesh_cli_snap[sizeof(mesh_cli_snap) - 1] = '\0';
-#endif
+        if (s_async_cli_busy) {
+          strncpy(reply, "Err - busy (operation in progress)", MyMesh::kCliReplyCap - 1);
+          reply[MyMesh::kCliReplyCap - 1] = '\0';
+          POTATO_MESH_DBG_LN("cli reply: reject (busy) cmd=%.60s", command);
+        } else {
+          // preset routing snapshot so async ops (e.g. wifi scan) can push results later
+          s_scan_reply_target.valid          = true;
+          s_scan_reply_target.acl_idx        = i;
+          s_scan_reply_target.out_path_len   = client->out_path_len;
+          memcpy(s_scan_reply_target.out_path, client->out_path, sizeof(s_scan_reply_target.out_path));
+          s_scan_reply_target.path_hash_size = packet->getPathHashSize();
+          char mesh_cli_snap[MyMesh::kCliReplyCap];
+          strncpy(mesh_cli_snap, command, sizeof(mesh_cli_snap) - 1);
+          mesh_cli_snap[sizeof(mesh_cli_snap) - 1] = '\0';
+          handleCommand(sender_timestamp, command, reply);
+          // if an async op started it set s_async_cli_busy; leave snapshot valid for completion push
+          if (!s_async_cli_busy) s_scan_reply_target.valid = false;
+          potato_mesh_dbg_trace_cli_exchange("mesh", mesh_cli_snap, reply);
+        }
+#else
         handleCommand(sender_timestamp, command, reply);
-#ifdef ESP32
-        potato_mesh_dbg_trace_cli_exchange("mesh", mesh_cli_snap, reply);
 #endif
       }
-      int text_len = strlen(reply);
-      if (text_len > 0) {
-        uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
-        if (timestamp == sender_timestamp) {
-          // WORKAROUND: the two timestamps need to be different, in the CLI view
-          timestamp++;
-        }
-        memcpy(temp, &timestamp, 4);        // mostly an extra blob to help make packet_hash unique
-        temp[4] = (TXT_TYPE_CLI_DATA << 2); // NOTE: legacy was: TXT_TYPE_PLAIN
-
-        auto reply = createDatagram(PAYLOAD_TYPE_TXT_MSG, client->id, secret, temp, 5 + text_len);
-        if (reply) {
-          if (client->out_path_len == OUT_PATH_UNKNOWN) {
-            sendFlood(reply, CLI_REPLY_DELAY_MILLIS, packet->getPathHashSize());
-          } else {
-            sendDirect(reply, client->out_path, client->out_path_len, CLI_REPLY_DELAY_MILLIS);
-          }
-        }
+      if (strlen(reply) > 0) {
+        enqueueTxtCliReply(i, client->out_path_len, client->out_path,
+                           packet->getPathHashSize(), sender_timestamp, reply);
       }
     } else {
       MESH_DEBUG_PRINTLN("onPeerDataRecv: possible replay attack detected");
@@ -891,6 +903,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   set_radio_at = revert_radio_at = 0;
   _logging = false;
   region_load_active = false;
+  _cli_reply_root = _cli_reply_tip = nullptr;
 
 #if MAX_NEIGHBOURS
   memset(neighbours, 0, sizeof(neighbours));
@@ -1427,7 +1440,7 @@ static void potato_wifi_scan_fill_from_driver(int n) {
   }
 }
 
-void my_mesh_potato_wifi_scan_poll() {
+void my_mesh_potato_wifi_scan_poll(MyMesh* mesh) {
   switch (s_wscan_phase) {
     case PotatoWifiScanPhase::Idle:
       break;
@@ -1444,12 +1457,36 @@ void my_mesh_potato_wifi_scan_poll() {
           potato_resume_sta_saved_credentials();
           s_wscan_phase = PotatoWifiScanPhase::Idle;
           s_wscan_results_ready = false;
+          if (s_scan_reply_target.valid) {
+            mesh->enqueueTxtCliReply(s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len,
+                                     s_scan_reply_target.out_path, s_scan_reply_target.path_hash_size,
+                                     0, "Err - WiFi scan start failed");
+            s_scan_reply_target.valid = false;
+          }
+          s_async_cli_busy = false;
         } else {
           s_wscan_phase = PotatoWifiScanPhase::Scanning;
         }
       }
       break;
     case PotatoWifiScanPhase::Scanning: {
+      // abort if stuck for too long (runaway guard)
+      if ((uint32_t)(millis() - s_wscan_t0) > kWifiScanTimeoutMs) {
+        POTATO_MESH_DBG_LN("potato CLI: wifi async scan TIMEOUT after %lums", (unsigned long)kWifiScanTimeoutMs);
+        WiFi.scanDelete();
+        s_scan_count = 0;
+        potato_mesh_sta_failover_suppress(false);
+        potato_resume_sta_saved_credentials();
+        s_wscan_phase = PotatoWifiScanPhase::Idle;
+        if (s_scan_reply_target.valid) {
+          mesh->enqueueTxtCliReply(s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len,
+                                   s_scan_reply_target.out_path, s_scan_reply_target.path_hash_size,
+                                   0, "Err - WiFi scan timed out");
+          s_scan_reply_target.valid = false;
+        }
+        s_async_cli_busy = false;
+        break;
+      }
       int16_t cnt = WiFi.scanComplete();
       if (cnt == WIFI_SCAN_RUNNING) break;
       if (cnt == WIFI_SCAN_FAILED) {
@@ -1457,32 +1494,53 @@ void my_mesh_potato_wifi_scan_poll() {
         WiFi.scanDelete();
         s_scan_count = 0;
         s_wscan_results_ready = false;
+        if (s_scan_reply_target.valid) {
+          mesh->enqueueTxtCliReply(s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len,
+                                   s_scan_reply_target.out_path, s_scan_reply_target.path_hash_size,
+                                   0, "Err - WiFi scan failed");
+          s_scan_reply_target.valid = false;
+        }
       } else {
         potato_wifi_scan_fill_from_driver((int)cnt);
         WiFi.scanDelete();
         s_wscan_results_ready = true;
         POTATO_MESH_DBG_LN("potato CLI: wifi async scan done nets=%d", s_scan_count);
+        if (s_scan_reply_target.valid) {
+          int total_pages = (s_scan_count + kScanPageSize - 1) / kScanPageSize;
+          if (total_pages < 1) total_pages = 1;
+          for (int pg = 1; pg <= total_pages; pg++) {
+            char pgbuf[MyMesh::kCliReplyCap];
+            format_scan_page(pg, pgbuf);
+            mesh->enqueueTxtCliReply(s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len,
+                                     s_scan_reply_target.out_path, s_scan_reply_target.path_hash_size,
+                                     0, pgbuf);
+          }
+          POTATO_MESH_DBG_LN("potato scan async: pushed %d page(s) nets=%d", total_pages, s_scan_count);
+          s_scan_reply_target.valid = false;
+        }
       }
       potato_mesh_sta_failover_suppress(false);
       potato_resume_sta_saved_credentials();
       s_wscan_phase = PotatoWifiScanPhase::Idle;
+      s_async_cli_busy = false;
       break;
     }
   }
 }
 
-static void run_potato_wifi_scan_cli(const char* page_arg, char* reply) {
-  my_mesh_potato_wifi_scan_poll();
+static void run_potato_wifi_scan_cli(const char* page_arg, char* reply, MyMesh* mesh) {
+  my_mesh_potato_wifi_scan_poll(mesh);
   if (*page_arg) {
     format_scan_page(atoi(page_arg), reply);
     return;
   }
   if (s_wscan_phase != PotatoWifiScanPhase::Idle) {
-    snprintf(reply, MyMesh::kCliReplyCap,
-             "WiFi scan in progress — run `potato scan` again shortly");
+    // scan already running — from serial this is reachable; from mesh it is blocked by busy gate
+    snprintf(reply, MyMesh::kCliReplyCap, "WiFi scan in progress...");
     return;
   }
   if (s_wscan_results_ready) {
+    // legacy serial path: show results on second call
     s_wscan_results_ready = false;
     format_scan_page(1, reply);
     return;
@@ -1492,9 +1550,10 @@ static void run_potato_wifi_scan_cli(const char* page_arg, char* reply) {
   WiFi.disconnect(false, false);
   s_wscan_t0 = millis();
   s_wscan_phase = PotatoWifiScanPhase::DisconnectWait;
+  s_async_cli_busy = true;
   POTATO_MESH_DBG_LN("potato CLI: wifi async scan queued");
-  snprintf(reply, MyMesh::kCliReplyCap,
-           "OK — WiFi scan started (async). Run `potato scan` again in a few seconds for results.");
+  // immediate ack — mesh admin gets auto-pushed results when done; serial gets them on next call
+  snprintf(reply, MyMesh::kCliReplyCap, "Scanning for WiFi devices...");
 }
 
 static void format_scan_page(int page, char* reply) {
@@ -1615,14 +1674,14 @@ void MyMesh::handlePotatoCommand(char* args, char* reply) {
   } else if (strcmp(args, "scan") == 0 || strncmp(args, "scan ", 5) == 0) {
     const char* pg_str = (strcmp(args, "scan") == 0) ? "" : (args + 5);
     while (*pg_str == ' ') pg_str++;
-    run_potato_wifi_scan_cli(pg_str, reply);
+    run_potato_wifi_scan_cli(pg_str, reply, this);
 
   // potato wifi scan [page]
   } else if (strncmp(args, "wifi scan", 9) == 0 &&
              (args[9] == '\0' || isspace(static_cast<unsigned char>(args[9])))) {
     const char* pg_str = args + 9;
     while (*pg_str == ' ') pg_str++;
-    run_potato_wifi_scan_cli(pg_str, reply);
+    run_potato_wifi_scan_cli(pg_str, reply, this);
 
   // potato wifi <n> [pwd]  or  potato wifi <ssid> [pwd]  or  potato wifi (status)
   } else if (strncmp(args, "wifi", 4) == 0 &&
@@ -1705,15 +1764,149 @@ void MyMesh::handlePotatoCommand(char* args, char* reply) {
 }
 #endif
 
+/* ── CLI reply FIFO ─────────────────────────────────────────────────── */
+
+bool MyMesh::enqueueTxtCliReply(int acl_idx, uint8_t out_path_len, const uint8_t* out_path,
+                                uint8_t path_hash_size, uint32_t sender_ts, const char* text) {
+  size_t len = strlen(text);
+  if (len == 0) return false;
+
+  CliReplyJob* job = new CliReplyJob();
+  if (!job) {
+    POTATO_MESH_DBG_LN("cli reply q: OOM job acl=%d", acl_idx);
+    return false;
+  }
+  job->text = new char[len + 1];
+  if (!job->text) {
+    POTATO_MESH_DBG_LN("cli reply q: OOM text acl=%d len=%u", acl_idx, (unsigned)len);
+    delete job;
+    return false;
+  }
+  memcpy(job->text, text, len + 1);
+  job->total_len      = len;
+  job->offset         = 0;
+  job->sender_ts      = sender_ts;
+  job->next_send_at   = millis();
+  job->acl_idx        = acl_idx;
+  memcpy(job->out_path, out_path, sizeof(job->out_path));
+  job->out_path_len   = out_path_len;
+  job->path_hash_size = path_hash_size;
+  job->next           = nullptr;
+
+  if (_cli_reply_tip) {
+    _cli_reply_tip->next = job;
+    _cli_reply_tip = job;
+  } else {
+    _cli_reply_root = _cli_reply_tip = job;
+  }
+
+  size_t chunks = (len + kMaxTxtChunk - 1) / kMaxTxtChunk;
+  POTATO_MESH_DBG_LN("cli reply q: enqueue len=%u chunks~%u acl=%d", (unsigned)len, (unsigned)chunks, acl_idx);
+  return true;
+}
+
+void MyMesh::serviceCliReplyQueue() {
+  if (!_cli_reply_root) return;
+  CliReplyJob* job = _cli_reply_root;
+  if ((long)(millis() - job->next_send_at) < 0) return;
+
+  if (job->acl_idx < 0 || job->acl_idx >= acl.getNumClients()) {
+    POTATO_MESH_DBG_LN("cli reply q: drop stale acl=%d", job->acl_idx);
+    _cli_reply_root = job->next;
+    if (!_cli_reply_root) _cli_reply_tip = nullptr;
+    delete[] job->text;
+    delete job;
+    return;
+  }
+  ClientInfo* client = acl.getClientByIdx(job->acl_idx);
+
+  size_t remaining = job->total_len - job->offset;
+  size_t chunk = (remaining < kMaxTxtChunk) ? remaining : kMaxTxtChunk;
+  // trim to last newline within window for cleaner visual splits
+  if (chunk == kMaxTxtChunk) {
+    for (int j = (int)kMaxTxtChunk - 1; j >= (int)kMaxTxtChunk / 2; j--) {
+      if (job->text[job->offset + j] == '\n') { chunk = (size_t)(j + 1); break; }
+    }
+  }
+
+  size_t total_chunks = (job->total_len + kMaxTxtChunk - 1) / kMaxTxtChunk;
+  size_t cur_chunk    = (job->offset / kMaxTxtChunk) + 1;
+
+  uint8_t temp[5 + kMaxTxtChunk];
+  uint32_t ts = getRTCClock()->getCurrentTimeUnique();
+  if (ts == job->sender_ts) ts++;
+  memcpy(temp, &ts, 4);
+  temp[4] = (TXT_TYPE_CLI_DATA << 2);
+  memcpy(&temp[5], job->text + job->offset, chunk);
+
+  uint8_t secret[PUB_KEY_SIZE];
+  memcpy(secret, client->shared_secret, PUB_KEY_SIZE);
+
+  mesh::Packet* pkt = createDatagram(PAYLOAD_TYPE_TXT_MSG, client->id, secret, temp, 5 + chunk);
+  bool sent = false;
+  if (pkt) {
+    if (job->out_path_len == OUT_PATH_UNKNOWN) {
+      sendFlood(pkt, 0, job->path_hash_size);
+    } else {
+      sendDirect(pkt, job->out_path, job->out_path_len, 0);
+    }
+    sent = true;
+  }
+
+  POTATO_MESH_DBG_LN("cli reply tx: chunk %u/%u bytes=%u %s acl=%d peer=%02x%02x%02x%02x %s",
+    (unsigned)cur_chunk, (unsigned)total_chunks, (unsigned)chunk,
+    (job->out_path_len == OUT_PATH_UNKNOWN) ? "flood" : "direct",
+    job->acl_idx,
+    (unsigned)client->id.pub_key[0], (unsigned)client->id.pub_key[1],
+    (unsigned)client->id.pub_key[2], (unsigned)client->id.pub_key[3],
+    sent ? "ok" : "FAIL");
+#ifdef ESP32
+  if (potato_mesh_dbg_active()) {
+    Serial.print("PotatoMesh: cli reply tx: full msg len=");
+    Serial.print((unsigned)job->total_len);
+    Serial.print(": ");
+    const char* p = job->text;
+    size_t n = 0;
+    while (*p) { Serial.write(static_cast<uint8_t>(*p++)); if (++n % 48 == 0) yield(); }
+    Serial.print("\r\n");
+  }
+#endif
+
+  job->offset += chunk;
+  if (job->offset >= job->total_len) {
+    POTATO_MESH_DBG_LN("cli reply q: complete %u/%u acl=%d",
+      (unsigned)cur_chunk, (unsigned)total_chunks, job->acl_idx);
+    _cli_reply_root = job->next;
+    if (!_cli_reply_root) _cli_reply_tip = nullptr;
+    delete[] job->text;
+    delete job;
+  } else {
+    job->next_send_at = millis() + CLI_REPLY_DELAY_MILLIS;
+  }
+}
+
+void MyMesh::clearCliReplyQueue() {
+  while (_cli_reply_root) {
+    CliReplyJob* j = _cli_reply_root;
+    _cli_reply_root = j->next;
+    delete[] j->text;
+    delete j;
+  }
+  _cli_reply_tip = nullptr;
+}
+
+/* ── end CLI reply FIFO ─────────────────────────────────────────────── */
+
 void MyMesh::loop() {
 #ifdef WITH_BRIDGE
   bridge.loop();
 #endif
 
   mesh::Mesh::loop();
+  serviceCliReplyQueue();
 
 #ifdef ESP32
-  my_mesh_potato_wifi_scan_poll();
+  my_mesh_potato_wifi_scan_poll(this);
   // Batch all due nodes from the store into one ingest POST (worker task).
   _ingestor.service(&_node_store, self_id.pub_key);
 #endif
@@ -1761,5 +1954,6 @@ bool MyMesh::hasPendingWork() const {
 #if defined(WITH_BRIDGE)
   if (bridge.isRunning()) return true;  // bridge needs WiFi radio, can't sleep
 #endif
+  if (_cli_reply_root != nullptr) return true;  // CLI reply chunks still queued
   return _mgr->getOutboundTotal() > 0;
 }
