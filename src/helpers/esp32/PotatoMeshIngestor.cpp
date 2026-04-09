@@ -10,6 +10,7 @@
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <esp_http_client.h>
+extern "C" esp_err_t esp_crt_bundle_attach(void* conf);
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
@@ -61,7 +62,6 @@
 #define POTATO_MESH_STA_FORCE_PUBLIC_DNS 0
 #endif
 
-extern "C" esp_err_t arduino_esp_crt_bundle_attach(void* conf);
 
 namespace {
 
@@ -188,7 +188,7 @@ static bool try_post_https_esp_http(const char* full_url, const char* post_label
   cfg.url = full_url;
   cfg.method = HTTP_METHOD_POST;
   cfg.timeout_ms = (int)POTATO_MESH_HTTP_TIMEOUT_MS;
-  cfg.crt_bundle_attach = arduino_esp_crt_bundle_attach;
+  cfg.crt_bundle_attach = esp_crt_bundle_attach;
   cfg.transport_type = HTTP_TRANSPORT_OVER_SSL;
 
   esp_http_client_handle_t client = esp_http_client_init(&cfg);
