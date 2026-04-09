@@ -820,6 +820,130 @@ void potato_mesh_register_wifi_event_logging() {
   });
 }
 
+#ifndef POTATO_MESH_WIFI_FAILOVER_DEBOUNCE_MS
+#define POTATO_MESH_WIFI_FAILOVER_DEBOUNCE_MS 1500
+#endif
+
+namespace {
+
+bool potato_mesh_wifi_reason_failover(uint8_t reason) {
+  // ESP-IDF: join failures where trying another saved SSID may help (not e.g. local deauth storms).
+  switch (reason) {
+    case 201:  // WIFI_REASON_NO_AP_FOUND
+    case 202:  // WIFI_REASON_AUTH_FAIL
+    case 203:  // WIFI_REASON_ASSOC_FAIL
+    case 204:  // WIFI_REASON_HANDSHAKE_TIMEOUT
+      return true;
+    default:
+      return false;
+  }
+}
+
+uint8_t potato_mesh_known_index_for_disconnected(const WiFiEventInfo_t& info, PotatoMeshConfig& cfg) {
+  char ev_ssid[33]{};
+  uint8_t len = info.wifi_sta_disconnected.ssid_len;
+  if (len > sizeof(info.wifi_sta_disconnected.ssid)) len = sizeof(info.wifi_sta_disconnected.ssid);
+  if (len > sizeof(ev_ssid) - 1) len = sizeof(ev_ssid) - 1;
+  if (len > 0) {
+    memcpy(ev_ssid, info.wifi_sta_disconnected.ssid, len);
+    ev_ssid[len] = '\0';
+  }
+  uint8_t n = cfg.knownWifiCount();
+  for (uint8_t i = 0; i < n; i++) {
+    char s[33], p[65];
+    if (!cfg.getKnownWifi(i, s, sizeof(s), p, sizeof(p))) continue;
+    if (ev_ssid[0] != '\0' && strcmp(s, ev_ssid) == 0) return i;
+  }
+  for (uint8_t i = 0; i < n; i++) {
+    char s[33], p[65];
+    if (!cfg.getKnownWifi(i, s, sizeof(s), p, sizeof(p))) continue;
+    if (strcmp(s, cfg.ssid()) == 0) return i;
+  }
+  return 0;
+}
+
+} // namespace
+
+static bool g_potato_sta_failover_suppress = false;
+
+void potato_mesh_sta_failover_suppress(bool suppress) { g_potato_sta_failover_suppress = suppress; }
+
+void potato_mesh_register_sta_known_wifi_failover() {
+  static bool registered = false;
+  if (registered) return;
+  registered = true;
+  static uint32_t g_last_sta_wifi_action_ms = 0;
+
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    if (event != ARDUINO_EVENT_WIFI_STA_DISCONNECTED) return;
+    if (g_potato_sta_failover_suppress) return;
+
+    PotatoMeshConfig& cfg = PotatoMeshConfig::instance();
+    uint8_t n = cfg.knownWifiCount();
+    if (n < 2) {
+      WiFi.setAutoReconnect(true);
+      return;
+    }
+    WiFi.setAutoReconnect(false);
+
+    uint32_t now = millis();
+    if ((int32_t)(now - g_last_sta_wifi_action_ms) < (int32_t)POTATO_MESH_WIFI_FAILOVER_DEBOUNCE_MS) return;
+    g_last_sta_wifi_action_ms = now;
+
+    uint8_t reason = info.wifi_sta_disconnected.reason;
+    if (potato_mesh_wifi_reason_failover(reason)) {
+      uint8_t idx = potato_mesh_known_index_for_disconnected(info, cfg);
+      uint8_t next = (uint8_t)((idx + 1) % n);
+      char ssid[33], pwd[65];
+      if (!cfg.getKnownWifi(next, ssid, sizeof(ssid), pwd, sizeof(pwd))) return;
+      const char* pw = (pwd[0] != '\0') ? pwd : nullptr;
+      POTATO_MESH_DBG_LN("potato wifi /sta: failover reason=%u from idx %u -> %u ssid=%.32s",
+                         (unsigned)reason, (unsigned)idx, (unsigned)next, ssid);
+      WiFi.disconnect(false, false);
+      WiFi.begin(ssid, pw);
+      WiFi.setSleep(WIFI_PS_NONE);
+      return;
+    }
+    POTATO_MESH_DBG_LN("potato wifi /sta: reconnect same AP (reason=%u)", (unsigned)reason);
+    WiFi.reconnect();
+  });
+}
+
+namespace {
+
+void dbg_serial_write_full_body(const char* body) {
+  if (!body || !body[0]) return;
+  constexpr size_t kChunk = 48;
+  size_t n = 0;
+  for (const char* p = body; *p != '\0'; ++p) {
+    Serial.write(static_cast<uint8_t>(*p));
+    if (++n % kChunk == 0) yield();
+  }
+}
+
+} // namespace
+
+void potato_mesh_dbg_trace_cli_exchange(const char* route_tag, const char* cmd_snapshot, const char* reply) {
+  if (!potato_mesh_dbg_active()) return;
+  const char* tag = route_tag ? route_tag : "?";
+  const char* cmd = cmd_snapshot ? cmd_snapshot : "";
+  const char* rp = reply ? reply : "";
+  Serial.print("PotatoMesh: CLI ");
+  Serial.print(tag);
+  Serial.print(": cmd len=");
+  Serial.print((unsigned)strlen(cmd));
+  Serial.print("\r\n");
+  dbg_serial_write_full_body(cmd);
+  Serial.print("\r\n");
+  Serial.print("PotatoMesh: CLI ");
+  Serial.print(tag);
+  Serial.print(": reply len=");
+  Serial.print((unsigned)strlen(rp));
+  Serial.print("\r\n");
+  dbg_serial_write_full_body(rp);
+  Serial.print("\r\n");
+}
+
 // --- Public PotatoMeshIngestor methods ---
 
 uint8_t PotatoMeshIngestor::pendingQueueDepth() const { return potato_ingest_queue_depth(); }

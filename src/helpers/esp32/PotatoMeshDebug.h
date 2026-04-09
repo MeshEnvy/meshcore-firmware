@@ -14,6 +14,8 @@ inline bool potato_mesh_dbg_active() {
   return PotatoMeshConfig::instance().debugEnabled();
 #endif
 }
+/** When debug is on: log full CLI command and reply (may include secrets — for field debug only). */
+void potato_mesh_dbg_trace_cli_exchange(const char* route_tag, const char* cmd_snapshot, const char* reply);
 #define POTATO_MESH_DBG(F, ...) \
   do { if (potato_mesh_dbg_active()) Serial.printf("PotatoMesh: " F, ##__VA_ARGS__); } while (0)
 #define POTATO_MESH_DBG_LN(F, ...) \

@@ -188,7 +188,7 @@ protected:
 
 public:
   /** Serial + mesh admin TXT_MSG reply; must match main.cpp `reply[]` and `temp[5 + …]` in onPeerDataRecv. */
-  static constexpr size_t kCliReplyCap = 256;
+  static constexpr size_t kCliReplyCap = 320;
 
   MyMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables);
 

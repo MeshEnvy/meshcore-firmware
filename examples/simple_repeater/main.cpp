@@ -24,6 +24,28 @@ void halt() {
   while (1) ;
 }
 
+/** Long multi-line replies (e.g. `potato help`) can fill the default USB-Serial TX buffer; println then
+ *  blocks while WiFi/debug also writes to Serial. Drip-bytes with yield so the CLI never wedges. */
+#if defined(ARDUINO_ARCH_ESP32)
+static void serial_print_mesh_cli_reply(const char* reply) {
+  Serial.print("  -> ");
+  constexpr size_t kChunk = 48;
+  size_t n = 0;
+  for (const char* p = reply; *p != '\0'; ++p) {
+    Serial.write(static_cast<uint8_t>(*p));
+    if (++n % kChunk == 0) {
+      yield();
+    }
+  }
+  Serial.print("\r\n");
+}
+#else
+static void serial_print_mesh_cli_reply(const char* reply) {
+  Serial.print("  -> ");
+  Serial.println(reply);
+}
+#endif
+
 // Must fit `potato endpoint ` + PotatoMeshConfig ingest URL (257) with terminator.
 static char command[288];
 
@@ -37,6 +59,9 @@ static unsigned long userBtnDownAt = 0;
 #endif
 
 void setup() {
+#if defined(ARDUINO_ARCH_ESP32)
+  Serial.setTxBufferSize(1024);
+#endif
   Serial.begin(115200);
   delay(1000);
 
@@ -111,11 +136,15 @@ void setup() {
 #ifdef ESP32
   potato_mesh_register_sta_dns_override();
   potato_mesh_register_wifi_event_logging();
+  potato_mesh_register_sta_known_wifi_failover();
   {
     auto& pm_cfg = PotatoMeshConfig::instance();
     if (pm_cfg.ssid()[0] != '\0') {
       board.setInhibitSleep(true);
       WiFi.mode(WIFI_STA);
+      if (pm_cfg.knownWifiCount() >= 2) {
+        WiFi.setAutoReconnect(false);
+      }
       WiFi.begin(pm_cfg.ssid(), pm_cfg.password());
       // Repeater has no concurrent BLE; modem sleep can starve TLS handshakes (mbedTLS EOF mid-handshake).
       WiFi.setSleep(WIFI_PS_NONE);
@@ -167,9 +196,17 @@ void loop() {
     command[len - 1] = 0;  // replace newline with C string null terminator
     char reply[MyMesh::kCliReplyCap];
     reply[0] = '\0';
+#ifdef ESP32
+    char cmd_snap[sizeof(command)];
+    strncpy(cmd_snap, command, sizeof(cmd_snap) - 1);
+    cmd_snap[sizeof(cmd_snap) - 1] = '\0';
+#endif
     the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
+#ifdef ESP32
+    potato_mesh_dbg_trace_cli_exchange("serial", cmd_snap, reply);
+#endif
     if (reply[0]) {
-      Serial.print("  -> "); Serial.println(reply);
+      serial_print_mesh_cli_reply(reply);
     }
 
     command[0] = 0;  // reset command buffer

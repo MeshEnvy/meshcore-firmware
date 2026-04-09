@@ -14,6 +14,13 @@ class PotatoNodeStore;
 void potato_mesh_register_sta_dns_override();
 /** Register once at startup: log STA connect/disconnect/IP events. */
 void potato_mesh_register_wifi_event_logging();
+/**
+ * When two or more known WiFi profiles exist, disable ESP auto-reconnect and rotate to the next
+ * saved SSID on hard join failures (e.g. reason 201 NO_AP_FOUND, auth/handshake failures).
+ */
+void potato_mesh_register_sta_known_wifi_failover();
+/** While true, STA disconnect handler skips failover/reconnect (e.g. during `potato wifi scan`). */
+void potato_mesh_sta_failover_suppress(bool suppress);
 
 class PotatoMeshIngestor {
 public:
