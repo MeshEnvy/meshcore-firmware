@@ -35,6 +35,12 @@
 #include <helpers/RegionMap.h>
 #include "RateLimiter.h"
 
+#ifdef ESP32
+#include <helpers/esp32/PotatoMeshConfig.h>
+#include <helpers/esp32/PotatoMeshIngestor.h>
+#include <helpers/esp32/PotatoNodeStore.h>
+#endif
+
 #ifdef WITH_BRIDGE
 extern AbstractBridge* bridge;
 #endif
@@ -118,6 +124,13 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   ESPNowBridge bridge;
 #endif
 
+#ifdef ESP32
+  PotatoMeshIngestor _ingestor;
+  PotatoNodeStore    _node_store;
+  /** Reply buffer size is `kCliReplyCap` (see main.cpp and onPeerDataRecv temp slice). */
+  void handlePotatoCommand(char* args, char* reply);
+#endif
+
   void putNeighbour(const mesh::Identity& id, uint32_t timestamp, float snr);
   void sendNodeDiscoverReq();
   uint8_t handleLoginReq(const mesh::Identity& sender, const uint8_t* secret, uint32_t sender_timestamp, const uint8_t* data, bool is_flood);
@@ -174,6 +187,9 @@ protected:
   void onControlDataRecv(mesh::Packet* packet) override;
 
 public:
+  /** Serial + mesh admin TXT_MSG reply; must match main.cpp `reply[]` and `temp[5 + …]` in onPeerDataRecv. */
+  static constexpr size_t kCliReplyCap = 256;
+
   MyMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables);
 
   void begin(FILESYSTEM* fs);

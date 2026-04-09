@@ -3,6 +3,13 @@
 
 #include "MyMesh.h"
 
+#ifdef ESP32
+#include <WiFi.h>
+#include <helpers/esp32/PotatoMeshConfig.h>
+#include <helpers/esp32/PotatoMeshIngestor.h>
+#include <helpers/esp32/PotatoMeshDebug.h>
+#endif
+
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
   static UITask ui_task(display);
@@ -17,7 +24,8 @@ void halt() {
   while (1) ;
 }
 
-static char command[160];
+// Must fit `potato endpoint ` + PotatoMeshConfig ingest URL (257) with terminator.
+static char command[288];
 
 // For power saving
 unsigned long lastActive = 0; // mark last active time
@@ -93,7 +101,28 @@ void setup() {
 
   sensors.begin();
 
+#ifdef ESP32
+  // Load config before begin() so debug flag is active during node store init.
+  PotatoMeshConfig::instance().load();
+#endif
+
   the_mesh.begin(fs);
+
+#ifdef ESP32
+  potato_mesh_register_sta_dns_override();
+  potato_mesh_register_wifi_event_logging();
+  {
+    auto& pm_cfg = PotatoMeshConfig::instance();
+    if (pm_cfg.ssid()[0] != '\0') {
+      board.setInhibitSleep(true);
+      WiFi.mode(WIFI_STA);
+      WiFi.begin(pm_cfg.ssid(), pm_cfg.password());
+      // Repeater has no concurrent BLE; modem sleep can starve TLS handshakes (mbedTLS EOF mid-handshake).
+      WiFi.setSleep(WIFI_PS_NONE);
+      POTATO_MESH_DBG_LN("potato ingest: WiFi.begin ssid=%.32s modem_sleep=off", pm_cfg.ssid());
+    }
+  }
+#endif
 
 #ifdef DISPLAY_CLASS
   ui_task.begin(the_mesh.getNodePrefs(), FIRMWARE_BUILD_DATE, FIRMWARE_VERSION);
@@ -109,12 +138,25 @@ void loop() {
   int len = strlen(command);
   while (Serial.available() && len < sizeof(command)-1) {
     char c = Serial.read();
-    if (c != '\n') {
-      command[len++] = c;
-      command[len] = 0;
-      Serial.print(c);
+    // LF-only line endings (common from web serial / Unix terminals) were ignored before,
+    // so the command buffer never completed and the CLI looked hung.
+    if (c == '\n') {
+      Serial.print('\n');
+      if (len > 0) {
+        command[len++] = '\r';
+        command[len] = 0;
+      }
+      break;
     }
-    if (c == '\r') break;
+    command[len++] = c;
+    command[len] = 0;
+    Serial.print(c);
+    if (c == '\r') {
+      if (Serial.available() && Serial.peek() == '\n') {
+        Serial.read();
+      }
+      break;
+    }
   }
   if (len == sizeof(command)-1) {  // command buffer full
     command[sizeof(command)-1] = '\r';
@@ -123,7 +165,8 @@ void loop() {
   if (len > 0 && command[len - 1] == '\r') {  // received complete line
     Serial.print('\n');
     command[len - 1] = 0;  // replace newline with C string null terminator
-    char reply[160];
+    char reply[MyMesh::kCliReplyCap];
+    reply[0] = '\0';
     the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
     if (reply[0]) {
       Serial.print("  -> "); Serial.println(reply);

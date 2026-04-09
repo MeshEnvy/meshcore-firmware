@@ -1,6 +1,12 @@
 #include "MyMesh.h"
 #include <algorithm>
 
+#ifdef ESP32
+#include <WiFi.h>
+#include <helpers/esp32/PotatoMeshDebug.h>
+#include <helpers/esp32/PotatoNodeStore.h>
+#endif
+
 /* ------------------------------ Config -------------------------------- */
 
 #ifndef LORA_FREQ
@@ -621,13 +627,54 @@ void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32
                           const uint8_t *app_data, size_t app_data_len) {
   mesh::Mesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len); // chain to super impl
 
+  AdvertDataParser parser(app_data, app_data_len);
+
   // if this a zero hop advert (and not via 'Share'), add it to neighbours
   if (packet->path_len == 0 && !isShare(packet)) {
-    AdvertDataParser parser(app_data, app_data_len);
     if (parser.isValid() && parser.getType() == ADV_TYPE_REPEATER) { // just keep neigbouring Repeaters
       putNeighbour(id, timestamp, packet->getSNR());
     }
   }
+
+#ifdef ESP32
+  // persist all valid adverts (any hop count) and POST when cooloff has elapsed
+  if (parser.isValid()) {
+    int32_t lat = parser.hasLatLon() ? parser.getIntLat() : 0;
+    int32_t lon = parser.hasLatLon() ? parser.getIntLon() : 0;
+    const char* name = parser.hasName() ? parser.getName() : "";
+    uint8_t atype = parser.getType();
+    char id_hex[9]; // first 4 bytes as hex
+    static const char* hexd = "0123456789abcdef";
+    for (int _i = 0; _i < 4; _i++) {
+      id_hex[_i*2]   = hexd[id.pub_key[_i] >> 4];
+      id_hex[_i*2+1] = hexd[id.pub_key[_i] & 0xf];
+    }
+    id_hex[8] = '\0';
+    POTATO_MESH_DBG_LN("advert: !%s name=\"%.32s\" type=%u hops=%u ts=%lu gps=%s",
+                        id_hex, name, (unsigned)atype, (unsigned)packet->path_len,
+                        (unsigned long)timestamp, parser.hasLatLon() ? "yes" : "no");
+    int slot = _node_store.put(id.pub_key, name, atype, timestamp, lat, lon);
+    uint32_t now_ms = millis();
+    POTATO_MESH_DBG_LN("advert: !%s stored slot=%d (total=%d)", id_hex, slot, _node_store.count());
+    if (slot >= 0 && _node_store.shouldPost(slot, now_ms)) {
+      ContactInfo contact;
+      memcpy(&contact.id, &id, sizeof(mesh::Identity));
+      contact.type = parser.getType();
+      contact.last_advert_timestamp = timestamp;
+      contact.gps_lat = lat;
+      contact.gps_lon = lon;
+      contact.flags = 0;
+      contact.out_path_len = 0;
+      contact.shared_secret_valid = false;
+      contact.lastmod = 0;
+      contact.sync_since = 0;
+      strncpy(contact.name, name, sizeof(contact.name) - 1);
+      contact.name[sizeof(contact.name) - 1] = '\0';
+      _ingestor.postContactDiscovered(self_id.pub_key, contact);
+      _node_store.markPosted(slot, now_ms);
+    }
+  }
+#endif
 }
 
 void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, const uint8_t *secret,
@@ -700,7 +747,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
         }
       }
 
-      uint8_t temp[166];
+      uint8_t temp[5 + MyMesh::kCliReplyCap];
       char *command = (char *)&data[5];
       char *reply = (char *)&temp[5];
       if (is_retry) {
@@ -907,6 +954,9 @@ void MyMesh::begin(FILESYSTEM *fs) {
   // load persisted prefs
   _cli.loadPrefs(_fs);
   acl.load(_fs, self_id);
+#ifdef ESP32
+  _node_store.begin(_fs);
+#endif
   // TODO: key_store.begin();
   region_map.load(_fs);
 
@@ -1068,6 +1118,13 @@ void MyMesh::removeNeighbor(const uint8_t *pubkey, int key_len) {
 
 void MyMesh::formatStatsReply(char *reply) {
   StatsFormatHelper::formatCoreStats(reply, board, *_ms, _err_flags, _mgr);
+#ifdef ESP32
+  // Append potato node count to the JSON object.
+  int len = strlen(reply);
+  if (len > 1 && reply[len - 1] == '}') {
+    snprintf(reply + len - 1, 48, ",\"potato_nodes\":%d}", _node_store.count());
+  }
+#endif
 }
 
 void MyMesh::formatRadioStatsReply(char *reply) {
@@ -1100,37 +1157,46 @@ void MyMesh::clearStats() {
 
 void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply) {
   if (region_load_active) {
-    if (StrHelper::isBlank(command)) {  // empty/blank line, signal to terminate 'load' operation
-      region_map = temp_map;  // copy over the temp instance as new current map
-      region_load_active = false;
+#ifdef ESP32
+    // During `region load`, non-blank lines are consumed as region map rows with no echo.
+    // Allow `potato …` through so e.g. `potato flush` still gets a normal reply.
+    const char *cmd_scan = command;
+    while (*cmd_scan == ' ') cmd_scan++;
+    if (!(memcmp(cmd_scan, "potato", 6) == 0 && (cmd_scan[6] == '\0' || cmd_scan[6] == ' ')))
+#endif
+    {
+      if (StrHelper::isBlank(command)) {  // empty/blank line, signal to terminate 'load' operation
+        region_map = temp_map;  // copy over the temp instance as new current map
+        region_load_active = false;
 
-      sprintf(reply, "OK - loaded %d regions", region_map.getCount());
-    } else {
-      char *np = command;
-      while (*np == ' ') np++;   // skip indent
-      int indent = np - command;
+        sprintf(reply, "OK - loaded %d regions", region_map.getCount());
+      } else {
+        char *np = command;
+        while (*np == ' ') np++;   // skip indent
+        int indent = np - command;
 
-      char *ep = np;
-      while (RegionMap::is_name_char(*ep)) ep++;
-      if (*ep) { *ep++ = 0; }  // set null terminator for end of name
+        char *ep = np;
+        while (RegionMap::is_name_char(*ep)) ep++;
+        if (*ep) { *ep++ = 0; }  // set null terminator for end of name
 
-      while (*ep && *ep != 'F') ep++;  // look for (optional) flags
+        while (*ep && *ep != 'F') ep++;  // look for (optional) flags
 
-      if (indent > 0 && indent < 8 && strlen(np) > 0) {
-        auto parent = load_stack[indent - 1];
-        if (parent) {
-          auto old = region_map.findByName(np);
-          auto nw = temp_map.putRegion(np, parent->id, old ? old->id : 0);  // carry-over the current ID (if name already exists)
-          if (nw) {
-            nw->flags = old ? old->flags : (*ep == 'F' ? 0 : REGION_DENY_FLOOD);   // carry-over flags from curr
+        if (indent > 0 && indent < 8 && strlen(np) > 0) {
+          auto parent = load_stack[indent - 1];
+          if (parent) {
+            auto old = region_map.findByName(np);
+            auto nw = temp_map.putRegion(np, parent->id, old ? old->id : 0);  // carry-over the current ID (if name already exists)
+            if (nw) {
+              nw->flags = old ? old->flags : (*ep == 'F' ? 0 : REGION_DENY_FLOOD);   // carry-over flags from curr
 
-            load_stack[indent] = nw;  // keep pointers to parent regions, to resolve parent_id's
+              load_stack[indent] = nw;  // keep pointers to parent regions, to resolve parent_id's
+            }
           }
         }
+        reply[0] = 0;
       }
-      reply[0] = 0;
+      return;
     }
-    return;
   }
 
   while (*command == ' ') command++; // skip leading spaces
@@ -1285,10 +1351,274 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       sendNodeDiscoverReq();
       strcpy(reply, "OK - Discover sent");
     }
+#ifdef ESP32
+  } else if (memcmp(command, "potato", 6) == 0 && (command[6] == '\0' || command[6] == ' ')) {
+    handlePotatoCommand(command + 6, reply);
+#endif
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
 }
+
+#ifdef ESP32
+
+static void trim_trailing_ws(char* s) {
+  if (!s) return;
+  size_t n = strlen(s);
+  while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r' || s[n - 1] == '\n')) {
+    s[--n] = '\0';
+  }
+}
+
+namespace {
+
+static constexpr int kScanMax = 20;
+static constexpr int kScanPageSize = 5;
+
+struct ScanEntry { char ssid[33]; int32_t rssi; };
+static ScanEntry s_scan[kScanMax];
+static int s_scan_count = 0;
+
+static void scan_rssi_bars(int32_t rssi, char out[7]) {
+  int lv = rssi >= -50 ? 4 : rssi >= -65 ? 3 : rssi >= -75 ? 2 : rssi >= -85 ? 1 : 0;
+  out[0] = '[';
+  for (int b = 0; b < 4; b++) out[1 + b] = b < lv ? '|' : '.';
+  out[5] = ']'; out[6] = '\0';
+}
+
+static void do_wifi_scan() {
+  WiFi.mode(WIFI_STA);
+  int n = WiFi.scanNetworks();
+  s_scan_count = 0;
+  if (n <= 0) { WiFi.scanDelete(); return; }
+
+  for (int i = 0; i < n && s_scan_count < kScanMax; i++) {
+    String ss = WiFi.SSID(i);
+    if (ss.length() == 0) continue;
+    int32_t rssi = WiFi.RSSI(i);
+    // dedup by SSID (keep best RSSI)
+    bool found = false;
+    for (int j = 0; j < s_scan_count; j++) {
+      if (strcmp(s_scan[j].ssid, ss.c_str()) == 0) {
+        if (rssi > s_scan[j].rssi) s_scan[j].rssi = rssi;
+        found = true; break;
+      }
+    }
+    if (!found) {
+      snprintf(s_scan[s_scan_count].ssid, sizeof(s_scan[0].ssid), "%s", ss.c_str());
+      s_scan[s_scan_count].rssi = rssi;
+      s_scan_count++;
+    }
+  }
+  // sort by rssi descending (simple bubble)
+  for (int a = 0; a < s_scan_count - 1; a++) {
+    for (int b = a + 1; b < s_scan_count; b++) {
+      if (s_scan[b].rssi > s_scan[a].rssi) {
+        ScanEntry t = s_scan[a]; s_scan[a] = s_scan[b]; s_scan[b] = t;
+      }
+    }
+  }
+  WiFi.scanDelete();
+}
+
+static void format_scan_page(int page, char* reply) {
+  if (s_scan_count == 0) { strcpy(reply, "No scan results. Run: potato wifi scan"); return; }
+  int total_pages = (s_scan_count + kScanPageSize - 1) / kScanPageSize;
+  if (page < 1) page = 1;
+  if (page > total_pages) page = total_pages;
+  int start = (page - 1) * kScanPageSize;
+  int o = snprintf(reply, MyMesh::kCliReplyCap, "Pg %d/%d (%d nets):\n", page, total_pages, s_scan_count);
+  for (int i = start; i < s_scan_count && i < start + kScanPageSize; i++) {
+    char bars[7]; scan_rssi_bars(s_scan[i].rssi, bars);
+    // SSID truncated to 14 chars
+    char ssid_trunc[17];
+    size_t slen = strlen(s_scan[i].ssid);
+    if (slen > 14) {
+      memcpy(ssid_trunc, s_scan[i].ssid, 12); ssid_trunc[12] = '.'; ssid_trunc[13] = '.'; ssid_trunc[14] = '\0';
+    } else {
+      strcpy(ssid_trunc, s_scan[i].ssid);
+    }
+    int added = snprintf(reply + o, MyMesh::kCliReplyCap - (size_t)o, "%d. %s %s\n", i + 1, ssid_trunc, bars);
+    if (added <= 0 || o + added >= (int)MyMesh::kCliReplyCap - 1) break;
+    o += added;
+  }
+  reply[MyMesh::kCliReplyCap - 1] = '\0';
+}
+
+} // namespace
+
+static void potato_cli_usage(char* reply) {
+  snprintf(reply, MyMesh::kCliReplyCap,
+           "potato status\n"
+           "potato pause\n"
+           "potato resume\n"
+           "potato contacts\n"
+           "potato flush\n"
+           "potato help\n"
+           "potato wifi scan [pg]\n"
+           "potato wifi <n> [pwd]\n"
+           "potato wifi <ssid> [pwd]\n"
+           "potato endpoint <url>\n"
+           "potato token <val>\n"
+           "potato debug");
+}
+
+void MyMesh::handlePotatoCommand(char* args, char* reply) {
+  trim_trailing_ws(args);
+  while (*args == ' ') args++;
+
+  PotatoMeshConfig& cfg = PotatoMeshConfig::instance();
+
+  // potato status
+  if (strcmp(args, "status") == 0 || *args == '\0') {
+    wl_status_t wl = WiFi.status();
+    const char* wl_str = (wl == WL_CONNECTED) ? "connected" : "not connected";
+    int code = _ingestor.lastHttpCode();
+    char code_str[12];
+    if (code == 0) strcpy(code_str, "none");
+    else snprintf(code_str, sizeof(code_str), "%d", code);
+    const char* token_str = cfg.apiToken()[0] ? "set" : "(none)";
+    const char* url_str = cfg.ingestOrigin()[0] ? cfg.ingestOrigin() : "(none)";
+    if (wl == WL_CONNECTED) {
+      snprintf(reply, MyMesh::kCliReplyCap, "WiFi: %s\nSSID: %.20s\nIP: %s\nNodes: %d\nQueue: %u\nPaused: %s\nHTTP: %s\nURL: %.72s\nToken: %s",
+               wl_str, WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(),
+               _node_store.count(), (unsigned)_ingestor.pendingQueueDepth(),
+               _ingestor.isPaused() ? "yes" : "no", code_str, url_str, token_str);
+    } else {
+      snprintf(reply, MyMesh::kCliReplyCap, "WiFi: %s\nSaved: %.20s\nNodes: %d\nQueue: %u\nPaused: %s\nURL: %.72s\nToken: %s",
+               wl_str, cfg.ssid()[0] ? cfg.ssid() : "(none)",
+               _node_store.count(), (unsigned)_ingestor.pendingQueueDepth(),
+               _ingestor.isPaused() ? "yes" : "no", url_str, token_str);
+    }
+
+  // potato pause / resume
+  } else if (strcmp(args, "pause") == 0) {
+    _ingestor.setPaused(true);
+    strcpy(reply, "OK - ingest paused");
+
+  } else if (strcmp(args, "resume") == 0) {
+    _ingestor.setPaused(false);
+    strcpy(reply, "OK - ingest resumed");
+
+  // potato endpoint <url>
+  } else if (memcmp(args, "endpoint ", 9) == 0) {
+    const char* url = args + 9;
+    while (*url == ' ') url++;
+    cfg.setIngestOrigin(url);
+    _ingestor.restartAfterConfigChange();
+    POTATO_MESH_DBG_LN("potato CLI: endpoint set url=%.60s", url);
+    snprintf(reply, MyMesh::kCliReplyCap, "OK - endpoint: %.100s", url);
+
+  // potato token <val>
+  } else if (memcmp(args, "token ", 6) == 0) {
+    const char* tok = args + 6;
+    while (*tok == ' ') tok++;
+    cfg.setApiToken(tok);
+    _ingestor.restartAfterConfigChange();
+    POTATO_MESH_DBG_LN("potato CLI: token set (len=%u)", (unsigned)strlen(tok));
+    strcpy(reply, "OK - token saved");
+
+  // potato debug
+  } else if (strcmp(args, "debug") == 0) {
+    cfg.toggleDebug();
+    snprintf(reply, MyMesh::kCliReplyCap, "OK - debug %s", cfg.debugEnabled() ? "on" : "off");
+
+  // potato wifi scan [page]
+  } else if (memcmp(args, "wifi scan", 9) == 0 && (args[9] == '\0' || args[9] == ' ')) {
+    const char* pg_str = args + 9;
+    while (*pg_str == ' ') pg_str++;
+    if (*pg_str == '\0') {
+      // fresh scan
+      do_wifi_scan();
+      format_scan_page(1, reply);
+    } else {
+      // page from cached results
+      format_scan_page(atoi(pg_str), reply);
+    }
+
+  // potato wifi <n> [pwd]  or  potato wifi <ssid> [pwd]  or  potato wifi (status)
+  } else if (memcmp(args, "wifi", 4) == 0 && (args[4] == '\0' || args[4] == ' ')) {
+    const char* sub = args + 4;
+    while (*sub == ' ') sub++;
+
+    if (*sub == '\0') {
+      // status only
+      wl_status_t wl = WiFi.status();
+      if (wl == WL_CONNECTED) {
+        snprintf(reply, MyMesh::kCliReplyCap, "WiFi: connected\nSSID: %.30s\nIP: %s",
+                 WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+      } else {
+        snprintf(reply, MyMesh::kCliReplyCap, "WiFi: not connected\nSaved: %.30s\nUse: potato wifi scan",
+                 cfg.ssid()[0] ? cfg.ssid() : "(none)");
+      }
+    } else {
+      // parse: first token = index or SSID, second token (optional) = password
+      char tok1[64] = {}, tok2[65] = {};
+      const char* sp = sub;
+      while (*sp && *sp != ' ') sp++;
+      size_t t1len = (size_t)(sp - sub);
+      if (t1len >= sizeof(tok1)) t1len = sizeof(tok1) - 1;
+      memcpy(tok1, sub, t1len); tok1[t1len] = '\0';
+      while (*sp == ' ') sp++;
+      strncpy(tok2, sp, sizeof(tok2) - 1); tok2[sizeof(tok2) - 1] = '\0';
+
+      // determine SSID: is tok1 a numeric list index?
+      char ssid_to_use[33] = {};
+      bool is_index = true;
+      for (const char* q = tok1; *q; q++) { if (*q < '0' || *q > '9') { is_index = false; break; } }
+      if (is_index && tok1[0] != '\0') {
+        int idx = atoi(tok1) - 1;
+        if (idx >= 0 && idx < s_scan_count) {
+          strncpy(ssid_to_use, s_scan[idx].ssid, sizeof(ssid_to_use) - 1);
+        } else {
+          snprintf(reply, MyMesh::kCliReplyCap, "Err - index out of range (1..%d)\nRun: potato wifi scan", s_scan_count);
+          return;
+        }
+      } else {
+        strncpy(ssid_to_use, tok1, sizeof(ssid_to_use) - 1);
+      }
+
+      // resolve password: use tok2 if provided, else check NVS known list
+      char pwd_to_use[65] = {};
+      if (tok2[0] != '\0') {
+        strcpy(pwd_to_use, tok2);
+      } else {
+        cfg.getKnownWifiPassword(ssid_to_use, pwd_to_use, sizeof(pwd_to_use));
+      }
+
+      cfg.setWifi(ssid_to_use, pwd_to_use);
+      _ingestor.restartAfterConfigChange();
+      WiFi.disconnect(false, false);
+      WiFi.mode(WIFI_STA);
+      WiFi.begin(ssid_to_use, pwd_to_use);
+      WiFi.setSleep(WIFI_PS_NONE);
+      POTATO_MESH_DBG_LN("potato CLI: wifi connecting ssid=%.32s modem_sleep=off", ssid_to_use);
+      snprintf(reply, MyMesh::kCliReplyCap, "OK - connecting to %.32s", ssid_to_use);
+    }
+
+  // potato contacts
+  } else if (strcmp(args, "contacts") == 0) {
+    snprintf(reply, MyMesh::kCliReplyCap, "Nodes: %d/%d\nRepost: %lus\nCooloff: %lus\nFile: %s",
+             _node_store.count(), PotatoNodeStore::MAX,
+             (unsigned long)(POTATO_NODE_REPOST_MS / 1000),
+             (unsigned long)(POTATO_NODE_COOLOFF_MS / 1000),
+             PotatoNodeStore::PATH);
+
+  // potato flush — re-post all known nodes on next sweep
+  } else if (strcmp(args, "flush") == 0) {
+    _node_store.resetPostTimers();
+    _node_store.logFlushTargetsDebug();
+    POTATO_MESH_DBG_LN("potato CLI: flush — reset post timers for %d nodes", _node_store.count());
+    snprintf(reply, MyMesh::kCliReplyCap, "OK - will re-post %d nodes", _node_store.count());
+
+  } else if (strcmp(args, "help") == 0) {
+    potato_cli_usage(reply);
+
+  } else {
+    potato_cli_usage(reply);
+  }
+}
+#endif
 
 void MyMesh::loop() {
 #ifdef WITH_BRIDGE
@@ -1296,6 +1626,37 @@ void MyMesh::loop() {
 #endif
 
   mesh::Mesh::loop();
+
+#ifdef ESP32
+  _ingestor.service();
+
+  // Incremental sweep: re-post nodes whose lastHeard is stale in potato-mesh.
+  // Advances POTATO_NODE_SWEEP_PER_LOOP slots per loop — never blocks the radio.
+  {
+    uint32_t now_ms = millis();
+    int slot = _node_store.sweepNext(now_ms);
+    if (slot >= 0) {
+      PotatoNodeRecord rec;
+      if (_node_store.readRecord(slot, rec)) {
+        ContactInfo contact;
+        memcpy(contact.id.pub_key, rec.pub_key, PUB_KEY_SIZE);
+        contact.type = rec.type;
+        contact.last_advert_timestamp = rec.last_advert;
+        contact.gps_lat = rec.gps_lat;
+        contact.gps_lon = rec.gps_lon;
+        contact.flags = 0;
+        contact.out_path_len = 0;
+        contact.shared_secret_valid = false;
+        contact.lastmod = 0;
+        contact.sync_since = 0;
+        strncpy(contact.name, rec.name, sizeof(contact.name) - 1);
+        contact.name[sizeof(contact.name) - 1] = '\0';
+        _ingestor.postContactDiscovered(self_id.pub_key, contact);
+        _node_store.markPosted(slot, now_ms);
+      }
+    }
+  }
+#endif
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
     mesh::Packet *pkt = createSelfAdvert();
