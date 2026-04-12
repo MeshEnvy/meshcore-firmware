@@ -50,7 +50,7 @@
 #endif
 
 #ifndef ADVERT_NAME
-  #define  ADVERT_NAME   "Test BBS"
+  #define  ADVERT_NAME   "Lotato Test BBS"
 #endif
 #ifndef ADVERT_LAT
   #define  ADVERT_LAT  0.0
