@@ -1,3 +1,63 @@
+# lotato
+
+> The firmware-only [Potato Mesh](https://github.com/l5yth/potato-mesh) MeshCore ingestor. No sidecar needed.
+
+## Introduction
+
+Lotato is a pure MeshCore ingestor for Potato Mesh. It does not require an RPi sidecar, or a Python environment, or anything else. It runs directly on the firmware and has no external hardware dependencies.
+
+## Requirements
+
+* A MeshCore router node with WiFi capability. (Heltec V3 and V4 are very inexpensive popular WiFi-capable devices).
+* A MeshCore companion node to remote admin into the Lotato repeater and configure it.
+
+## Getting Started
+
+**Flash Lotato**
+Use https://meshforge.org/MeshEnvy/MeshCore-lotato to flash the latest version of Lotato to your chosen device. 
+
+**Find a home for your Lotato repeater**
+This device will be your Potato Mesh ingestor. It will likely sit on your desk, plugged into the wall via USB, and patiently ingest MeshCore traffic day and night.
+
+**Configure Repeater Settings**
+For one-time repeater setup, you need a USB connection to your computer. Use https://config.meshcore.io/ to configure your repeater for the first time.  Choose a name, radio presets, and most importantly, **choose an admin password**. All future Lotato config is done via remote admin.
+
+Test remote admin access now to be sure. 
+
+**Essential Setup**
+Log in via remote access and access the CLI tool. Lotato implements some extra CLI commands to help you get set up:
+
+* `lotato wifi <ssid> <pwd>` to connect to your WiFi network
+* `lotato endpoint <url>` to set the Potato Mesh ingestor URL (example: https://monitor.meshenvy.org)
+* `lotato token <val>` to set the Potato Mesh API key (see Potato Mesh docs)
+
+After that, you should begin to see MeshCore nodes appearing on your Potato Mesh network!
+
+## Full Command Reference
+
+| Command | Description |
+|---|---|
+| `lotato` | Same as `lotato status` |
+| `lotato status` | Show WiFi, IP, node count, ingest queue, HTTP status, endpoint, and token |
+| `lotato pause` | Pause ingest (stops POSTing to Potato Mesh) |
+| `lotato resume` | Resume ingest |
+| `lotato contacts` | Show node store stats (count, max, repost interval, file path) |
+| `lotato flush` | Mark all known nodes for immediate re-post on next ingest sweep |
+| `lotato scan [pg]` | Scan for nearby WiFi networks (async — run twice to see results) |
+| `lotato wifi` | Show current WiFi connection status |
+| `lotato wifi scan [pg]` | Scan for nearby WiFi networks |
+| `lotato wifi <n> [pwd]` | Connect to a network by scan result index |
+| `lotato wifi <ssid> [pwd]` | Connect to a network by SSID |
+| `lotato endpoint <url>` | Set the Potato Mesh ingest endpoint URL |
+| `lotato token <val>` | Set the API bearer token |
+| `lotato debug` | Toggle debug logging |
+| `lotato help` | Show command help |
+
+
+
+
+-------
+
 ## About MeshCore
 
 MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.
