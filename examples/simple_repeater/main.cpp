@@ -5,9 +5,9 @@
 
 #ifdef ESP32
 #include <WiFi.h>
-#include <helpers/esp32/PotatoMeshConfig.h>
-#include <helpers/esp32/PotatoMeshIngestor.h>
-#include <helpers/esp32/PotatoMeshDebug.h>
+#include <helpers/esp32/LotatoConfig.h>
+#include <helpers/esp32/LotatoIngestor.h>
+#include <helpers/esp32/LotatoDebug.h>
 #endif
 
 #ifdef DISPLAY_CLASS
@@ -46,7 +46,7 @@ static void serial_print_mesh_cli_reply(const char* reply) {
 }
 #endif
 
-// Must fit `potato endpoint ` + PotatoMeshConfig ingest URL (257) with terminator.
+// Must fit `lotato endpoint ` + LotatoConfig ingest URL (257) with terminator.
 static char command[288];
 
 // For power saving
@@ -128,17 +128,17 @@ void setup() {
 
 #ifdef ESP32
   // Load config before begin() so debug flag is active during node store init.
-  PotatoMeshConfig::instance().load();
+  LotatoConfig::instance().load();
 #endif
 
   the_mesh.begin(fs);
 
 #ifdef ESP32
-  potato_mesh_register_sta_dns_override();
-  potato_mesh_register_wifi_event_logging();
-  potato_mesh_register_sta_known_wifi_failover();
+  lotato_register_sta_dns_override();
+  lotato_register_wifi_event_logging();
+  lotato_register_sta_known_wifi_failover();
   {
-    auto& pm_cfg = PotatoMeshConfig::instance();
+    auto& pm_cfg = LotatoConfig::instance();
     if (pm_cfg.ssid()[0] != '\0') {
       board.setInhibitSleep(true);
       WiFi.mode(WIFI_STA);
@@ -148,7 +148,7 @@ void setup() {
       WiFi.begin(pm_cfg.ssid(), pm_cfg.password());
       // Repeater has no concurrent BLE; modem sleep can starve TLS handshakes (mbedTLS EOF mid-handshake).
       WiFi.setSleep(WIFI_PS_NONE);
-      POTATO_MESH_DBG_LN("potato ingest: WiFi.begin ssid=%.32s modem_sleep=off", pm_cfg.ssid());
+      LOTATO_DBG_LN("lotato ingest: WiFi.begin ssid=%.32s modem_sleep=off", pm_cfg.ssid());
     }
   }
 #endif
@@ -203,7 +203,7 @@ void loop() {
 #endif
     the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
 #ifdef ESP32
-    potato_mesh_dbg_trace_cli_exchange("serial", cmd_snap, reply);
+    lotato_dbg_trace_cli_exchange("serial", cmd_snap, reply);
 #endif
     if (reply[0]) {
       serial_print_mesh_cli_reply(reply);

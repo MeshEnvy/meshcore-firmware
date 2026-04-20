@@ -1,9 +1,9 @@
-#include "PotatoNodeStore.h"
+#include "LotatoNodeStore.h"
 
 #ifdef ESP32
 
 #include <SPIFFS.h>
-#include <helpers/esp32/PotatoMeshDebug.h>
+#include <helpers/esp32/LotatoDebug.h>
 #include <cstring>
 
 namespace {
@@ -18,7 +18,7 @@ static inline void bm_set(uint8_t* bm, int s) { bm[s >> 3] |= (1u << (s & 7)); }
 
 } // namespace
 
-void PotatoNodeStore::begin(fs::FS* fs) {
+void LotatoNodeStore::begin(fs::FS* fs) {
   _fs = fs;
   if (!_idx_mtx) _idx_mtx = xSemaphoreCreateMutex();
   _count = 0;
@@ -26,7 +26,7 @@ void PotatoNodeStore::begin(fs::FS* fs) {
   loadIndex();
 }
 
-void PotatoNodeStore::resetPostTimers() {
+void LotatoNodeStore::resetPostTimers() {
   if (!_idx_mtx) return;
   xSemaphoreTake(_idx_mtx, portMAX_DELAY);
   for (int i = 0; i < MAX; i++) _index[i].last_posted_ms = 0;
@@ -34,7 +34,7 @@ void PotatoNodeStore::resetPostTimers() {
 }
 
 static bool write_empty_dense_file(fs::FS* fs) {
-  File wf = fs->open(PotatoNodeStore::PATH, "w", true);
+  File wf = fs->open(LotatoNodeStore::PATH, "w", true);
   if (!wf) return false;
   uint32_t mag = kDenseMagic;
   uint16_t ver = kDenseVersion;
@@ -42,22 +42,22 @@ static bool write_empty_dense_file(fs::FS* fs) {
   wf.write((const uint8_t*)&mag, 4);
   wf.write((const uint8_t*)&ver, 2);
   wf.write((const uint8_t*)&pad, 2);
-  uint8_t z[PotatoNodeStore::BITMAP_BYTES]{};
+  uint8_t z[LotatoNodeStore::BITMAP_BYTES]{};
   wf.write(z, sizeof(z));
   wf.close();
   return true;
 }
 
-void PotatoNodeStore::loadIndex() {
+void LotatoNodeStore::loadIndex() {
   if (!_fs) return;
 
   File f = _fs->open(PATH, "r");
   if (!f) {
     if (!write_empty_dense_file(_fs)) {
-      POTATO_MESH_DBG_LN("node store: failed to create %s", PATH);
+      LOTATO_DBG_LN("node store: failed to create %s", PATH);
       return;
     }
-    POTATO_MESH_DBG_LN("node store: created empty dense %s (hdr=%u + bitmap=%u B)", PATH,
+    LOTATO_DBG_LN("node store: created empty dense %s (hdr=%u + bitmap=%u B)", PATH,
                         8u, (unsigned)BITMAP_BYTES);
     return;
   }
@@ -68,7 +68,7 @@ void PotatoNodeStore::loadIndex() {
   if (f.read((uint8_t*)&mag, 4) == 4 && mag == kDenseMagic) {
     uint16_t ver = 0, pad = 0;
     if (f.read((uint8_t*)&ver, 2) != 2 || f.read((uint8_t*)&pad, 2) != 2 || ver != kDenseVersion) {
-      POTATO_MESH_DBG_LN("node store: dense header bad ver=%u — reset", (unsigned)ver);
+      LOTATO_DBG_LN("node store: dense header bad ver=%u — reset", (unsigned)ver);
       f.close();
       _fs->remove(PATH);
       write_empty_dense_file(_fs);
@@ -76,20 +76,20 @@ void PotatoNodeStore::loadIndex() {
     }
     uint8_t bm[BITMAP_BYTES];
     if (f.read(bm, sizeof(bm)) != (int)sizeof(bm)) {
-      POTATO_MESH_DBG_LN("node store: dense bitmap read failed — reset");
+      LOTATO_DBG_LN("node store: dense bitmap read failed — reset");
       f.close();
       _fs->remove(PATH);
       write_empty_dense_file(_fs);
       return;
     }
-    PotatoNodeRecord rec;
+    LotatoNodeRecord rec;
     for (int s = 0; s < MAX; s++) {
       if (!bm_get(bm, s)) continue;
       if (f.read((uint8_t*)&rec, RECORD_SIZE) != (int)RECORD_SIZE) {
-        POTATO_MESH_DBG_LN("node store: dense payload truncated at slot=%d — partial load", s);
+        LOTATO_DBG_LN("node store: dense payload truncated at slot=%d — partial load", s);
         break;
       }
-      if (rec.magic == POTATO_NODE_MAGIC) {
+      if (rec.magic == LOTATO_NODE_MAGIC) {
         memcpy(_index[s].key, rec.pub_key, 4);
         _index[s].last_advert    = rec.last_advert;
         _index[s].last_posted_ms = 0;
@@ -97,19 +97,19 @@ void PotatoNodeStore::loadIndex() {
       }
     }
     f.close();
-    POTATO_MESH_DBG_LN("node store: loaded %d nodes from dense %s (%u bytes)", _count, PATH,
+    LOTATO_DBG_LN("node store: loaded %d nodes from dense %s (%u bytes)", _count, PATH,
                        (unsigned)fsz);
     return;
   }
   f.close();
-  POTATO_MESH_DBG_LN("node store: non-dense or unreadable %s — removing, starting empty", PATH);
+  LOTATO_DBG_LN("node store: non-dense or unreadable %s — removing, starting empty", PATH);
   _fs->remove(PATH);
   if (!write_empty_dense_file(_fs)) {
-    POTATO_MESH_DBG_LN("node store: failed to recreate empty dense after remove");
+    LOTATO_DBG_LN("node store: failed to recreate empty dense after remove");
   }
 }
 
-int PotatoNodeStore::findSlot(const uint8_t* pub_key) const {
+int LotatoNodeStore::findSlot(const uint8_t* pub_key) const {
   for (int i = 0; i < MAX; i++) {
     if (_index[i].last_advert != 0 &&
         memcmp(_index[i].key, pub_key, 4) == 0) {
@@ -122,14 +122,14 @@ int PotatoNodeStore::findSlot(const uint8_t* pub_key) const {
   return -1;
 }
 
-int PotatoNodeStore::findEmptySlot() const {
+int LotatoNodeStore::findEmptySlot() const {
   for (int i = 0; i < MAX; i++) {
     if (_index[i].last_advert == 0) return i;
   }
   return -1;
 }
 
-int PotatoNodeStore::evictLRU() {
+int LotatoNodeStore::evictLRU() {
   int oldest = 0;
   uint32_t oldest_advert = _index[0].last_advert;
   for (int i = 1; i < MAX; i++) {
@@ -145,10 +145,10 @@ int PotatoNodeStore::evictLRU() {
   return oldest;
 }
 
-bool PotatoNodeStore::writeRecord(int slot, const PotatoNodeRecord& rec) {
+bool LotatoNodeStore::writeRecord(int slot, const LotatoNodeRecord& rec) {
   if (!_fs || slot < 0 || slot >= MAX) return false;
 
-  static constexpr const char* TMP = "/potato-nodes.tmp";
+  static constexpr const char* TMP = "/lotato-nodes.tmp";
 
   uint8_t new_bm[BITMAP_BYTES];
   memset(new_bm, 0, sizeof(new_bm));
@@ -162,7 +162,7 @@ bool PotatoNodeStore::writeRecord(int slot, const PotatoNodeRecord& rec) {
 
   File in = _fs->open(PATH, "r");
   if (!in) {
-    POTATO_MESH_DBG_LN("node store: missing %s on write", PATH);
+    LOTATO_DBG_LN("node store: missing %s on write", PATH);
     return false;
   }
   uint8_t old_bm[BITMAP_BYTES];
@@ -170,21 +170,21 @@ bool PotatoNodeStore::writeRecord(int slot, const PotatoNodeRecord& rec) {
   in.seek(0);
   uint32_t hm = 0;
   if (in.read((uint8_t*)&hm, 4) != 4 || hm != kDenseMagic) {
-    POTATO_MESH_DBG_LN("node store: write aborted — %s not dense (reboot to clear store)", PATH);
+    LOTATO_DBG_LN("node store: write aborted — %s not dense (reboot to clear store)", PATH);
     in.close();
     return false;
   }
   uint16_t hv = 0, hpad = 0;
   if (in.read((uint8_t*)&hv, 2) != 2 || in.read((uint8_t*)&hpad, 2) != 2 || hv != kDenseVersion ||
       in.read(old_bm, sizeof(old_bm)) != (int)sizeof(old_bm)) {
-    POTATO_MESH_DBG_LN("node store: write aborted — corrupt dense header");
+    LOTATO_DBG_LN("node store: write aborted — corrupt dense header");
     in.close();
     return false;
   }
 
   File out = _fs->open(TMP, "w", true);
   if (!out) {
-    POTATO_MESH_DBG_LN("node store: dense open tmp failed heap=%u", (unsigned)ESP.getFreeHeap());
+    LOTATO_DBG_LN("node store: dense open tmp failed heap=%u", (unsigned)ESP.getFreeHeap());
     in.close();
     return false;
   }
@@ -194,19 +194,19 @@ bool PotatoNodeStore::writeRecord(int slot, const PotatoNodeRecord& rec) {
   uint16_t pad = 0;
   if (out.write((const uint8_t*)&mag, 4) != 4 || out.write((const uint8_t*)&ver, 2) != 2 ||
       out.write((const uint8_t*)&pad, 2) != 2 || out.write(new_bm, sizeof(new_bm)) != (int)sizeof(new_bm)) {
-    POTATO_MESH_DBG_LN("node store: dense write header/bitmap failed heap=%u", (unsigned)ESP.getFreeHeap());
+    LOTATO_DBG_LN("node store: dense write header/bitmap failed heap=%u", (unsigned)ESP.getFreeHeap());
     in.close();
     out.close();
     _fs->remove(TMP);
     return false;
   }
 
-  PotatoNodeRecord old_r{};
+  LotatoNodeRecord old_r{};
   for (int s = 0; s < MAX; s++) {
     bool have_old = false;
     if (bm_get(old_bm, s)) {
       int n = in.read((uint8_t*)&old_r, RECORD_SIZE);
-      have_old = (n == (int)RECORD_SIZE && old_r.magic == POTATO_NODE_MAGIC);
+      have_old = (n == (int)RECORD_SIZE && old_r.magic == LOTATO_NODE_MAGIC);
     }
 
     const bool want_new = (s == slot) || (_index[s].last_advert != 0);
@@ -217,7 +217,7 @@ bool PotatoNodeStore::writeRecord(int slot, const PotatoNodeRecord& rec) {
       w = out.write((const uint8_t*)&rec, RECORD_SIZE);
     } else {
       if (!have_old) {
-        POTATO_MESH_DBG_LN("node store: dense rewrite missing payload s=%d (slot=%d) heap=%u "
+        LOTATO_DBG_LN("node store: dense rewrite missing payload s=%d (slot=%d) heap=%u "
                             "spiffs_used=%u/%u",
                             s, slot, (unsigned)ESP.getFreeHeap(), (unsigned)SPIFFS.usedBytes(),
                             (unsigned)SPIFFS.totalBytes());
@@ -229,7 +229,7 @@ bool PotatoNodeStore::writeRecord(int slot, const PotatoNodeRecord& rec) {
       w = out.write((const uint8_t*)&old_r, RECORD_SIZE);
     }
     if (w != RECORD_SIZE) {
-      POTATO_MESH_DBG_LN("node store: dense payload write failed s=%d wrote=%u need=%u out_pos=%u "
+      LOTATO_DBG_LN("node store: dense payload write failed s=%d wrote=%u need=%u out_pos=%u "
                          "spiffs_used=%u/%u heap=%u",
                          s, (unsigned)w, (unsigned)RECORD_SIZE, (unsigned)out.position(),
                          (unsigned)SPIFFS.usedBytes(), (unsigned)SPIFFS.totalBytes(),
@@ -245,22 +245,22 @@ bool PotatoNodeStore::writeRecord(int slot, const PotatoNodeRecord& rec) {
   in.close();
   out.close();
 
-  POTATO_MESH_DBG_LN("node store write: dense tmp bytes=%u recs=%d heap=%u", (unsigned)out_sz, out_recs,
+  LOTATO_DBG_LN("node store write: dense tmp bytes=%u recs=%d heap=%u", (unsigned)out_sz, out_recs,
                       (unsigned)ESP.getFreeHeap());
 
   _fs->remove(PATH);
   if (!_fs->rename(TMP, PATH)) {
-    POTATO_MESH_DBG_LN("node store: rename tmp->bin failed heap=%u tmp_gone=%d", (unsigned)ESP.getFreeHeap(),
+    LOTATO_DBG_LN("node store: rename tmp->bin failed heap=%u tmp_gone=%d", (unsigned)ESP.getFreeHeap(),
                         _fs->exists(TMP) ? 0 : 1);
     _fs->remove(TMP);
     return false;
   }
 
-  POTATO_MESH_DBG_LN("node store write: ok slot=%d heap=%u", slot, (unsigned)ESP.getFreeHeap());
+  LOTATO_DBG_LN("node store write: ok slot=%d heap=%u", slot, (unsigned)ESP.getFreeHeap());
   return true;
 }
 
-int PotatoNodeStore::put(const uint8_t* pub_key, const char* name, uint8_t type,
+int LotatoNodeStore::put(const uint8_t* pub_key, const char* name, uint8_t type,
                          uint32_t last_advert, int32_t lat, int32_t lon) {
   if (!_fs || !pub_key) return -1;
 
@@ -276,12 +276,12 @@ int PotatoNodeStore::put(const uint8_t* pub_key, const char* name, uint8_t type,
     if (slot < 0) {
       slot = evictLRU();
       slot_mode = 2;
-      POTATO_MESH_DBG_LN("node store: store full, evicted LRU slot %d", slot);
+      LOTATO_DBG_LN("node store: store full, evicted LRU slot %d", slot);
     }
   }
   if (_idx_mtx) xSemaphoreGive(_idx_mtx);
 
-  PotatoNodeRecord rec;
+  LotatoNodeRecord rec;
   memcpy(rec.pub_key, pub_key, 32);
   strncpy(rec.name, name ? name : "", sizeof(rec.name) - 1);
   rec.name[sizeof(rec.name) - 1] = '\0';
@@ -290,20 +290,20 @@ int PotatoNodeStore::put(const uint8_t* pub_key, const char* name, uint8_t type,
   rec.last_advert = last_advert;
   rec.gps_lat     = lat;
   rec.gps_lon     = lon;
-  rec.magic       = POTATO_NODE_MAGIC;
+  rec.magic       = LOTATO_NODE_MAGIC;
 
-  POTATO_MESH_DBG_LN("node store put: slot=%d mode=%s idx_count=%u last_advert=%lu type=%u heap=%u",
+  LOTATO_DBG_LN("node store put: slot=%d mode=%s idx_count=%u last_advert=%lu type=%u heap=%u",
                       slot, slot_mode == 0 ? "update" : (slot_mode == 1 ? "new" : "evict"),
                       (unsigned)_count, (unsigned long)last_advert, (unsigned)type,
                       (unsigned)ESP.getFreeHeap());
 
-  PotatoNodeRecord existing{};
+  LotatoNodeRecord existing{};
   if (readRecord(slot, existing) && memcmp(&existing, &rec, RECORD_SIZE) == 0) {
     return slot;
   }
 
   if (!writeRecord(slot, rec)) {
-    POTATO_MESH_DBG_LN("node store: write failed slot=%d", slot);
+    LOTATO_DBG_LN("node store: write failed slot=%d", slot);
     return -1;
   }
 
@@ -317,14 +317,14 @@ int PotatoNodeStore::put(const uint8_t* pub_key, const char* name, uint8_t type,
   return slot;
 }
 
-void PotatoNodeStore::logFlushTargetsDebug() const {
-  if (!potato_mesh_dbg_active()) return;
+void LotatoNodeStore::logFlushTargetsDebug() const {
+  if (!lotato_dbg_active()) return;
   char line[384];
   size_t pos = 0;
   int listed = 0;
   int overflow = 0;
   constexpr int kMaxList = 32;
-  PotatoNodeRecord rec;
+  LotatoNodeRecord rec;
   line[0] = '\0';
 
   for (int i = 0; i < MAX; i++) {
@@ -349,14 +349,14 @@ void PotatoNodeStore::logFlushTargetsDebug() const {
   }
 
   if (line[0]) {
-    POTATO_MESH_DBG_LN("potato CLI: flush — node ids: %s", line);
+    LOTATO_DBG_LN("lotato CLI: flush — node ids: %s", line);
     if (overflow > 0) {
-      POTATO_MESH_DBG_LN("potato CLI: flush — (%d more ids not listed)", overflow);
+      LOTATO_DBG_LN("lotato CLI: flush — (%d more ids not listed)", overflow);
     }
   }
 }
 
-bool PotatoNodeStore::dueForIngest(int slot, uint32_t now_ms) const {
+bool LotatoNodeStore::dueForIngest(int slot, uint32_t now_ms) const {
   if (slot < 0 || slot >= MAX || !_idx_mtx) return false;
   xSemaphoreTake(_idx_mtx, portMAX_DELAY);
   bool empty = (_index[slot].last_advert == 0);
@@ -364,10 +364,10 @@ bool PotatoNodeStore::dueForIngest(int slot, uint32_t now_ms) const {
   xSemaphoreGive(_idx_mtx);
   if (empty) return false;
   if (lp == 0) return true;
-  return (int32_t)(now_ms - lp) >= (int32_t)POTATO_NODE_REPOST_MS;
+  return (int32_t)(now_ms - lp) >= (int32_t)LOTATO_NODE_REPOST_MS;
 }
 
-void PotatoNodeStore::markPosted(int slot, uint32_t now_ms) {
+void LotatoNodeStore::markPosted(int slot, uint32_t now_ms) {
   if (slot < 0 || slot >= MAX) return;
   if (!_idx_mtx) return;
   xSemaphoreTake(_idx_mtx, portMAX_DELAY);
@@ -375,7 +375,7 @@ void PotatoNodeStore::markPosted(int slot, uint32_t now_ms) {
   xSemaphoreGive(_idx_mtx);
 }
 
-bool PotatoNodeStore::readRecord(int slot, PotatoNodeRecord& out) const {
+bool LotatoNodeStore::readRecord(int slot, LotatoNodeRecord& out) const {
   if (!_fs || slot < 0 || slot >= MAX) return false;
   File f = _fs->open(PATH, "r");
   if (!f) return false;
@@ -407,7 +407,7 @@ bool PotatoNodeStore::readRecord(int slot, PotatoNodeRecord& out) const {
     }
     bool ok = (f.read((uint8_t*)&out, RECORD_SIZE) == (int)RECORD_SIZE);
     f.close();
-    return ok && (out.magic == POTATO_NODE_MAGIC);
+    return ok && (out.magic == LOTATO_NODE_MAGIC);
   }
 
   f.close();

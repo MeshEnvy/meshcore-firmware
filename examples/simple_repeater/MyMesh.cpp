@@ -4,8 +4,8 @@
 #ifdef ESP32
 #include <WiFi.h>
 #include <cctype>
-#include <helpers/esp32/PotatoMeshDebug.h>
-#include <helpers/esp32/PotatoNodeStore.h>
+#include <helpers/esp32/LotatoDebug.h>
+#include <helpers/esp32/LotatoNodeStore.h>
 
 static bool lotato_cli_continuation(const char* after_lotato) {
   unsigned char c = static_cast<unsigned char>(after_lotato[0]);
@@ -669,11 +669,11 @@ void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32
       id_hex[_i*2+1] = hexd[id.pub_key[_i] & 0xf];
     }
     id_hex[8] = '\0';
-    POTATO_MESH_DBG_LN("advert: !%s name=\"%.32s\" type=%u hops=%u ts=%lu gps=%s",
+    LOTATO_DBG_LN("advert: !%s name=\"%.32s\" type=%u hops=%u ts=%lu gps=%s",
                         id_hex, name, (unsigned)atype, (unsigned)packet->path_len,
                         (unsigned long)timestamp, parser.hasLatLon() ? "yes" : "no");
     int slot = _node_store.put(id.pub_key, name, atype, timestamp, lat, lon);
-    POTATO_MESH_DBG_LN("advert: !%s stored slot=%d (total=%d)", id_hex, slot, _node_store.count());
+    LOTATO_DBG_LN("advert: !%s stored slot=%d (total=%d)", id_hex, slot, _node_store.count());
   }
 #endif
 }
@@ -758,7 +758,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
         if (s_async_cli_busy) {
           strncpy(reply, "Err - busy (operation in progress)", MyMesh::kCliReplyCap - 1);
           reply[MyMesh::kCliReplyCap - 1] = '\0';
-          POTATO_MESH_DBG_LN("cli reply: reject (busy) cmd=%.60s", command);
+          LOTATO_DBG_LN("cli reply: reject (busy) cmd=%.60s", command);
         } else {
           // preset routing snapshot so async ops (e.g. wifi scan) can push results later
           s_scan_reply_target.valid          = true;
@@ -772,7 +772,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
           handleCommand(sender_timestamp, command, reply);
           // if an async op started it set s_async_cli_busy; leave snapshot valid for completion push
           if (!s_async_cli_busy) s_scan_reply_target.valid = false;
-          potato_mesh_dbg_trace_cli_exchange("mesh", mesh_cli_snap, reply);
+          lotato_dbg_trace_cli_exchange("mesh", mesh_cli_snap, reply);
         }
 #else
         handleCommand(sender_timestamp, command, reply);
@@ -1128,10 +1128,10 @@ void MyMesh::removeNeighbor(const uint8_t *pubkey, int key_len) {
 void MyMesh::formatStatsReply(char *reply) {
   StatsFormatHelper::formatCoreStats(reply, board, *_ms, _err_flags, _mgr);
 #ifdef ESP32
-  // Append potato node count to the JSON object.
+  // Append lotato node count to the JSON object.
   int len = strlen(reply);
   if (len > 1 && reply[len - 1] == '}') {
-    snprintf(reply + len - 1, 48, ",\"potato_nodes\":%d}", _node_store.count());
+    snprintf(reply + len - 1, 48, ",\"lotato_nodes\":%d}", _node_store.count());
   }
 #endif
 }
@@ -1394,15 +1394,15 @@ static void scan_rssi_bars(int32_t rssi, char out[7]) {
 }
 
 static void lotato_resume_sta_saved_credentials() {
-  PotatoMeshConfig& cfg = PotatoMeshConfig::instance();
+  LotatoConfig& cfg = LotatoConfig::instance();
   if (cfg.ssid()[0] == '\0') return;
   const char* pw = cfg.password()[0] ? cfg.password() : nullptr;
   WiFi.begin(cfg.ssid(), pw);
   WiFi.setSleep(WIFI_PS_NONE);
 }
 
-enum class PotatoWifiScanPhase : uint8_t { Idle, DisconnectWait, Scanning };
-static PotatoWifiScanPhase s_wscan_phase = PotatoWifiScanPhase::Idle;
+enum class LotatoWifiScanPhase : uint8_t { Idle, DisconnectWait, Scanning };
+static LotatoWifiScanPhase s_wscan_phase = LotatoWifiScanPhase::Idle;
 static uint32_t s_wscan_t0 = 0;
 /** Set when an async scan finished; cleared after user views page 1 via bare `lotato scan`. */
 static bool s_wscan_results_ready = false;
@@ -1442,20 +1442,20 @@ static void lotato_wifi_scan_fill_from_driver(int n) {
 
 void my_mesh_lotato_wifi_scan_poll(MyMesh* mesh) {
   switch (s_wscan_phase) {
-    case PotatoWifiScanPhase::Idle:
+    case LotatoWifiScanPhase::Idle:
       break;
-    case PotatoWifiScanPhase::DisconnectWait:
+    case LotatoWifiScanPhase::DisconnectWait:
       if ((int32_t)(millis() - s_wscan_t0) < 120) break;
-      POTATO_MESH_DBG_LN("potato CLI: wifi async scan radio ready");
+      LOTATO_DBG_LN("lotato CLI: wifi async scan radio ready");
       {
         int16_t started = WiFi.scanNetworks(true, false, false, 300);
         // Async success is WIFI_SCAN_RUNNING (-1); failure is WIFI_SCAN_FAILED (-2).
         if (started == WIFI_SCAN_FAILED) {
-          POTATO_MESH_DBG_LN("potato CLI: wifi async scan start failed");
+          LOTATO_DBG_LN("lotato CLI: wifi async scan start failed");
           WiFi.scanDelete();
-          potato_mesh_sta_failover_suppress(false);
+          lotato_sta_failover_suppress(false);
           lotato_resume_sta_saved_credentials();
-          s_wscan_phase = PotatoWifiScanPhase::Idle;
+          s_wscan_phase = LotatoWifiScanPhase::Idle;
           s_wscan_results_ready = false;
           if (s_scan_reply_target.valid) {
             mesh->enqueueTxtCliReply(s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len,
@@ -1465,19 +1465,19 @@ void my_mesh_lotato_wifi_scan_poll(MyMesh* mesh) {
           }
           s_async_cli_busy = false;
         } else {
-          s_wscan_phase = PotatoWifiScanPhase::Scanning;
+          s_wscan_phase = LotatoWifiScanPhase::Scanning;
         }
       }
       break;
-    case PotatoWifiScanPhase::Scanning: {
+    case LotatoWifiScanPhase::Scanning: {
       // abort if stuck for too long (runaway guard)
       if ((uint32_t)(millis() - s_wscan_t0) > kWifiScanTimeoutMs) {
-        POTATO_MESH_DBG_LN("potato CLI: wifi async scan TIMEOUT after %lums", (unsigned long)kWifiScanTimeoutMs);
+        LOTATO_DBG_LN("lotato CLI: wifi async scan TIMEOUT after %lums", (unsigned long)kWifiScanTimeoutMs);
         WiFi.scanDelete();
         s_scan_count = 0;
-        potato_mesh_sta_failover_suppress(false);
+        lotato_sta_failover_suppress(false);
         lotato_resume_sta_saved_credentials();
-        s_wscan_phase = PotatoWifiScanPhase::Idle;
+        s_wscan_phase = LotatoWifiScanPhase::Idle;
         if (s_scan_reply_target.valid) {
           mesh->enqueueTxtCliReply(s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len,
                                    s_scan_reply_target.out_path, s_scan_reply_target.path_hash_size,
@@ -1490,7 +1490,7 @@ void my_mesh_lotato_wifi_scan_poll(MyMesh* mesh) {
       int16_t cnt = WiFi.scanComplete();
       if (cnt == WIFI_SCAN_RUNNING) break;
       if (cnt == WIFI_SCAN_FAILED) {
-        POTATO_MESH_DBG_LN("potato CLI: wifi async scan complete failed");
+        LOTATO_DBG_LN("lotato CLI: wifi async scan complete failed");
         WiFi.scanDelete();
         s_scan_count = 0;
         s_wscan_results_ready = false;
@@ -1504,7 +1504,7 @@ void my_mesh_lotato_wifi_scan_poll(MyMesh* mesh) {
         lotato_wifi_scan_fill_from_driver((int)cnt);
         WiFi.scanDelete();
         s_wscan_results_ready = true;
-        POTATO_MESH_DBG_LN("potato CLI: wifi async scan done nets=%d", s_scan_count);
+        LOTATO_DBG_LN("lotato CLI: wifi async scan done nets=%d", s_scan_count);
         if (s_scan_reply_target.valid) {
           int total_pages = (s_scan_count + kScanPageSize - 1) / kScanPageSize;
           if (total_pages < 1) total_pages = 1;
@@ -1515,13 +1515,13 @@ void my_mesh_lotato_wifi_scan_poll(MyMesh* mesh) {
                                      s_scan_reply_target.out_path, s_scan_reply_target.path_hash_size,
                                      0, pgbuf);
           }
-          POTATO_MESH_DBG_LN("potato scan async: pushed %d page(s) nets=%d", total_pages, s_scan_count);
+          LOTATO_DBG_LN("lotato scan async: pushed %d page(s) nets=%d", total_pages, s_scan_count);
           s_scan_reply_target.valid = false;
         }
       }
-      potato_mesh_sta_failover_suppress(false);
+      lotato_sta_failover_suppress(false);
       lotato_resume_sta_saved_credentials();
-      s_wscan_phase = PotatoWifiScanPhase::Idle;
+      s_wscan_phase = LotatoWifiScanPhase::Idle;
       s_async_cli_busy = false;
       break;
     }
@@ -1534,7 +1534,7 @@ static void run_lotato_wifi_scan_cli(const char* page_arg, char* reply, MyMesh* 
     format_scan_page(atoi(page_arg), reply);
     return;
   }
-  if (s_wscan_phase != PotatoWifiScanPhase::Idle) {
+  if (s_wscan_phase != LotatoWifiScanPhase::Idle) {
     // scan already running — from serial this is reachable; from mesh it is blocked by busy gate
     snprintf(reply, MyMesh::kCliReplyCap, "WiFi scan in progress...");
     return;
@@ -1545,13 +1545,13 @@ static void run_lotato_wifi_scan_cli(const char* page_arg, char* reply, MyMesh* 
     format_scan_page(1, reply);
     return;
   }
-  potato_mesh_sta_failover_suppress(true);
+  lotato_sta_failover_suppress(true);
   WiFi.mode(WIFI_STA);
   WiFi.disconnect(false, false);
   s_wscan_t0 = millis();
-  s_wscan_phase = PotatoWifiScanPhase::DisconnectWait;
+  s_wscan_phase = LotatoWifiScanPhase::DisconnectWait;
   s_async_cli_busy = true;
-  POTATO_MESH_DBG_LN("potato CLI: wifi async scan queued");
+  LOTATO_DBG_LN("lotato CLI: wifi async scan queued");
   // immediate ack — mesh admin gets auto-pushed results when done; serial gets them on next call
   snprintf(reply, MyMesh::kCliReplyCap, "Scanning for WiFi devices...");
 }
@@ -1614,7 +1614,7 @@ void MyMesh::handleLotaToCommand(char* args, char* reply) {
     return;
   }
 
-  PotatoMeshConfig& cfg = PotatoMeshConfig::instance();
+  LotatoConfig& cfg = LotatoConfig::instance();
 
   // lotato status
   if (strcmp(args, "status") == 0 || *args == '\0') {
@@ -1653,7 +1653,7 @@ void MyMesh::handleLotaToCommand(char* args, char* reply) {
     while (*url == ' ') url++;
     cfg.setIngestOrigin(url);
     _ingestor.restartAfterConfigChange();
-    POTATO_MESH_DBG_LN("potato CLI: endpoint set url=%.60s", url);
+    LOTATO_DBG_LN("lotato CLI: endpoint set url=%.60s", url);
     snprintf(reply, MyMesh::kCliReplyCap, "OK - endpoint: %.100s", url);
 
   // lotato token <val>
@@ -1662,7 +1662,7 @@ void MyMesh::handleLotaToCommand(char* args, char* reply) {
     while (*tok == ' ') tok++;
     cfg.setApiToken(tok);
     _ingestor.restartAfterConfigChange();
-    POTATO_MESH_DBG_LN("potato CLI: token set (len=%u)", (unsigned)strlen(tok));
+    LOTATO_DBG_LN("lotato CLI: token set (len=%u)", (unsigned)strlen(tok));
     strcpy(reply, "OK - token saved");
 
   // lotato debug
@@ -1740,22 +1740,22 @@ void MyMesh::handleLotaToCommand(char* args, char* reply) {
       WiFi.mode(WIFI_STA);
       WiFi.begin(ssid_to_use, pwd_to_use);
       WiFi.setSleep(WIFI_PS_NONE);
-      POTATO_MESH_DBG_LN("potato CLI: wifi connecting ssid=%.32s modem_sleep=off", ssid_to_use);
+      LOTATO_DBG_LN("lotato CLI: wifi connecting ssid=%.32s modem_sleep=off", ssid_to_use);
       snprintf(reply, MyMesh::kCliReplyCap, "OK - connecting to %.32s", ssid_to_use);
     }
 
   // lotato contacts
   } else if (strcmp(args, "contacts") == 0) {
     snprintf(reply, MyMesh::kCliReplyCap, "Nodes: %d/%d\nRepost: %lus\nFile: %s",
-             _node_store.count(), PotatoNodeStore::MAX,
-             (unsigned long)(POTATO_NODE_REPOST_MS / 1000),
-             PotatoNodeStore::PATH);
+             _node_store.count(), LotatoNodeStore::MAX,
+             (unsigned long)(LOTATO_NODE_REPOST_MS / 1000),
+             LotatoNodeStore::PATH);
 
   // lotato flush — re-post all known nodes on next sweep
   } else if (strcmp(args, "flush") == 0) {
     _node_store.resetPostTimers();
     _node_store.logFlushTargetsDebug();
-    POTATO_MESH_DBG_LN("potato CLI: flush — reset post timers for %d nodes", _node_store.count());
+    LOTATO_DBG_LN("lotato CLI: flush — reset post timers for %d nodes", _node_store.count());
     snprintf(reply, MyMesh::kCliReplyCap, "OK - will re-post %d nodes", _node_store.count());
 
   } else {
@@ -1773,12 +1773,12 @@ bool MyMesh::enqueueTxtCliReply(int acl_idx, uint8_t out_path_len, const uint8_t
 
   CliReplyJob* job = new CliReplyJob();
   if (!job) {
-    POTATO_MESH_DBG_LN("cli reply q: OOM job acl=%d", acl_idx);
+    LOTATO_DBG_LN("cli reply q: OOM job acl=%d", acl_idx);
     return false;
   }
   job->text = new char[len + 1];
   if (!job->text) {
-    POTATO_MESH_DBG_LN("cli reply q: OOM text acl=%d len=%u", acl_idx, (unsigned)len);
+    LOTATO_DBG_LN("cli reply q: OOM text acl=%d len=%u", acl_idx, (unsigned)len);
     delete job;
     return false;
   }
@@ -1801,7 +1801,7 @@ bool MyMesh::enqueueTxtCliReply(int acl_idx, uint8_t out_path_len, const uint8_t
   }
 
   size_t chunks = (len + kMaxTxtChunk - 1) / kMaxTxtChunk;
-  POTATO_MESH_DBG_LN("cli reply q: enqueue len=%u chunks~%u acl=%d", (unsigned)len, (unsigned)chunks, acl_idx);
+  LOTATO_DBG_LN("cli reply q: enqueue len=%u chunks~%u acl=%d", (unsigned)len, (unsigned)chunks, acl_idx);
   return true;
 }
 
@@ -1811,7 +1811,7 @@ void MyMesh::serviceCliReplyQueue() {
   if ((long)(millis() - job->next_send_at) < 0) return;
 
   if (job->acl_idx < 0 || job->acl_idx >= acl.getNumClients()) {
-    POTATO_MESH_DBG_LN("cli reply q: drop stale acl=%d", job->acl_idx);
+    LOTATO_DBG_LN("cli reply q: drop stale acl=%d", job->acl_idx);
     _cli_reply_root = job->next;
     if (!_cli_reply_root) _cli_reply_tip = nullptr;
     delete[] job->text;
@@ -1853,7 +1853,7 @@ void MyMesh::serviceCliReplyQueue() {
     sent = true;
   }
 
-  POTATO_MESH_DBG_LN("cli reply tx: chunk %u/%u bytes=%u %s acl=%d peer=%02x%02x%02x%02x %s",
+  LOTATO_DBG_LN("cli reply tx: chunk %u/%u bytes=%u %s acl=%d peer=%02x%02x%02x%02x %s",
     (unsigned)cur_chunk, (unsigned)total_chunks, (unsigned)chunk,
     (job->out_path_len == OUT_PATH_UNKNOWN) ? "flood" : "direct",
     job->acl_idx,
@@ -1861,8 +1861,8 @@ void MyMesh::serviceCliReplyQueue() {
     (unsigned)client->id.pub_key[2], (unsigned)client->id.pub_key[3],
     sent ? "ok" : "FAIL");
 #ifdef ESP32
-  if (potato_mesh_dbg_active()) {
-    Serial.print("PotatoMesh: cli reply tx: full msg len=");
+  if (lotato_dbg_active()) {
+    Serial.print("Lotato: cli reply tx: full msg len=");
     Serial.print((unsigned)job->total_len);
     Serial.print(": ");
     const char* p = job->text;
@@ -1874,7 +1874,7 @@ void MyMesh::serviceCliReplyQueue() {
 
   job->offset += chunk;
   if (job->offset >= job->total_len) {
-    POTATO_MESH_DBG_LN("cli reply q: complete %u/%u acl=%d",
+    LOTATO_DBG_LN("cli reply q: complete %u/%u acl=%d",
       (unsigned)cur_chunk, (unsigned)total_chunks, job->acl_idx);
     _cli_reply_root = job->next;
     if (!_cli_reply_root) _cli_reply_tip = nullptr;

@@ -1,47 +1,47 @@
-#include "PotatoMeshConfig.h"
+#include "LotatoConfig.h"
 
 #ifdef ESP32
 
 #include <Preferences.h>
-#include <helpers/esp32/PotatoMeshDebug.h>
+#include <helpers/esp32/LotatoDebug.h>
 #include <cstring>
 
 namespace {
 
-constexpr char kNs[] = "potatomesh";
-constexpr char kKeyVer[] = "pm_v";
+constexpr char kNs[] = "lotato";
+constexpr char kKeyVer[] = "lv";
 constexpr char kKeyKn[] = "kn";
 
 static bool is_ws(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
 
 } // namespace
 
-PotatoMeshConfig& PotatoMeshConfig::instance() {
-  static PotatoMeshConfig inst;
+LotatoConfig& LotatoConfig::instance() {
+  static LotatoConfig inst;
   return inst;
 }
 
-void PotatoMeshConfig::migrateFromBuildFlagsIfNeeded() {
+void LotatoConfig::migrateFromBuildFlagsIfNeeded() {
   Preferences prefs;
   if (!prefs.begin(kNs, false)) return;
   if (prefs.getUChar(kKeyVer, 0) != 0) { prefs.end(); return; }
-#if defined(POTATO_MESH_INGEST_URL)
-  if (prefs.getString("url", "").length() == 0) prefs.putString("url", POTATO_MESH_INGEST_URL);
+#if defined(LOTATO_INGEST_URL)
+  if (prefs.getString("url", "").length() == 0) prefs.putString("url", LOTATO_INGEST_URL);
 #endif
-#if defined(POTATO_MESH_API_TOKEN)
-  if (prefs.getString("token", "").length() == 0) prefs.putString("token", POTATO_MESH_API_TOKEN);
+#if defined(LOTATO_API_TOKEN)
+  if (prefs.getString("token", "").length() == 0) prefs.putString("token", LOTATO_API_TOKEN);
 #endif
-#if defined(POTATO_MESH_WIFI_SSID)
-  if (prefs.getString("ssid", "").length() == 0) prefs.putString("ssid", POTATO_MESH_WIFI_SSID);
+#if defined(LOTATO_WIFI_SSID)
+  if (prefs.getString("ssid", "").length() == 0) prefs.putString("ssid", LOTATO_WIFI_SSID);
 #endif
-#if defined(POTATO_MESH_WIFI_PWD)
-  if (!prefs.isKey("pwd")) prefs.putString("pwd", POTATO_MESH_WIFI_PWD);
+#if defined(LOTATO_WIFI_PWD)
+  if (!prefs.isKey("pwd")) prefs.putString("pwd", LOTATO_WIFI_PWD);
 #endif
   prefs.putUChar(kKeyVer, 1);
   prefs.end();
 }
 
-void PotatoMeshConfig::migrateKnownProfilesIfNeeded() {
+void LotatoConfig::migrateKnownProfilesIfNeeded() {
   Preferences prefs;
   if (!prefs.begin(kNs, false)) return;
   uint8_t v = prefs.getUChar(kKeyVer, 0);
@@ -52,14 +52,14 @@ void PotatoMeshConfig::migrateKnownProfilesIfNeeded() {
       prefs.putString("ks0", s);
       prefs.putString("kp0", prefs.getString("pwd", ""));
       prefs.putUChar(kKeyKn, 1);
-      POTATO_MESH_DBG_LN("potato cfg: migrated known WiFi from active ssid");
+      LOTATO_DBG_LN("lotato cfg: migrated known WiFi from active ssid");
     }
   }
   prefs.putUChar(kKeyVer, 2);
   prefs.end();
 }
 
-void PotatoMeshConfig::loadKnownWifi(Preferences& prefs) {
+void LotatoConfig::loadKnownWifi(Preferences& prefs) {
   _known_cnt = prefs.getUChar(kKeyKn, 0);
   if (_known_cnt > KNOWN_WIFI_MAX) _known_cnt = KNOWN_WIFI_MAX;
   for (uint8_t i = 0; i < KNOWN_WIFI_MAX; i++) {
@@ -75,7 +75,7 @@ void PotatoMeshConfig::loadKnownWifi(Preferences& prefs) {
   }
 }
 
-void PotatoMeshConfig::load() {
+void LotatoConfig::load() {
   migrateFromBuildFlagsIfNeeded();
   migrateKnownProfilesIfNeeded();
 
@@ -91,7 +91,7 @@ void PotatoMeshConfig::load() {
   _loaded = true;
 }
 
-bool PotatoMeshConfig::getKnownWifi(uint8_t idx, char* out_ssid, size_t ssid_cap, char* out_pwd, size_t pwd_cap) const {
+bool LotatoConfig::getKnownWifi(uint8_t idx, char* out_ssid, size_t ssid_cap, char* out_pwd, size_t pwd_cap) const {
   if (idx >= _known_cnt || !out_ssid || ssid_cap < 1) return false;
   strncpy(out_ssid, _known_ssid[idx], ssid_cap - 1);
   out_ssid[ssid_cap - 1] = '\0';
@@ -102,7 +102,7 @@ bool PotatoMeshConfig::getKnownWifi(uint8_t idx, char* out_ssid, size_t ssid_cap
   return true;
 }
 
-bool PotatoMeshConfig::isKnownWifiSsid(const char* ssid) const {
+bool LotatoConfig::isKnownWifiSsid(const char* ssid) const {
   if (!ssid || !ssid[0]) return false;
   for (uint8_t i = 0; i < _known_cnt; i++) {
     if (strcmp(_known_ssid[i], ssid) == 0) return true;
@@ -110,7 +110,7 @@ bool PotatoMeshConfig::isKnownWifiSsid(const char* ssid) const {
   return false;
 }
 
-bool PotatoMeshConfig::getKnownWifiPassword(const char* ssid, char* out_pwd, size_t pwd_cap) const {
+bool LotatoConfig::getKnownWifiPassword(const char* ssid, char* out_pwd, size_t pwd_cap) const {
   if (!ssid || !ssid[0] || !out_pwd || pwd_cap < 1) return false;
   for (uint8_t i = 0; i < _known_cnt; i++) {
     if (strcmp(_known_ssid[i], ssid) == 0) {
@@ -122,7 +122,7 @@ bool PotatoMeshConfig::getKnownWifiPassword(const char* ssid, char* out_pwd, siz
   return false;
 }
 
-void PotatoMeshConfig::persistKnownWifi() {
+void LotatoConfig::persistKnownWifi() {
   Preferences prefs;
   if (!prefs.begin(kNs, false)) return;
   prefs.putUChar(kKeyKn, _known_cnt);
@@ -136,7 +136,7 @@ void PotatoMeshConfig::persistKnownWifi() {
   prefs.end();
 }
 
-void PotatoMeshConfig::rememberWifi(const char* ssid, const char* pwd) {
+void LotatoConfig::rememberWifi(const char* ssid, const char* pwd) {
   if (!ssid || !ssid[0]) return;
   const char* pp = pwd ? pwd : "";
 
@@ -161,21 +161,21 @@ void PotatoMeshConfig::rememberWifi(const char* ssid, const char* pwd) {
   strncpy(_known_pwd[0], pp, sizeof(_known_pwd[0]) - 1);
   _known_pwd[0][sizeof(_known_pwd[0]) - 1] = '\0';
   persistKnownWifi();
-  POTATO_MESH_DBG_LN("potato cfg: wifi saved count=%u", (unsigned)_known_cnt);
+  LOTATO_DBG_LN("lotato cfg: wifi saved count=%u", (unsigned)_known_cnt);
 }
 
-bool PotatoMeshConfig::isIngestReady() const {
+bool LotatoConfig::isIngestReady() const {
   return _url[0] != '\0' && _token[0] != '\0';
 }
 
 static void put_string_pref(const char* key, const char* val) {
   Preferences prefs;
-  if (!prefs.begin("potatomesh", false)) return;
+  if (!prefs.begin("lotato", false)) return;
   prefs.putString(key, val ? val : "");
   prefs.end();
 }
 
-bool PotatoMeshConfig::forgetKnownWifi(const char* ssid) {
+bool LotatoConfig::forgetKnownWifi(const char* ssid) {
   if (!ssid || !ssid[0]) return false;
   bool found = false;
   uint8_t w = 0;
@@ -202,11 +202,11 @@ bool PotatoMeshConfig::forgetKnownWifi(const char* ssid) {
     put_string_pref("pwd", "");
   }
   persistKnownWifi();
-  POTATO_MESH_DBG_LN("potato cfg: forgot wifi ssid=\"%.32s\" active_cleared=%d", ssid, clear_active ? 1 : 0);
+  LOTATO_DBG_LN("lotato cfg: forgot wifi ssid=\"%.32s\" active_cleared=%d", ssid, clear_active ? 1 : 0);
   return true;
 }
 
-void PotatoMeshConfig::setWifi(const char* s, const char* p) {
+void LotatoConfig::setWifi(const char* s, const char* p) {
   const char* ss = s ? s : "";
   const char* pp = p ? p : "";
   strncpy(_ssid, ss, sizeof(_ssid) - 1); _ssid[sizeof(_ssid) - 1] = '\0';
@@ -216,13 +216,13 @@ void PotatoMeshConfig::setWifi(const char* s, const char* p) {
   rememberWifi(_ssid, _pwd);
 }
 
-void PotatoMeshConfig::setApiToken(const char* t) {
+void LotatoConfig::setApiToken(const char* t) {
   const char* tt = t ? t : "";
   strncpy(_token, tt, sizeof(_token) - 1); _token[sizeof(_token) - 1] = '\0';
   put_string_pref("token", _token);
 }
 
-void PotatoMeshConfig::setIngestOrigin(const char* u) {
+void LotatoConfig::setIngestOrigin(const char* u) {
   const char* uu = u ? u : "";
   while (*uu && is_ws(*uu)) uu++;
   size_t len = strlen(uu);
@@ -231,17 +231,17 @@ void PotatoMeshConfig::setIngestOrigin(const char* u) {
   memcpy(_url, uu, len);
   _url[len] = '\0';
   put_string_pref("url", _url);
-  POTATO_MESH_DBG_LN("potato cfg: ingest origin set (len=%u)", (unsigned)strlen(_url));
+  LOTATO_DBG_LN("lotato cfg: ingest origin set (len=%u)", (unsigned)strlen(_url));
 }
 
-void PotatoMeshConfig::setDebug(bool on) {
+void LotatoConfig::setDebug(bool on) {
   _debug = on;
   Preferences prefs;
-  if (!prefs.begin("potatomesh", false)) return;
+  if (!prefs.begin("lotato", false)) return;
   prefs.putBool("dbg", _debug);
   prefs.end();
 }
 
-void PotatoMeshConfig::toggleDebug() { setDebug(!debugEnabled()); }
+void LotatoConfig::toggleDebug() { setDebug(!debugEnabled()); }
 
 #endif // ESP32

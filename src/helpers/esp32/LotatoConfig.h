@@ -5,13 +5,13 @@
 class Preferences;
 
 /**
- * NVS-backed WiFi STA + potato-mesh HTTP ingest settings (ESP32).
+ * NVS-backed WiFi STA + Lotato HTTP ingest settings (ESP32).
  */
-class PotatoMeshConfig {
+class LotatoConfig {
 public:
-  static PotatoMeshConfig& instance();
+  static LotatoConfig& instance();
 
-  /** Load from NVS; on first run seeds from compile-time POTATO_MESH_* macros when defined. */
+  /** Load from NVS; on first run seeds from compile-time LOTATO_* macros when defined. */
   void load();
 
   bool isIngestReady() const;
@@ -39,7 +39,7 @@ public:
   void toggleDebug();
 
 private:
-  PotatoMeshConfig() : _loaded(false), _debug(false), _known_cnt(0) {
+  LotatoConfig() : _loaded(false), _debug(false), _known_cnt(0) {
     _ssid[0] = _pwd[0] = _url[0] = _token[0] = '\0';
     memset(_known_ssid, 0, sizeof(_known_ssid));
     memset(_known_pwd, 0, sizeof(_known_pwd));

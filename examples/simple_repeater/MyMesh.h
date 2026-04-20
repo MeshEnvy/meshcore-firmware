@@ -36,9 +36,9 @@
 #include "RateLimiter.h"
 
 #ifdef ESP32
-#include <helpers/esp32/PotatoMeshConfig.h>
-#include <helpers/esp32/PotatoMeshIngestor.h>
-#include <helpers/esp32/PotatoNodeStore.h>
+#include <helpers/esp32/LotatoConfig.h>
+#include <helpers/esp32/LotatoIngestor.h>
+#include <helpers/esp32/LotatoNodeStore.h>
 #endif
 
 #ifdef WITH_BRIDGE
@@ -140,8 +140,8 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
 #endif
 
 #ifdef ESP32
-  PotatoMeshIngestor _ingestor;
-  PotatoNodeStore    _node_store;
+  LotatoIngestor _ingestor;
+  LotatoNodeStore    _node_store;
   /** Reply buffer size is `kCliReplyCap` (see main.cpp and onPeerDataRecv temp slice). */
   void handleLotaToCommand(char* args, char* reply);
 #endif

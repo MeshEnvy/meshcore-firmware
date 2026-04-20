@@ -1,12 +1,12 @@
-#include "PotatoMeshIngestor.h"
+#include "LotatoIngestor.h"
 
 #ifdef ESP32
 
 #include <MeshCore.h>
 #include <helpers/AdvertDataHelpers.h>
-#include <helpers/esp32/PotatoMeshConfig.h>
-#include <helpers/esp32/PotatoMeshDebug.h>
-#include <helpers/esp32/PotatoNodeStore.h>
+#include <helpers/esp32/LotatoConfig.h>
+#include <helpers/esp32/LotatoDebug.h>
+#include <helpers/esp32/LotatoNodeStore.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <esp_http_client.h>
@@ -19,61 +19,61 @@ extern "C" esp_err_t esp_crt_bundle_attach(void* conf);
 #include <cstring>
 #include <time.h>
 
-#ifndef POTATO_MESH_INGEST_API_PATH
-#define POTATO_MESH_INGEST_API_PATH "/api/nodes"
+#ifndef LOTATO_INGEST_API_PATH
+#define LOTATO_INGEST_API_PATH "/api/nodes"
 #endif
 /** Matches Python :func:`queue_ingestor_heartbeat` → ``POST /api/ingestors``. */
-#ifndef POTATO_MESH_INGESTORS_API_PATH
-#define POTATO_MESH_INGESTORS_API_PATH "/api/ingestors"
+#ifndef LOTATO_INGESTORS_API_PATH
+#define LOTATO_INGESTORS_API_PATH "/api/ingestors"
 #endif
 /** Ingestor ``version`` field (required by web ``upsert_ingestor``); override at build time if needed. */
-#ifndef POTATO_MESH_INGESTOR_VERSION
-#define POTATO_MESH_INGESTOR_VERSION "meshcore-esp32"
+#ifndef LOTATO_INGESTOR_VERSION
+#define LOTATO_INGESTOR_VERSION "meshcore-esp32"
 #endif
 /** Default aligns with :data:`HEARTBEAT_INTERVAL_SECS` in ``data/mesh_ingestor/ingestors.py``. */
-#ifndef POTATO_MESH_INGESTOR_HEARTBEAT_MS
-#define POTATO_MESH_INGESTOR_HEARTBEAT_MS (60UL * 60UL * 1000UL)
+#ifndef LOTATO_INGESTOR_HEARTBEAT_MS
+#define LOTATO_INGESTOR_HEARTBEAT_MS (60UL * 60UL * 1000UL)
 #endif
-#ifndef POTATO_MESH_HTTP_RETRY_DELAY_MS
-#define POTATO_MESH_HTTP_RETRY_DELAY_MS 400
+#ifndef LOTATO_HTTP_RETRY_DELAY_MS
+#define LOTATO_HTTP_RETRY_DELAY_MS 400
 #endif
-#ifndef POTATO_MESH_HTTP_TIMEOUT_MS
-#define POTATO_MESH_HTTP_TIMEOUT_MS 12000
+#ifndef LOTATO_HTTP_TIMEOUT_MS
+#define LOTATO_HTTP_TIMEOUT_MS 12000
 #endif
-#ifndef POTATO_MESH_HTTP_CONNECT_TIMEOUT_MS
-#define POTATO_MESH_HTTP_CONNECT_TIMEOUT_MS 8000
+#ifndef LOTATO_HTTP_CONNECT_TIMEOUT_MS
+#define LOTATO_HTTP_CONNECT_TIMEOUT_MS 8000
 #endif
-#ifndef POTATO_MESH_INGEST_WORKER_STACK
-#define POTATO_MESH_INGEST_WORKER_STACK 12288
+#ifndef LOTATO_INGEST_WORKER_STACK
+#define LOTATO_INGEST_WORKER_STACK 12288
 #endif
 /** Max JSON body size for one /api/nodes batch POST (ESP32 heap). */
-#ifndef POTATO_MESH_INGEST_BODY_CAP
-#define POTATO_MESH_INGEST_BODY_CAP 4096
+#ifndef LOTATO_INGEST_BODY_CAP
+#define LOTATO_INGEST_BODY_CAP 4096
 #endif
 /** Max node entries merged into one POST (also limited by body cap). */
-#ifndef POTATO_MESH_INGEST_BATCH_MAX_SLOTS
-#define POTATO_MESH_INGEST_BATCH_MAX_SLOTS 48
+#ifndef LOTATO_INGEST_BATCH_MAX_SLOTS
+#define LOTATO_INGEST_BATCH_MAX_SLOTS 48
 #endif
-#ifndef POTATO_MESH_WIFI_DOWN_LOG_INTERVAL_MS
-#define POTATO_MESH_WIFI_DOWN_LOG_INTERVAL_MS 8000
+#ifndef LOTATO_WIFI_DOWN_LOG_INTERVAL_MS
+#define LOTATO_WIFI_DOWN_LOG_INTERVAL_MS 8000
 #endif
 /** Set to 1 to force 1.1.1.1/8.8.8.8 on GOT_IP (can break LANs that block third-party DNS). */
-#ifndef POTATO_MESH_STA_FORCE_PUBLIC_DNS
-#define POTATO_MESH_STA_FORCE_PUBLIC_DNS 0
+#ifndef LOTATO_STA_FORCE_PUBLIC_DNS
+#define LOTATO_STA_FORCE_PUBLIC_DNS 0
 #endif
 
 
 namespace {
 
-constexpr size_t kBodyCap = POTATO_MESH_INGEST_BODY_CAP;
-constexpr size_t kBatchMaxSlots = POTATO_MESH_INGEST_BATCH_MAX_SLOTS;
+constexpr size_t kBodyCap = LOTATO_INGEST_BODY_CAP;
+constexpr size_t kBatchMaxSlots = LOTATO_INGEST_BATCH_MAX_SLOTS;
 
 char g_batch_body[kBodyCap]{};
 uint16_t g_batch_len = 0;
 uint8_t g_batch_n = 0;
 uint16_t g_batch_slots[kBatchMaxSlots]{};
 char g_batch_node_ids[kBatchMaxSlots][12]{};
-PotatoNodeStore* g_batch_store = nullptr;
+LotatoNodeStore* g_batch_store = nullptr;
 uint8_t g_batch_self_pk[PUB_KEY_SIZE]{};
 uint32_t g_batch_next_retry_ms = 0;
 uint32_t g_batch_fail_backoff_ms = 0;
@@ -116,15 +116,15 @@ static bool ingest_copy_url_hostname(const char* url, char* host_out, size_t cap
 }
 
 static void log_ingest_dns_for_host(const char* full_url) {
-  if (!potato_mesh_dbg_active()) return;
+  if (!lotato_dbg_active()) return;
   char host[96];
   if (!ingest_copy_url_hostname(full_url, host, sizeof(host))) return;
   IPAddress ip;
   if (WiFi.hostByName(host, ip)) {
-    POTATO_MESH_DBG_LN("potato ingest: DNS ok host=%.64s -> %s", host, ip.toString().c_str());
+    LOTATO_DBG_LN("lotato ingest: DNS ok host=%.64s -> %s", host, ip.toString().c_str());
   } else {
-    POTATO_MESH_DBG_LN(
-        "potato ingest: DNS failed host=%.64s (use router DNS; check tunnel/ngrok up)",
+    LOTATO_DBG_LN(
+        "lotato ingest: DNS failed host=%.64s (use router DNS; check tunnel/ngrok up)",
         host);
   }
 }
@@ -152,7 +152,7 @@ static void log_or_discard_response_body(HTTPClient& http, const char* node_id) 
     int n = s.readBytes((uint8_t*)buf, (size_t)sz);
     if (n < 0) n = 0;
     buf[std::min(n, 512)] = '\0';
-    POTATO_MESH_DBG_LN("post %s: response body (%d bytes): %s", node_id, sz, buf);
+    LOTATO_DBG_LN("post %s: response body (%d bytes): %s", node_id, sz, buf);
     return;
   }
   discard_http_body(http);
@@ -187,34 +187,34 @@ static bool try_post_https_esp_http(const char* full_url, const char* post_label
   esp_http_client_config_t cfg{};
   cfg.url = full_url;
   cfg.method = HTTP_METHOD_POST;
-  cfg.timeout_ms = (int)POTATO_MESH_HTTP_TIMEOUT_MS;
+  cfg.timeout_ms = (int)LOTATO_HTTP_TIMEOUT_MS;
   cfg.crt_bundle_attach = esp_crt_bundle_attach;
   cfg.transport_type = HTTP_TRANSPORT_OVER_SSL;
 
   esp_http_client_handle_t client = esp_http_client_init(&cfg);
   if (!client) {
-    POTATO_MESH_DBG_LN("post %s: esp_http_client_init failed", post_label);
+    LOTATO_DBG_LN("post %s: esp_http_client_init failed", post_label);
     g_last_http_code = 0;
     return false;
   }
 
   esp_http_client_set_header(client, "Content-Type", "application/json");
   char auth_hdr[200];
-  snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", PotatoMeshConfig::instance().apiToken());
+  snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", LotatoConfig::instance().apiToken());
   esp_http_client_set_header(client, "Authorization", auth_hdr);
-  const char* origin = PotatoMeshConfig::instance().ingestOrigin();
+  const char* origin = LotatoConfig::instance().ingestOrigin();
   if (origin && strstr(origin, "ngrok") != nullptr) {
     esp_http_client_set_header(client, "ngrok-skip-browser-warning", "true");
   }
 
   if (esp_http_client_set_post_field(client, body, (int)n) != ESP_OK) {
-    POTATO_MESH_DBG_LN("post %s: esp_http set_post_field failed", post_label);
+    LOTATO_DBG_LN("post %s: esp_http set_post_field failed", post_label);
     esp_http_client_cleanup(client);
     g_last_http_code = 0;
     return false;
   }
 
-  POTATO_MESH_DBG_LN("post %s: heap=%u POST %u bytes to %s (esp_http)", post_label,
+  LOTATO_DBG_LN("post %s: heap=%u POST %u bytes to %s (esp_http)", post_label,
                       (unsigned)ESP.getFreeHeap(), (unsigned)n, full_url);
 
   esp_err_t err = esp_http_client_perform(client);
@@ -223,22 +223,22 @@ static bool try_post_https_esp_http(const char* full_url, const char* post_label
   esp_http_client_cleanup(client);
 
   if (err != ESP_OK) {
-    POTATO_MESH_DBG_LN("post %s: esp_http err=%s", post_label, esp_err_to_name(err));
+    LOTATO_DBG_LN("post %s: esp_http err=%s", post_label, esp_err_to_name(err));
     return false;
   }
 
   if (status >= 200 && status < 300) {
-    POTATO_MESH_DBG_LN("post %s: HTTP %d ok", post_label, status);
+    LOTATO_DBG_LN("post %s: HTTP %d ok", post_label, status);
     return true;
   }
 
-  POTATO_MESH_DBG_LN("post %s: HTTP %d (will retry)", post_label, status);
+  LOTATO_DBG_LN("post %s: HTTP %d (will retry)", post_label, status);
   return false;
 }
 
 static bool ingest_http_session_matches(const char* full_url) {
   if (!g_ingest_sess.active) return false;
-  PotatoMeshConfig& cfg = PotatoMeshConfig::instance();
+  LotatoConfig& cfg = LotatoConfig::instance();
   if (strcmp(g_ingest_sess.full_url, full_url) != 0 ||
       strcmp(g_ingest_sess.origin, cfg.ingestOrigin()) != 0 ||
       strcmp(g_ingest_sess.token, cfg.apiToken()) != 0) return false;
@@ -247,7 +247,7 @@ static bool ingest_http_session_matches(const char* full_url) {
 }
 
 static void capture_ingest_http_session(const char* full_url) {
-  PotatoMeshConfig& cfg = PotatoMeshConfig::instance();
+  LotatoConfig& cfg = LotatoConfig::instance();
   strncpy(g_ingest_sess.full_url, full_url, sizeof(g_ingest_sess.full_url) - 1);
   g_ingest_sess.full_url[sizeof(g_ingest_sess.full_url) - 1] = '\0';
   strncpy(g_ingest_sess.origin, cfg.ingestOrigin(), sizeof(g_ingest_sess.origin) - 1);
@@ -259,7 +259,7 @@ static void capture_ingest_http_session(const char* full_url) {
 }
 
 static bool build_ingest_post_url_for_path(char* full, size_t cap, const char* path) {
-  const char* base = PotatoMeshConfig::instance().ingestOrigin();
+  const char* base = LotatoConfig::instance().ingestOrigin();
   if (!base || base[0] == '\0') return false;
   if (!path || path[0] != '/') return false;
   size_t blen = strlen(base);
@@ -269,21 +269,21 @@ static bool build_ingest_post_url_for_path(char* full, size_t cap, const char* p
 }
 
 static bool build_ingest_post_url(char* full, size_t cap) {
-  return build_ingest_post_url_for_path(full, cap, POTATO_MESH_INGEST_API_PATH);
+  return build_ingest_post_url_for_path(full, cap, LOTATO_INGEST_API_PATH);
 }
 
 static bool try_post_once_at_path(const char* api_path, const char* post_label, const char* body, uint16_t n) {
   char full_url[256];
   if (!build_ingest_post_url_for_path(full_url, sizeof(full_url), api_path)) {
-    POTATO_MESH_DBG_LN("post %s: ingest URL build failed", post_label);
+    LOTATO_DBG_LN("post %s: ingest URL build failed", post_label);
     return false;
   }
 
-  const char* origin = PotatoMeshConfig::instance().ingestOrigin();
+  const char* origin = LotatoConfig::instance().ingestOrigin();
   if (is_https_origin(origin)) {
     log_ingest_dns_for_host(full_url);
-    if (potato_mesh_dbg_active()) {
-      POTATO_MESH_DBG_LN("potato ingest: HTTPS esp_http (IDF tls + CA bundle)");
+    if (lotato_dbg_active()) {
+      LOTATO_DBG_LN("lotato ingest: HTTPS esp_http (IDF tls + CA bundle)");
     }
     return try_post_https_esp_http(full_url, post_label, body, n);
   }
@@ -293,8 +293,8 @@ static bool try_post_once_at_path(const char* api_path, const char* post_label, 
   }
 
   g_ingest_http.setReuse(true);
-  g_ingest_http.setConnectTimeout((int32_t)POTATO_MESH_HTTP_CONNECT_TIMEOUT_MS);
-  g_ingest_http.setTimeout((uint32_t)POTATO_MESH_HTTP_TIMEOUT_MS);
+  g_ingest_http.setConnectTimeout((int32_t)LOTATO_HTTP_CONNECT_TIMEOUT_MS);
+  g_ingest_http.setTimeout((uint32_t)LOTATO_HTTP_TIMEOUT_MS);
 
   bool ok_begin = false;
   if (g_ingest_sess.active) {
@@ -305,7 +305,7 @@ static bool try_post_once_at_path(const char* api_path, const char* post_label, 
   }
 
   if (!ok_begin) {
-    POTATO_MESH_DBG_LN("post %s: http.begin() failed URL=%s", post_label, full_url);
+    LOTATO_DBG_LN("post %s: http.begin() failed URL=%s", post_label, full_url);
     reset_ingest_http_session();
     return false;
   }
@@ -319,26 +319,26 @@ static bool try_post_once_at_path(const char* api_path, const char* post_label, 
   }
   g_ingest_http.addHeader("Content-Type", "application/json");
   char auth_hdr[200];
-  snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", PotatoMeshConfig::instance().apiToken());
+  snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", LotatoConfig::instance().apiToken());
   g_ingest_http.addHeader("Authorization", auth_hdr);
 
-  POTATO_MESH_DBG_LN("post %s: heap=%u POST %u bytes to %s", post_label,
+  LOTATO_DBG_LN("post %s: heap=%u POST %u bytes to %s", post_label,
                       (unsigned)ESP.getFreeHeap(), (unsigned)n, full_url);
 
   int code = g_ingest_http.POST((uint8_t*)body, (size_t)n);
   g_last_http_code = code;
 
   if (code >= 200 && code < 300) {
-    POTATO_MESH_DBG_LN("post %s: HTTP %d ok", post_label, code);
+    LOTATO_DBG_LN("post %s: HTTP %d ok", post_label, code);
     discard_http_body(g_ingest_http);
     return true;
   }
 
   log_or_discard_response_body(g_ingest_http, post_label);
   if (code < 0) {
-    POTATO_MESH_DBG_LN("post %s: transport error %d", post_label, code);
+    LOTATO_DBG_LN("post %s: transport error %d", post_label, code);
   } else {
-    POTATO_MESH_DBG_LN("post %s: HTTP %d (will retry)", post_label, code);
+    LOTATO_DBG_LN("post %s: HTTP %d (will retry)", post_label, code);
   }
   if (code < 0 || code == 401) {
     reset_ingest_http_session();
@@ -347,10 +347,10 @@ static bool try_post_once_at_path(const char* api_path, const char* post_label, 
 }
 
 static bool try_post_once(const char* post_label, const char* body, uint16_t n) {
-  return try_post_once_at_path(POTATO_MESH_INGEST_API_PATH, post_label, body, n);
+  return try_post_once_at_path(LOTATO_INGEST_API_PATH, post_label, body, n);
 }
 
-uint8_t potato_ingest_queue_depth() {
+uint8_t lotato_ingest_queue_depth() {
   if (!g_q_mtx) return g_batch_n;
   xSemaphoreTake(g_q_mtx, portMAX_DELAY);
   uint8_t n = g_batch_n;
@@ -358,7 +358,7 @@ uint8_t potato_ingest_queue_depth() {
   return n;
 }
 
-void potato_ingest_clear_queue() {
+void lotato_ingest_clear_queue() {
   reset_ingest_http_session();
   g_ingestor_heartbeat_ok_ms = 0;
   if (!g_q_mtx) {
@@ -366,7 +366,7 @@ void potato_ingest_clear_queue() {
     g_batch_n = 0;
     g_batch_store = nullptr;
     g_batch_next_retry_ms = g_batch_fail_backoff_ms = 0;
-    POTATO_MESH_DBG_LN("ingest batch cleared");
+    LOTATO_DBG_LN("ingest batch cleared");
     return;
   }
   xSemaphoreTake(g_q_mtx, portMAX_DELAY);
@@ -375,7 +375,7 @@ void potato_ingest_clear_queue() {
   g_batch_store = nullptr;
   g_batch_next_retry_ms = g_batch_fail_backoff_ms = 0;
   xSemaphoreGive(g_q_mtx);
-  POTATO_MESH_DBG_LN("ingest batch cleared");
+  LOTATO_DBG_LN("ingest batch cleared");
   notify_worker();
 }
 
@@ -468,11 +468,11 @@ static bool build_ingestor_heartbeat_body(const uint8_t self_pub[PUB_KEY_SIZE], 
     n = snprintf(buf, cap,
                  "{\"node_id\":\"%s\",\"start_time\":%lu,\"last_seen_time\":%lu,\"version\":\"%s\","
                  "\"protocol\":\"meshcore\"}",
-                 node_id, (unsigned long)g_ingestor_start_unix, (unsigned long)t, POTATO_MESH_INGESTOR_VERSION);
+                 node_id, (unsigned long)g_ingestor_start_unix, (unsigned long)t, LOTATO_INGESTOR_VERSION);
   } else {
     n = snprintf(buf, cap,
                  "{\"node_id\":\"%s\",\"version\":\"%s\",\"protocol\":\"meshcore\"}",
-                 node_id, POTATO_MESH_INGESTOR_VERSION);
+                 node_id, LOTATO_INGESTOR_VERSION);
   }
   if (n <= 0 || (size_t)n >= cap) return false;
   *out_len = (uint16_t)n;
@@ -485,36 +485,36 @@ static void maybe_post_ingestor_heartbeat(const uint8_t self_pub[PUB_KEY_SIZE]) 
   uint32_t now_ms = millis();
   if (g_ingestor_heartbeat_ok_ms != 0) {
     uint32_t elapsed = now_ms - g_ingestor_heartbeat_ok_ms;
-    if (elapsed < POTATO_MESH_INGESTOR_HEARTBEAT_MS) return;
+    if (elapsed < LOTATO_INGESTOR_HEARTBEAT_MS) return;
   }
 
   char body[320];
   uint16_t blen = 0;
   if (!build_ingestor_heartbeat_body(self_pub, body, sizeof(body), &blen)) {
-    POTATO_MESH_DBG_LN("potato ingest: ingestor heartbeat JSON build failed");
+    LOTATO_DBG_LN("lotato ingest: ingestor heartbeat JSON build failed");
     return;
   }
 
   char full_url[256];
-  if (!build_ingest_post_url_for_path(full_url, sizeof(full_url), POTATO_MESH_INGESTORS_API_PATH)) {
-    POTATO_MESH_DBG_LN("potato ingest: ingestor URL build failed");
+  if (!build_ingest_post_url_for_path(full_url, sizeof(full_url), LOTATO_INGESTORS_API_PATH)) {
+    LOTATO_DBG_LN("lotato ingest: ingestor URL build failed");
     return;
   }
 
-  const char* origin = PotatoMeshConfig::instance().ingestOrigin();
+  const char* origin = LotatoConfig::instance().ingestOrigin();
   bool ok = false;
   if (is_https_origin(origin)) {
     log_ingest_dns_for_host(full_url);
     ok = try_post_https_esp_http(full_url, "ingestor", body, blen);
   } else {
-    ok = try_post_once_at_path(POTATO_MESH_INGESTORS_API_PATH, "ingestor", body, blen);
+    ok = try_post_once_at_path(LOTATO_INGESTORS_API_PATH, "ingestor", body, blen);
   }
 
   if (ok) {
     g_ingestor_heartbeat_ok_ms = millis();
-    POTATO_MESH_DBG_LN("potato ingest: ingestor registered (meshcore)");
+    LOTATO_DBG_LN("lotato ingest: ingestor registered (meshcore)");
   } else {
-    POTATO_MESH_DBG_LN("potato ingest: ingestor POST failed (nodes will retry; protocol may default)");
+    LOTATO_DBG_LN("lotato ingest: ingestor POST failed (nodes will retry; protocol may default)");
   }
 }
 
@@ -541,7 +541,7 @@ static bool append_json_escaped_name_pre(char* dest, size_t dest_size, const cha
   return true;
 }
 
-static bool build_record_ingest_json(const uint8_t self_pub_key[PUB_KEY_SIZE], const PotatoNodeRecord& rec,
+static bool build_record_ingest_json(const uint8_t self_pub_key[PUB_KEY_SIZE], const LotatoNodeRecord& rec,
                                      char* body, size_t body_cap, uint16_t* out_len, char node_id[12]) {
   format_node_id_pre(node_id, rec.pub_key);
   char ingestor_id[12];
@@ -609,7 +609,7 @@ static bool build_record_ingest_json(const uint8_t self_pub_key[PUB_KEY_SIZE], c
 }
 
 /** Fill g_batch_* from store (caller holds g_q_mtx). */
-static void try_build_batch_from_store(PotatoNodeStore& store, const uint8_t self_pk[PUB_KEY_SIZE]) {
+static void try_build_batch_from_store(LotatoNodeStore& store, const uint8_t self_pk[PUB_KEY_SIZE]) {
   if (g_batch_len > 0) return;
 
   char batch_ids[kBatchMaxSlots][12];
@@ -618,9 +618,9 @@ static void try_build_batch_from_store(PotatoNodeStore& store, const uint8_t sel
   uint16_t slots[kBatchMaxSlots];
   uint32_t now_ms = millis();
 
-  for (int slot = 0; slot < PotatoNodeStore::MAX; slot++) {
+  for (int slot = 0; slot < LotatoNodeStore::MAX; slot++) {
     if (!store.dueForIngest(slot, now_ms)) continue;
-    PotatoNodeRecord rec{};
+    LotatoNodeRecord rec{};
     if (!store.readRecord(slot, rec)) continue;
     char nid[12];
     uint16_t flen = 0;
@@ -655,8 +655,8 @@ static void try_build_batch_from_store(PotatoNodeStore& store, const uint8_t sel
   for (uint8_t i = 0; i < n; i++) memcpy(g_batch_node_ids[i], batch_ids[i], 12);
   memcpy(g_batch_self_pk, self_pk, PUB_KEY_SIZE);
   g_batch_store = &store;
-  if (potato_mesh_dbg_active()) {
-    POTATO_MESH_DBG_LN("potato ingest: built batch %u nodes %u bytes", (unsigned)n, (unsigned)merged_len);
+  if (lotato_dbg_active()) {
+    LOTATO_DBG_LN("lotato ingest: built batch %u nodes %u bytes", (unsigned)n, (unsigned)merged_len);
   }
 }
 
@@ -665,23 +665,23 @@ bool ingest_try_step() {
   static uint16_t local_slots[kBatchMaxSlots];
   uint16_t local_len = 0;
   uint8_t local_n = 0;
-  PotatoNodeStore* local_store = nullptr;
+  LotatoNodeStore* local_store = nullptr;
   char post_label[96];
   char batch_ids[kBatchMaxSlots][12];
   uint8_t local_self_pk[PUB_KEY_SIZE]{};
 
   xSemaphoreTake(g_q_mtx, portMAX_DELAY);
-  if (g_paused || !PotatoMeshConfig::instance().isIngestReady() || g_batch_len == 0) {
+  if (g_paused || !LotatoConfig::instance().isIngestReady() || g_batch_len == 0) {
     xSemaphoreGive(g_q_mtx);
     return false;
   }
   if (WiFi.status() != WL_CONNECTED) {
-    if (potato_mesh_dbg_active()) {
+    if (lotato_dbg_active()) {
       uint32_t t = millis();
       if (g_last_wifi_down_log_ms == 0 ||
-          (int32_t)(t - g_last_wifi_down_log_ms) >= (int32_t)POTATO_MESH_WIFI_DOWN_LOG_INTERVAL_MS) {
+          (int32_t)(t - g_last_wifi_down_log_ms) >= (int32_t)LOTATO_WIFI_DOWN_LOG_INTERVAL_MS) {
         g_last_wifi_down_log_ms = t;
-        POTATO_MESH_DBG_LN("ingest: waiting on WiFi (status=%d)", (int)WiFi.status());
+        LOTATO_DBG_LN("ingest: waiting on WiFi (status=%d)", (int)WiFi.status());
       }
     }
     xSemaphoreGive(g_q_mtx);
@@ -723,11 +723,11 @@ bool ingest_try_step() {
     g_batch_n = 0;
     g_batch_store = nullptr;
     g_batch_next_retry_ms = 0;
-    g_batch_fail_backoff_ms = (uint32_t)POTATO_MESH_HTTP_RETRY_DELAY_MS;
+    g_batch_fail_backoff_ms = (uint32_t)LOTATO_HTTP_RETRY_DELAY_MS;
   } else if (!ok) {
     uint32_t b = g_batch_fail_backoff_ms;
-    if (b < (uint32_t)POTATO_MESH_HTTP_RETRY_DELAY_MS) {
-      b = (uint32_t)POTATO_MESH_HTTP_RETRY_DELAY_MS;
+    if (b < (uint32_t)LOTATO_HTTP_RETRY_DELAY_MS) {
+      b = (uint32_t)LOTATO_HTTP_RETRY_DELAY_MS;
     } else {
       b = std::min(b * 2, (uint32_t)10000);
     }
@@ -756,9 +756,9 @@ void ensure_worker() {
   if (!g_q_mtx) return;
 
   TaskHandle_t created = nullptr;
-  if (xTaskCreate(ingest_worker_entry, "potato-ingest", POTATO_MESH_INGEST_WORKER_STACK,
+  if (xTaskCreate(ingest_worker_entry, "lotato-ingest", LOTATO_INGEST_WORKER_STACK,
                    nullptr, 1, &created) != pdPASS) {
-    POTATO_MESH_DBG_LN("ingest worker xTaskCreate failed");
+    LOTATO_DBG_LN("ingest worker xTaskCreate failed");
     return;
   }
   portENTER_CRITICAL(&g_worker_init);
@@ -775,8 +775,8 @@ void ensure_worker() {
 
 // --- WiFi event helpers (file scope — externally visible) ---
 
-void potato_mesh_register_sta_dns_override() {
-#if !POTATO_MESH_STA_FORCE_PUBLIC_DNS
+void lotato_register_sta_dns_override() {
+#if !LOTATO_STA_FORCE_PUBLIC_DNS
   // Keep DHCP-assigned DNS (typically the router). Forcing 1.1.1.1/8.8.8.8 via WiFi.config()
   // breaks many networks (captive portal, ISP-only DNS, firewall rules) and triggers hostByName failures.
   return;
@@ -793,40 +793,40 @@ void potato_mesh_register_sta_dns_override() {
     const IPAddress dns1(1, 1, 1, 1), dns2(8, 8, 8, 8);
     bool ok = WiFi.config(WiFi.localIP(), WiFi.gatewayIP(), WiFi.subnetMask(), dns1, dns2);
     if (!ok) g_sta_dns_override_applied = false;
-    POTATO_MESH_DBG_LN("potato ingest: STA DNS public override ok=%s", ok ? "yes" : "no");
+    LOTATO_DBG_LN("lotato ingest: STA DNS public override ok=%s", ok ? "yes" : "no");
   });
 #endif
 }
 
-void potato_mesh_register_wifi_event_logging() {
+void lotato_register_wifi_event_logging() {
   static bool registered = false;
   if (registered) return;
   registered = true;
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-    if (!potato_mesh_dbg_active()) return;
+    if (!lotato_dbg_active()) return;
     switch (event) {
       case ARDUINO_EVENT_WIFI_STA_START:
-        POTATO_MESH_DBG_LN("WiFi STA: started"); break;
+        LOTATO_DBG_LN("WiFi STA: started"); break;
       case ARDUINO_EVENT_WIFI_STA_CONNECTED:
-        POTATO_MESH_DBG_LN("WiFi STA: associated (ch %u)", (unsigned)info.wifi_sta_connected.channel); break;
+        LOTATO_DBG_LN("WiFi STA: associated (ch %u)", (unsigned)info.wifi_sta_connected.channel); break;
       case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-        POTATO_MESH_DBG_LN("WiFi STA: got IP %s gw=%s",
+        LOTATO_DBG_LN("WiFi STA: got IP %s gw=%s",
                             WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str()); break;
       case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-        POTATO_MESH_DBG_LN("WiFi STA: disconnected reason=%u - auto-retry",
+        LOTATO_DBG_LN("WiFi STA: disconnected reason=%u - auto-retry",
                             (unsigned)info.wifi_sta_disconnected.reason); break;
       default: break;
     }
   });
 }
 
-#ifndef POTATO_MESH_WIFI_FAILOVER_DEBOUNCE_MS
-#define POTATO_MESH_WIFI_FAILOVER_DEBOUNCE_MS 1500
+#ifndef LOTATO_WIFI_FAILOVER_DEBOUNCE_MS
+#define LOTATO_WIFI_FAILOVER_DEBOUNCE_MS 1500
 #endif
 
 namespace {
 
-bool potato_mesh_wifi_reason_failover(uint8_t reason) {
+bool lotato_wifi_reason_failover(uint8_t reason) {
   // ESP-IDF: join failures where trying another saved SSID may help (not e.g. local deauth storms).
   switch (reason) {
     case 201:  // WIFI_REASON_NO_AP_FOUND
@@ -839,7 +839,7 @@ bool potato_mesh_wifi_reason_failover(uint8_t reason) {
   }
 }
 
-uint8_t potato_mesh_known_index_for_disconnected(const WiFiEventInfo_t& info, PotatoMeshConfig& cfg) {
+uint8_t lotato_known_index_for_disconnected(const WiFiEventInfo_t& info, LotatoConfig& cfg) {
   char ev_ssid[33]{};
   uint8_t len = info.wifi_sta_disconnected.ssid_len;
   if (len > sizeof(info.wifi_sta_disconnected.ssid)) len = sizeof(info.wifi_sta_disconnected.ssid);
@@ -864,11 +864,11 @@ uint8_t potato_mesh_known_index_for_disconnected(const WiFiEventInfo_t& info, Po
 
 } // namespace
 
-static bool g_potato_sta_failover_suppress = false;
+static bool g_lotato_sta_failover_suppress = false;
 
-void potato_mesh_sta_failover_suppress(bool suppress) { g_potato_sta_failover_suppress = suppress; }
+void lotato_sta_failover_suppress(bool suppress) { g_lotato_sta_failover_suppress = suppress; }
 
-void potato_mesh_register_sta_known_wifi_failover() {
+void lotato_register_sta_known_wifi_failover() {
   static bool registered = false;
   if (registered) return;
   registered = true;
@@ -876,9 +876,9 @@ void potato_mesh_register_sta_known_wifi_failover() {
 
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
     if (event != ARDUINO_EVENT_WIFI_STA_DISCONNECTED) return;
-    if (g_potato_sta_failover_suppress) return;
+    if (g_lotato_sta_failover_suppress) return;
 
-    PotatoMeshConfig& cfg = PotatoMeshConfig::instance();
+    LotatoConfig& cfg = LotatoConfig::instance();
     uint8_t n = cfg.knownWifiCount();
     if (n < 2) {
       WiFi.setAutoReconnect(true);
@@ -887,24 +887,24 @@ void potato_mesh_register_sta_known_wifi_failover() {
     WiFi.setAutoReconnect(false);
 
     uint32_t now = millis();
-    if ((int32_t)(now - g_last_sta_wifi_action_ms) < (int32_t)POTATO_MESH_WIFI_FAILOVER_DEBOUNCE_MS) return;
+    if ((int32_t)(now - g_last_sta_wifi_action_ms) < (int32_t)LOTATO_WIFI_FAILOVER_DEBOUNCE_MS) return;
     g_last_sta_wifi_action_ms = now;
 
     uint8_t reason = info.wifi_sta_disconnected.reason;
-    if (potato_mesh_wifi_reason_failover(reason)) {
-      uint8_t idx = potato_mesh_known_index_for_disconnected(info, cfg);
+    if (lotato_wifi_reason_failover(reason)) {
+      uint8_t idx = lotato_known_index_for_disconnected(info, cfg);
       uint8_t next = (uint8_t)((idx + 1) % n);
       char ssid[33], pwd[65];
       if (!cfg.getKnownWifi(next, ssid, sizeof(ssid), pwd, sizeof(pwd))) return;
       const char* pw = (pwd[0] != '\0') ? pwd : nullptr;
-      POTATO_MESH_DBG_LN("potato wifi /sta: failover reason=%u from idx %u -> %u ssid=%.32s",
+      LOTATO_DBG_LN("lotato wifi /sta: failover reason=%u from idx %u -> %u ssid=%.32s",
                          (unsigned)reason, (unsigned)idx, (unsigned)next, ssid);
       WiFi.disconnect(false, false);
       WiFi.begin(ssid, pw);
       WiFi.setSleep(WIFI_PS_NONE);
       return;
     }
-    POTATO_MESH_DBG_LN("potato wifi /sta: reconnect same AP (reason=%u)", (unsigned)reason);
+    LOTATO_DBG_LN("lotato wifi /sta: reconnect same AP (reason=%u)", (unsigned)reason);
     WiFi.reconnect();
   });
 }
@@ -923,19 +923,19 @@ void dbg_serial_write_full_body(const char* body) {
 
 } // namespace
 
-void potato_mesh_dbg_trace_cli_exchange(const char* route_tag, const char* cmd_snapshot, const char* reply) {
-  if (!potato_mesh_dbg_active()) return;
+void lotato_dbg_trace_cli_exchange(const char* route_tag, const char* cmd_snapshot, const char* reply) {
+  if (!lotato_dbg_active()) return;
   const char* tag = route_tag ? route_tag : "?";
   const char* cmd = cmd_snapshot ? cmd_snapshot : "";
   const char* rp = reply ? reply : "";
-  Serial.print("PotatoMesh: CLI ");
+  Serial.print("Lotato: CLI ");
   Serial.print(tag);
   Serial.print(": cmd len=");
   Serial.print((unsigned)strlen(cmd));
   Serial.print("\r\n");
   dbg_serial_write_full_body(cmd);
   Serial.print("\r\n");
-  Serial.print("PotatoMesh: CLI ");
+  Serial.print("Lotato: CLI ");
   Serial.print(tag);
   Serial.print(": reply len=");
   Serial.print((unsigned)strlen(rp));
@@ -944,14 +944,14 @@ void potato_mesh_dbg_trace_cli_exchange(const char* route_tag, const char* cmd_s
   Serial.print("\r\n");
 }
 
-// --- Public PotatoMeshIngestor methods ---
+// --- Public LotatoIngestor methods ---
 
-uint8_t PotatoMeshIngestor::pendingQueueDepth() const { return potato_ingest_queue_depth(); }
+uint8_t LotatoIngestor::pendingQueueDepth() const { return lotato_ingest_queue_depth(); }
 
-void PotatoMeshIngestor::restartAfterConfigChange() { potato_ingest_clear_queue(); }
+void LotatoIngestor::restartAfterConfigChange() { lotato_ingest_clear_queue(); }
 
-void PotatoMeshIngestor::service(PotatoNodeStore* node_store, const uint8_t* self_pub_key) {
-  if (g_paused || !PotatoMeshConfig::instance().isIngestReady()) return;
+void LotatoIngestor::service(LotatoNodeStore* node_store, const uint8_t* self_pub_key) {
+  if (g_paused || !LotatoConfig::instance().isIngestReady()) return;
   ensure_worker();
   if (!g_q_mtx || !g_worker) return;
 
@@ -965,8 +965,8 @@ void PotatoMeshIngestor::service(PotatoNodeStore* node_store, const uint8_t* sel
   if (pending && WiFi.status() == WL_CONNECTED) notify_worker();
 }
 
-void PotatoMeshIngestor::setPaused(bool paused) { g_paused = paused; }
-bool PotatoMeshIngestor::isPaused() const { return g_paused; }
-int  PotatoMeshIngestor::lastHttpCode() const { return g_last_http_code; }
+void LotatoIngestor::setPaused(bool paused) { g_paused = paused; }
+bool LotatoIngestor::isPaused() const { return g_paused; }
+int  LotatoIngestor::lastHttpCode() const { return g_last_http_code; }
 
 #endif // ESP32
