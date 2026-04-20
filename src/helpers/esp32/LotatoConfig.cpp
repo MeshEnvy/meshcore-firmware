@@ -3,245 +3,189 @@
 #ifdef ESP32
 
 #include <Preferences.h>
-#include <helpers/esp32/LotatoDebug.h>
 #include <cstring>
+
+#include <helpers/esp32/LotatoDebug.h>
+#include <helpers/lofi/Lofi.h>
+#include <lofi.pb.h>
+#include <lodb/LoDB.h>
+#include <losettings/LoSettings.h>
 
 namespace {
 
 constexpr char kNs[] = "lotato";
-constexpr char kKeyVer[] = "lv";
-constexpr char kKeyKn[] = "kn";
 
-static bool is_ws(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
-
-} // namespace
+}  // namespace
 
 LotatoConfig& LotatoConfig::instance() {
   static LotatoConfig inst;
   return inst;
 }
 
-void LotatoConfig::migrateFromBuildFlagsIfNeeded() {
-  Preferences prefs;
-  if (!prefs.begin(kNs, false)) return;
-  if (prefs.getUChar(kKeyVer, 0) != 0) { prefs.end(); return; }
+void LotatoConfig::seedBuildFlagsIntoLoSettingsIfNeeded() {
+  losettings::LoSettings st("lotato");
 #if defined(LOTATO_INGEST_URL)
-  if (prefs.getString("url", "").length() == 0) prefs.putString("url", LOTATO_INGEST_URL);
+  if (!st.has("ingest.url")) st.setString("ingest.url", LOTATO_INGEST_URL);
 #endif
 #if defined(LOTATO_API_TOKEN)
-  if (prefs.getString("token", "").length() == 0) prefs.putString("token", LOTATO_API_TOKEN);
+  if (!st.has("ingest.token")) st.setString("ingest.token", LOTATO_API_TOKEN);
 #endif
 #if defined(LOTATO_WIFI_SSID)
-  if (prefs.getString("ssid", "").length() == 0) prefs.putString("ssid", LOTATO_WIFI_SSID);
-#endif
+  {
+    losettings::LoSettings wf("lofi");
+    if (!wf.has("active.ssid")) wf.setString("active.ssid", LOTATO_WIFI_SSID);
 #if defined(LOTATO_WIFI_PWD)
-  if (!prefs.isKey("pwd")) prefs.putString("pwd", LOTATO_WIFI_PWD);
+    if (!wf.has("active.psk")) wf.setString("active.psk", LOTATO_WIFI_PWD);
 #endif
-  prefs.putUChar(kKeyVer, 1);
-  prefs.end();
+  }
+#endif
 }
 
-void LotatoConfig::migrateKnownProfilesIfNeeded() {
+void LotatoConfig::migrateLegacyNvsToLoIfNeeded() {
+  losettings::LoSettings st("lotato");
+  if (st.has("migrated.v1")) return;
+
   Preferences prefs;
-  if (!prefs.begin(kNs, false)) return;
-  uint8_t v = prefs.getUChar(kKeyVer, 0);
-  if (v >= 2) { prefs.end(); return; }
-  if (prefs.getUChar(kKeyKn, 0) == 0 && prefs.getString("ks0", "").length() == 0) {
-    String s = prefs.getString("ssid", "");
-    if (s.length() > 0) {
-      prefs.putString("ks0", s);
-      prefs.putString("kp0", prefs.getString("pwd", ""));
-      prefs.putUChar(kKeyKn, 1);
-      LOTATO_DBG_LN("lotato cfg: migrated known WiFi from active ssid");
+  if (!prefs.begin(kNs, true)) {
+    (void)st.setBool("migrated.v1", true);
+    return;
+  }
+
+  String url = prefs.getString("url", "");
+  String token = prefs.getString("token", "");
+  bool dbg = prefs.getBool("dbg", false);
+  String ssid = prefs.getString("ssid", "");
+  String pwd = prefs.getString("pwd", "");
+
+  if (url.length()) st.setString("ingest.url", url.c_str());
+  if (token.length()) st.setString("ingest.token", token.c_str());
+  st.setBool("debug", dbg);
+
+  {
+    losettings::LoSettings wf("lofi");
+    if (ssid.length()) {
+      wf.setString("active.ssid", ssid.c_str());
+      wf.setString("active.psk", pwd.c_str());
     }
   }
-  prefs.putUChar(kKeyVer, 2);
+
+  uint8_t kn = prefs.getUChar("kn", 0);
+  if (kn > 8) kn = 8;
+  LoDb db("lofi");
+  (void)db.registerTable("known_wifi", &KnownWifi_msg, sizeof(KnownWifi));
+  for (uint8_t i = 0; i < kn; i++) {
+    char ks[8], kp[8];
+    snprintf(ks, sizeof(ks), "ks%u", (unsigned)i);
+    snprintf(kp, sizeof(kp), "kp%u", (unsigned)i);
+    String s = prefs.getString(ks, "");
+    if (s.length() == 0) continue;
+    String p = prefs.getString(kp, "");
+    KnownWifi row = KnownWifi_init_zero;
+    strncpy(row.ssid, s.c_str(), sizeof(row.ssid) - 1);
+    strncpy(row.psk, p.c_str(), sizeof(row.psk) - 1);
+    row.last_connected = (uint32_t)(millis() / 1000);
+    row.connect_count = 1;
+    lodb_uuid_t id = lodb_new_uuid(row.ssid, 0);
+    (void)db.insert("known_wifi", id, &row);
+  }
+  if (kn == 0 && ssid.length()) {
+    KnownWifi row = KnownWifi_init_zero;
+    strncpy(row.ssid, ssid.c_str(), sizeof(row.ssid) - 1);
+    strncpy(row.psk, pwd.c_str(), sizeof(row.psk) - 1);
+    row.last_connected = (uint32_t)(millis() / 1000);
+    row.connect_count = 1;
+    lodb_uuid_t id = lodb_new_uuid(row.ssid, 0);
+    (void)db.insert("known_wifi", id, &row);
+  }
+
   prefs.end();
+  {
+    Preferences pw;
+    if (pw.begin(kNs, false)) {
+      pw.clear();
+      pw.end();
+    }
+  }
+  (void)st.setBool("migrated.v1", true);
+  LOTATO_DBG_LN("lotato cfg: migrated legacy NVS -> LoSettings/LoDB");
 }
 
-void LotatoConfig::loadKnownWifi(Preferences& prefs) {
-  _known_cnt = prefs.getUChar(kKeyKn, 0);
-  if (_known_cnt > KNOWN_WIFI_MAX) _known_cnt = KNOWN_WIFI_MAX;
-  for (uint8_t i = 0; i < KNOWN_WIFI_MAX; i++) {
-    char key[8];
-    snprintf(key, sizeof(key), "ks%u", (unsigned)i);
-    _known_ssid[i][0] = '\0';
-    memset(_known_pwd[i], 0, sizeof(_known_pwd[i]));
-    if (i < _known_cnt) {
-      prefs.getString(key, _known_ssid[i], sizeof(_known_ssid[i]));
-      snprintf(key, sizeof(key), "kp%u", (unsigned)i);
-      prefs.getString(key, _known_pwd[i], sizeof(_known_pwd[i]));
-    }
-  }
+void LotatoConfig::refreshFromLoSettings() {
+  losettings::LoSettings lt("lotato");
+  losettings::LoSettings wf("lofi");
+  lt.getString("ingest.url", _url, sizeof(_url), "");
+  lt.getString("ingest.token", _token, sizeof(_token), "");
+  _debug = lt.getBool("debug", false);
+  wf.getString("active.ssid", _ssid, sizeof(_ssid), "");
+  wf.getString("active.psk", _pwd, sizeof(_pwd), "");
 }
 
 void LotatoConfig::load() {
-  migrateFromBuildFlagsIfNeeded();
-  migrateKnownProfilesIfNeeded();
-
-  Preferences prefs;
-  if (!prefs.begin(kNs, true)) { _loaded = true; return; }
-  prefs.getString("ssid", _ssid, sizeof(_ssid));
-  prefs.getString("pwd", _pwd, sizeof(_pwd));
-  prefs.getString("url", _url, sizeof(_url));
-  prefs.getString("token", _token, sizeof(_token));
-  _debug = prefs.getBool("dbg", false);
-  loadKnownWifi(prefs);
-  prefs.end();
+  seedBuildFlagsIntoLoSettingsIfNeeded();
+  migrateLegacyNvsToLoIfNeeded();
+  refreshFromLoSettings();
   _loaded = true;
 }
 
-bool LotatoConfig::getKnownWifi(uint8_t idx, char* out_ssid, size_t ssid_cap, char* out_pwd, size_t pwd_cap) const {
-  if (idx >= _known_cnt || !out_ssid || ssid_cap < 1) return false;
-  strncpy(out_ssid, _known_ssid[idx], ssid_cap - 1);
-  out_ssid[ssid_cap - 1] = '\0';
-  if (out_pwd && pwd_cap > 0) {
-    strncpy(out_pwd, _known_pwd[idx], pwd_cap - 1);
-    out_pwd[pwd_cap - 1] = '\0';
-  }
-  return true;
+bool LotatoConfig::isIngestReady() const { return _url[0] != '\0' && _token[0] != '\0'; }
+
+uint8_t LotatoConfig::knownWifiCount() { return lofi::Lofi::instance().knownWifiCount(); }
+
+bool LotatoConfig::getKnownWifi(uint8_t idx, char* out_ssid, size_t ssid_cap, char* out_pwd, size_t pwd_cap) {
+  return lofi::Lofi::instance().getKnownWifi(idx, out_ssid, ssid_cap, out_pwd, pwd_cap);
 }
 
-bool LotatoConfig::isKnownWifiSsid(const char* ssid) const {
+bool LotatoConfig::isKnownWifiSsid(const char* ssid) {
   if (!ssid || !ssid[0]) return false;
-  for (uint8_t i = 0; i < _known_cnt; i++) {
-    if (strcmp(_known_ssid[i], ssid) == 0) return true;
-  }
-  return false;
+  char tmp[65];
+  return getKnownWifiPassword(ssid, tmp, sizeof(tmp));
 }
 
-bool LotatoConfig::getKnownWifiPassword(const char* ssid, char* out_pwd, size_t pwd_cap) const {
-  if (!ssid || !ssid[0] || !out_pwd || pwd_cap < 1) return false;
-  for (uint8_t i = 0; i < _known_cnt; i++) {
-    if (strcmp(_known_ssid[i], ssid) == 0) {
-      strncpy(out_pwd, _known_pwd[i], pwd_cap - 1);
-      out_pwd[pwd_cap - 1] = '\0';
-      return true;
-    }
-  }
-  return false;
-}
-
-void LotatoConfig::persistKnownWifi() {
-  Preferences prefs;
-  if (!prefs.begin(kNs, false)) return;
-  prefs.putUChar(kKeyKn, _known_cnt);
-  for (uint8_t i = 0; i < KNOWN_WIFI_MAX; i++) {
-    char key[8];
-    snprintf(key, sizeof(key), "ks%u", (unsigned)i);
-    prefs.putString(key, i < _known_cnt ? _known_ssid[i] : "");
-    snprintf(key, sizeof(key), "kp%u", (unsigned)i);
-    prefs.putString(key, i < _known_cnt ? _known_pwd[i] : "");
-  }
-  prefs.end();
-}
-
-void LotatoConfig::rememberWifi(const char* ssid, const char* pwd) {
-  if (!ssid || !ssid[0]) return;
-  const char* pp = pwd ? pwd : "";
-
-  uint8_t w = 0;
-  for (uint8_t r = 0; r < _known_cnt; r++) {
-    if (strcmp(_known_ssid[r], ssid) == 0) continue;
-    if (w != r) {
-      strcpy(_known_ssid[w], _known_ssid[r]);
-      strcpy(_known_pwd[w], _known_pwd[r]);
-    }
-    w++;
-  }
-  _known_cnt = w;
-
-  if (_known_cnt < KNOWN_WIFI_MAX) _known_cnt++;
-  for (int i = (int)_known_cnt - 1; i > 0; i--) {
-    strcpy(_known_ssid[i], _known_ssid[i - 1]);
-    strcpy(_known_pwd[i], _known_pwd[i - 1]);
-  }
-  strncpy(_known_ssid[0], ssid, sizeof(_known_ssid[0]) - 1);
-  _known_ssid[0][sizeof(_known_ssid[0]) - 1] = '\0';
-  strncpy(_known_pwd[0], pp, sizeof(_known_pwd[0]) - 1);
-  _known_pwd[0][sizeof(_known_pwd[0]) - 1] = '\0';
-  persistKnownWifi();
-  LOTATO_DBG_LN("lotato cfg: wifi saved count=%u", (unsigned)_known_cnt);
-}
-
-bool LotatoConfig::isIngestReady() const {
-  return _url[0] != '\0' && _token[0] != '\0';
-}
-
-static void put_string_pref(const char* key, const char* val) {
-  Preferences prefs;
-  if (!prefs.begin("lotato", false)) return;
-  prefs.putString(key, val ? val : "");
-  prefs.end();
-}
-
-bool LotatoConfig::forgetKnownWifi(const char* ssid) {
-  if (!ssid || !ssid[0]) return false;
-  bool found = false;
-  uint8_t w = 0;
-  for (uint8_t r = 0; r < _known_cnt; r++) {
-    if (strcmp(_known_ssid[r], ssid) == 0) {
-      found = true;
-      memset(_known_pwd[r], 0, sizeof(_known_pwd[r]));
-      continue;
-    }
-    if (w != r) {
-      strcpy(_known_ssid[w], _known_ssid[r]);
-      strcpy(_known_pwd[w], _known_pwd[r]);
-    }
-    w++;
-  }
-  if (!found) return false;
-  _known_cnt = w;
-
-  bool clear_active = (strcmp(_ssid, ssid) == 0);
-  if (clear_active) {
-    memset(_pwd, 0, sizeof(_pwd));
-    _ssid[0] = '\0';
-    put_string_pref("ssid", "");
-    put_string_pref("pwd", "");
-  }
-  persistKnownWifi();
-  LOTATO_DBG_LN("lotato cfg: forgot wifi ssid=\"%.32s\" active_cleared=%d", ssid, clear_active ? 1 : 0);
-  return true;
+bool LotatoConfig::getKnownWifiPassword(const char* ssid, char* out_pwd, size_t pwd_cap) {
+  return lofi::Lofi::instance().getKnownWifiPassword(ssid, out_pwd, pwd_cap);
 }
 
 void LotatoConfig::setWifi(const char* s, const char* p) {
-  const char* ss = s ? s : "";
-  const char* pp = p ? p : "";
-  strncpy(_ssid, ss, sizeof(_ssid) - 1); _ssid[sizeof(_ssid) - 1] = '\0';
-  strncpy(_pwd, pp, sizeof(_pwd) - 1);   _pwd[sizeof(_pwd) - 1] = '\0';
-  put_string_pref("ssid", _ssid);
-  put_string_pref("pwd", _pwd);
-  rememberWifi(_ssid, _pwd);
+  lofi::Lofi::instance().saveWifiConnect(s ? s : "", p ? p : "");
+  refreshFromLoSettings();
+}
+
+bool LotatoConfig::forgetKnownWifi(const char* ssid) {
+  bool ok = lofi::Lofi::instance().forgetKnownWifi(ssid);
+  if (!ok) return false;
+  refreshFromLoSettings();
+  LOTATO_DBG_LN("lotato cfg: forgot wifi ssid=\"%.32s\"", ssid);
+  return true;
 }
 
 void LotatoConfig::setApiToken(const char* t) {
-  const char* tt = t ? t : "";
-  strncpy(_token, tt, sizeof(_token) - 1); _token[sizeof(_token) - 1] = '\0';
-  put_string_pref("token", _token);
+  losettings::LoSettings st("lotato");
+  st.setString("ingest.token", t ? t : "");
+  refreshFromLoSettings();
 }
 
 void LotatoConfig::setIngestOrigin(const char* u) {
   const char* uu = u ? u : "";
-  while (*uu && is_ws(*uu)) uu++;
+  while (*uu == ' ' || *uu == '\t' || *uu == '\r' || *uu == '\n') uu++;
   size_t len = strlen(uu);
-  while (len > 0 && is_ws(uu[len - 1])) len--;
-  if (len >= sizeof(_url)) len = sizeof(_url) - 1;
-  memcpy(_url, uu, len);
-  _url[len] = '\0';
-  put_string_pref("url", _url);
+  while (len > 0 && (uu[len - 1] == ' ' || uu[len - 1] == '\t' || uu[len - 1] == '\r' || uu[len - 1] == '\n'))
+    len--;
+  char buf[257];
+  if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+  memcpy(buf, uu, len);
+  buf[len] = '\0';
+  losettings::LoSettings st("lotato");
+  st.setString("ingest.url", buf);
+  refreshFromLoSettings();
   LOTATO_DBG_LN("lotato cfg: ingest origin set (len=%u)", (unsigned)strlen(_url));
 }
 
 void LotatoConfig::setDebug(bool on) {
   _debug = on;
-  Preferences prefs;
-  if (!prefs.begin("lotato", false)) return;
-  prefs.putBool("dbg", _debug);
-  prefs.end();
+  losettings::LoSettings st("lotato");
+  st.setBool("debug", on);
 }
 
 void LotatoConfig::toggleDebug() { setDebug(!debugEnabled()); }
 
-#endif // ESP32
+#endif  // ESP32

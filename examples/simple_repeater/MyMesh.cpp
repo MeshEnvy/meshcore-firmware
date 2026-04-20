@@ -9,7 +9,15 @@
 #include <helpers/esp32/LotatoDebug.h>
 #include <helpers/esp32/LotatoNodeStore.h>
 #include <helpers/esp32/LotatoSerialCli.h>
+#include <helpers/lofi/Lofi.h>
 #include <helpers/lomessage/Buffer.h>
+#endif
+
+#ifndef LOTATO_DBG_LN
+#define LOTATO_DBG_LN(...) ((void)0)
+#endif
+
+#ifdef ESP32
 
 struct LotatoCliCtx {
   MyMesh* self;
@@ -18,8 +26,6 @@ struct LotatoCliCtx {
 
 /** True while a long-running async CLI op holds the session; mesh commands are rejected while set. */
 static bool s_async_cli_busy = false;
-/** Scan timeout: abort if stuck in Scanning phase longer than this. */
-static constexpr uint32_t kWifiScanTimeoutMs = 30000;
 /** Routing snapshot set at command-receive time; persists for async completion push. */
 static struct {
   bool    valid;
@@ -28,6 +34,20 @@ static struct {
   uint8_t out_path_len;
   uint8_t path_hash_size;
 } s_scan_reply_target = {};
+
+void my_mesh_set_async_cli_busy(bool busy) { s_async_cli_busy = busy; }
+
+extern "C" void lofi_async_busy(bool busy) { s_async_cli_busy = busy; }
+
+namespace {
+MyMesh* g_mesh_for_scan = nullptr;
+void scan_complete_cb(void*, const char* text) {
+  if (!g_mesh_for_scan || !s_scan_reply_target.valid) return;
+  g_mesh_for_scan->enqueueTxtCliReply(s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len,
+                                      s_scan_reply_target.out_path, s_scan_reply_target.path_hash_size, 0, text);
+  s_scan_reply_target.valid = false;
+}
+}  // namespace
 #endif
 
 /* ------------------------------ Config -------------------------------- */
@@ -764,7 +784,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
           reply[MyMesh::kCliReplyCap - 1] = '\0';
           LOTATO_DBG_LN("cli reply: reject (busy) cmd=%.60s", command);
         } else {
-          // preset routing snapshot so async ops (e.g. wifi scan) can push results later
+          // preset routing snapshot so async ops (e.g. wifi list) can push results later
           s_scan_reply_target.valid          = true;
           s_scan_reply_target.acl_idx        = i;
           s_scan_reply_target.out_path_len   = client->out_path_len;
@@ -977,6 +997,9 @@ void MyMesh::begin(FILESYSTEM *fs) {
   acl.load(_fs, self_id);
 #ifdef ESP32
   _node_store.begin(_fs);
+  g_mesh_for_scan = this;
+  lofi::Lofi::instance().begin();
+  lofi::Lofi::instance().setScanCompleteCallback(scan_complete_cb, nullptr);
   _lotato_cli.add("status", &MyMesh::lotato_h_status, nullptr, nullptr, "show lotato/ingest status");
   _lotato_cli.add("pause", &MyMesh::lotato_h_pause, nullptr, nullptr, "pause ingestion");
   _lotato_cli.add("resume", &MyMesh::lotato_h_resume, nullptr, nullptr, "resume ingestion");
@@ -985,8 +1008,8 @@ void MyMesh::begin(FILESYSTEM *fs) {
   _lotato_cli.add("endpoint", &MyMesh::lotato_h_endpoint, "<url>", nullptr, "set ingest endpoint URL");
   _lotato_cli.add("token", &MyMesh::lotato_h_token, "<val>", nullptr, "set API token");
   _lotato_cli.add("wifi.status", &MyMesh::lotato_h_wifi_status, nullptr, nullptr, "show WiFi connection info");
-  _lotato_cli.add("wifi.scan", &MyMesh::lotato_h_wifi_scan, nullptr, "async: run twice to list",
-                  "scan for WiFi networks");
+  _lotato_cli.add("wifi.list", &MyMesh::lotato_h_wifi_list, nullptr, nullptr,
+                  "list nearby WiFi networks");
   _lotato_cli.add("wifi.connect", &MyMesh::lotato_h_wifi_connect, "<n|ssid> [pwd]", nullptr,
                   "connect to a WiFi network");
   _lotato_cli.add("debug", &MyMesh::lotato_h_debug, "<on|off|toggle>", nullptr, "toggle debug logging");
@@ -1033,7 +1056,7 @@ bool MyMesh::formatFileSystem() {
 #elif defined(RP2040_PLATFORM)
   return LittleFS.format();
 #elif defined(ESP32)
-  return SPIFFS.format();
+  return LittleFS.format();
 #else
 #error "need to implement file system erase"
   return false;
@@ -1399,192 +1422,19 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 
 #ifdef ESP32
 
-static constexpr int kScanMax = 20;
-
-struct ScanEntry { char ssid[33]; int32_t rssi; };
-static ScanEntry s_scan[kScanMax];
-static int s_scan_count = 0;
-
-static void scan_rssi_bars(int32_t rssi, char out[7]) {
-  int lv = rssi >= -50 ? 4 : rssi >= -65 ? 3 : rssi >= -75 ? 2 : rssi >= -85 ? 1 : 0;
-  out[0] = '[';
-  for (int b = 0; b < 4; b++) out[1 + b] = b < lv ? '|' : '.';
-  out[5] = ']'; out[6] = '\0';
-}
-
-static void lotato_resume_sta_saved_credentials() {
-  LotatoConfig& cfg = LotatoConfig::instance();
-  if (cfg.ssid()[0] == '\0') return;
-  const char* pw = cfg.password()[0] ? cfg.password() : nullptr;
-  WiFi.begin(cfg.ssid(), pw);
-  WiFi.setSleep(WIFI_PS_NONE);
-}
-
-enum class LotatoWifiScanPhase : uint8_t { Idle, DisconnectWait, Scanning };
-static LotatoWifiScanPhase s_wscan_phase = LotatoWifiScanPhase::Idle;
-static uint32_t s_wscan_t0 = 0;
-/** Set when an async scan finished; cleared after user lists results via second `lotato scan`. */
-static bool s_wscan_results_ready = false;
-
-static void format_scan_body(lomessage::Buffer& buf) {
-  if (s_scan_count == 0) {
-    buf.append("No scan results. Run `lotato scan` twice (start, then list).\n");
+static void run_lotato_wifi_list_cli(lomessage::Buffer& out, MyMesh* mesh, uint32_t /*sender_ts*/) {
+  g_mesh_for_scan = mesh;
+  lofi::Lofi& lf = lofi::Lofi::instance();
+  lf.serviceWifiScan();
+  if (lf.scanSnapshotCount() > 0 && !s_async_cli_busy) {
+    lf.formatScanBody(out);
     return;
   }
-  buf.appendf("WiFi scan (%d nets):\n", s_scan_count);
-  for (int i = 0; i < s_scan_count; i++) {
-    char bars[7];
-    scan_rssi_bars(s_scan[i].rssi, bars);
-    char ssid_trunc[17];
-    size_t slen = strlen(s_scan[i].ssid);
-    if (slen > 14) {
-      memcpy(ssid_trunc, s_scan[i].ssid, 12);
-      ssid_trunc[12] = '.';
-      ssid_trunc[13] = '.';
-      ssid_trunc[14] = '\0';
-    } else {
-      strcpy(ssid_trunc, s_scan[i].ssid);
-    }
-    if (!buf.appendf("%d. %s %s\n", i + 1, ssid_trunc, bars)) break;
-  }
-}
-
-static void lotato_wifi_scan_fill_from_driver(int n) {
-  s_scan_count = 0;
-  for (int i = 0; i < n && s_scan_count < kScanMax; i++) {
-    String ss = WiFi.SSID(i);
-    if (ss.length() == 0) continue;
-    int32_t rssi = WiFi.RSSI(i);
-    bool found = false;
-    for (int j = 0; j < s_scan_count; j++) {
-      if (strcmp(s_scan[j].ssid, ss.c_str()) == 0) {
-        if (rssi > s_scan[j].rssi) s_scan[j].rssi = rssi;
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      snprintf(s_scan[s_scan_count].ssid, sizeof(s_scan[0].ssid), "%s", ss.c_str());
-      s_scan[s_scan_count].rssi = rssi;
-      s_scan_count++;
-    }
-  }
-  for (int a = 0; a < s_scan_count - 1; a++) {
-    for (int b = a + 1; b < s_scan_count; b++) {
-      if (s_scan[b].rssi > s_scan[a].rssi) {
-        ScanEntry t = s_scan[a];
-        s_scan[a] = s_scan[b];
-        s_scan[b] = t;
-      }
-    }
-  }
-}
-
-void my_mesh_lotato_wifi_scan_poll(MyMesh* mesh) {
-  switch (s_wscan_phase) {
-    case LotatoWifiScanPhase::Idle:
-      break;
-    case LotatoWifiScanPhase::DisconnectWait:
-      if ((int32_t)(millis() - s_wscan_t0) < 120) break;
-      LOTATO_DBG_LN("lotato CLI: wifi async scan radio ready");
-      {
-        int16_t started = WiFi.scanNetworks(true, false, false, 300);
-        // Async success is WIFI_SCAN_RUNNING (-1); failure is WIFI_SCAN_FAILED (-2).
-        if (started == WIFI_SCAN_FAILED) {
-          LOTATO_DBG_LN("lotato CLI: wifi async scan start failed");
-          WiFi.scanDelete();
-          lotato_sta_failover_suppress(false);
-          lotato_resume_sta_saved_credentials();
-          s_wscan_phase = LotatoWifiScanPhase::Idle;
-          s_wscan_results_ready = false;
-          if (s_scan_reply_target.valid) {
-            mesh->enqueueTxtCliReply(s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len,
-                                     s_scan_reply_target.out_path, s_scan_reply_target.path_hash_size,
-                                     0, "Err - WiFi scan start failed");
-            s_scan_reply_target.valid = false;
-          }
-          s_async_cli_busy = false;
-        } else {
-          s_wscan_phase = LotatoWifiScanPhase::Scanning;
-        }
-      }
-      break;
-    case LotatoWifiScanPhase::Scanning: {
-      // abort if stuck for too long (runaway guard)
-      if ((uint32_t)(millis() - s_wscan_t0) > kWifiScanTimeoutMs) {
-        LOTATO_DBG_LN("lotato CLI: wifi async scan TIMEOUT after %lums", (unsigned long)kWifiScanTimeoutMs);
-        WiFi.scanDelete();
-        s_scan_count = 0;
-        lotato_sta_failover_suppress(false);
-        lotato_resume_sta_saved_credentials();
-        s_wscan_phase = LotatoWifiScanPhase::Idle;
-        if (s_scan_reply_target.valid) {
-          mesh->enqueueTxtCliReply(s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len,
-                                   s_scan_reply_target.out_path, s_scan_reply_target.path_hash_size,
-                                   0, "Err - WiFi scan timed out");
-          s_scan_reply_target.valid = false;
-        }
-        s_async_cli_busy = false;
-        break;
-      }
-      int16_t cnt = WiFi.scanComplete();
-      if (cnt == WIFI_SCAN_RUNNING) break;
-      if (cnt == WIFI_SCAN_FAILED) {
-        LOTATO_DBG_LN("lotato CLI: wifi async scan complete failed");
-        WiFi.scanDelete();
-        s_scan_count = 0;
-        s_wscan_results_ready = false;
-        if (s_scan_reply_target.valid) {
-          mesh->enqueueTxtCliReply(s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len,
-                                   s_scan_reply_target.out_path, s_scan_reply_target.path_hash_size,
-                                   0, "Err - WiFi scan failed");
-          s_scan_reply_target.valid = false;
-        }
-      } else {
-        lotato_wifi_scan_fill_from_driver((int)cnt);
-        WiFi.scanDelete();
-        s_wscan_results_ready = true;
-        LOTATO_DBG_LN("lotato CLI: wifi async scan done nets=%d", s_scan_count);
-        if (s_scan_reply_target.valid) {
-          lomessage::Buffer scan_buf;
-          format_scan_body(scan_buf);
-          mesh->enqueueTxtCliReply(s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len,
-                                   s_scan_reply_target.out_path, s_scan_reply_target.path_hash_size,
-                                   0, scan_buf.c_str());
-          LOTATO_DBG_LN("lotato scan async: pushed 1 reply len=%u nets=%d", (unsigned)scan_buf.length(),
-                        s_scan_count);
-          s_scan_reply_target.valid = false;
-        }
-      }
-      lotato_sta_failover_suppress(false);
-      lotato_resume_sta_saved_credentials();
-      s_wscan_phase = LotatoWifiScanPhase::Idle;
-      s_async_cli_busy = false;
-      break;
-    }
-  }
-}
-
-static void run_lotato_wifi_scan_cli(lomessage::Buffer& out, MyMesh* mesh, uint32_t sender_ts) {
-  my_mesh_lotato_wifi_scan_poll(mesh);
-  if (s_wscan_phase != LotatoWifiScanPhase::Idle) {
-    // scan already running — from serial this is reachable; from mesh it is blocked by busy gate
+  if (s_async_cli_busy) {
     out.append("WiFi scan in progress...");
     return;
   }
-  if (s_wscan_results_ready) {
-    s_wscan_results_ready = false;
-    format_scan_body(out);
-    return;
-  }
-  lotato_sta_failover_suppress(true);
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect(false, false);
-  s_wscan_t0 = millis();
-  s_wscan_phase = LotatoWifiScanPhase::DisconnectWait;
-  s_async_cli_busy = true;
-  LOTATO_DBG_LN("lotato CLI: wifi async scan queued");
-  // immediate ack — mesh admin gets auto-pushed results when done; serial gets them on next call
+  lf.requestWifiScan();
   out.append("Scanning for WiFi devices...");
 }
 
@@ -1705,9 +1555,9 @@ void MyMesh::lotato_h_wifi_status(locommand::Context& ctx) {
   }
 }
 
-void MyMesh::lotato_h_wifi_scan(locommand::Context& ctx) {
+void MyMesh::lotato_h_wifi_list(locommand::Context& ctx) {
   auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
-  run_lotato_wifi_scan_cli(ctx.out, lc->self, lc->sender_ts);
+  run_lotato_wifi_list_cli(ctx.out, lc->self, lc->sender_ts);
 }
 
 void MyMesh::lotato_h_wifi_connect(locommand::Context& ctx) {
@@ -1728,12 +1578,13 @@ void MyMesh::lotato_h_wifi_connect(locommand::Context& ctx) {
       break;
     }
   }
+  lofi::Lofi& lf = lofi::Lofi::instance();
   if (is_index && tok1[0] != '\0') {
     int idx = atoi(tok1) - 1;
-    if (idx >= 0 && idx < s_scan_count) {
-      strncpy(ssid_to_use, s_scan[idx].ssid, sizeof(ssid_to_use) - 1);
-    } else {
-      ctx.out.appendf("Err - index out of range (1..%d)\nRun: lotato wifi scan first", s_scan_count);
+    int32_t rssi;
+    if (idx < 0 || !lf.scanSnapshotEntry(idx, ssid_to_use, &rssi)) {
+      ctx.out.appendf("Err - index out of range (1..%d)\nRun: lotato wifi list first",
+                      lf.scanSnapshotCount());
       return;
     }
   } else {
@@ -1854,7 +1705,7 @@ void MyMesh::loop() {
   _reply_queue.service(millis(), *this);
 
 #ifdef ESP32
-  my_mesh_lotato_wifi_scan_poll(this);
+  lofi::Lofi::instance().serviceWifiScan();
   // Batch all due nodes from the store into one ingest POST (worker task).
   _ingestor.service(&_node_store, self_id.pub_key);
 #endif

@@ -2,7 +2,7 @@
 
 #ifdef ESP32
 
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <helpers/esp32/LotatoDebug.h>
 #include <cstring>
 
@@ -219,8 +219,8 @@ bool LotatoNodeStore::writeRecord(int slot, const LotatoNodeRecord& rec) {
       if (!have_old) {
         LOTATO_DBG_LN("node store: dense rewrite missing payload s=%d (slot=%d) heap=%u "
                             "spiffs_used=%u/%u",
-                            s, slot, (unsigned)ESP.getFreeHeap(), (unsigned)SPIFFS.usedBytes(),
-                            (unsigned)SPIFFS.totalBytes());
+                            s, slot, (unsigned)ESP.getFreeHeap(), (unsigned)LittleFS.usedBytes(),
+                            (unsigned)LittleFS.totalBytes());
         in.close();
         out.close();
         _fs->remove(TMP);
@@ -232,7 +232,7 @@ bool LotatoNodeStore::writeRecord(int slot, const LotatoNodeRecord& rec) {
       LOTATO_DBG_LN("node store: dense payload write failed s=%d wrote=%u need=%u out_pos=%u "
                          "spiffs_used=%u/%u heap=%u",
                          s, (unsigned)w, (unsigned)RECORD_SIZE, (unsigned)out.position(),
-                         (unsigned)SPIFFS.usedBytes(), (unsigned)SPIFFS.totalBytes(),
+                         (unsigned)LittleFS.usedBytes(), (unsigned)LittleFS.totalBytes(),
                          (unsigned)ESP.getFreeHeap());
       in.close();
       out.close();

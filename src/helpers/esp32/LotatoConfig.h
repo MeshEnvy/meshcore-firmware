@@ -2,36 +2,34 @@
 
 #include <Arduino.h>
 
-class Preferences;
-
 /**
- * NVS-backed WiFi STA + Lotato HTTP ingest settings (ESP32).
+ * Lotato ingest + WiFi STA settings (ESP32).
+ * Scalars live in LoSettings; known WiFi list in LoDB via `lofi::Lofi`.
  */
 class LotatoConfig {
 public:
   static LotatoConfig& instance();
 
-  /** Load from NVS; on first run seeds from compile-time LOTATO_* macros when defined. */
+  /** Load / migrate legacy NVS once; then refresh caches from LoSettings. */
   void load();
+
+  /** Re-read LoSettings into RAM caches (after Lofi updates active WiFi, etc.). */
+  void refreshFromLoSettings();
 
   bool isIngestReady() const;
   bool debugEnabled() const { return _loaded ? _debug : false; }
-
-  static constexpr uint8_t KNOWN_WIFI_MAX = 8;
 
   const char* ssid() const { return _ssid; }
   const char* password() const { return _pwd; }
   const char* ingestOrigin() const { return _url; }
   const char* apiToken() const { return _token; }
 
-  /** MRU-ordered saved SSID/password pairs (index 0 = most recently used). */
-  uint8_t knownWifiCount() const { return _known_cnt; }
-  bool getKnownWifi(uint8_t idx, char* out_ssid, size_t ssid_cap, char* out_pwd, size_t pwd_cap) const;
-  bool isKnownWifiSsid(const char* ssid) const;
-  bool getKnownWifiPassword(const char* ssid, char* out_pwd, size_t pwd_cap) const;
+  uint8_t knownWifiCount();
+  bool getKnownWifi(uint8_t idx, char* out_ssid, size_t ssid_cap, char* out_pwd, size_t pwd_cap);
+  bool isKnownWifiSsid(const char* ssid);
+  bool getKnownWifiPassword(const char* ssid, char* out_pwd, size_t pwd_cap);
 
   void setWifi(const char* s, const char* p);
-  /** Remove SSID from saved known list; clears active ssid/pwd if it matched. */
   bool forgetKnownWifi(const char* ssid);
   void setApiToken(const char* t);
   void setIngestOrigin(const char* u);
@@ -39,17 +37,12 @@ public:
   void toggleDebug();
 
 private:
-  LotatoConfig() : _loaded(false), _debug(false), _known_cnt(0) {
+  LotatoConfig() : _loaded(false), _debug(false) {
     _ssid[0] = _pwd[0] = _url[0] = _token[0] = '\0';
-    memset(_known_ssid, 0, sizeof(_known_ssid));
-    memset(_known_pwd, 0, sizeof(_known_pwd));
   }
 
-  void migrateFromBuildFlagsIfNeeded();
-  void migrateKnownProfilesIfNeeded();
-  void loadKnownWifi(Preferences& prefs);
-  void rememberWifi(const char* ssid, const char* pwd);
-  void persistKnownWifi();
+  void seedBuildFlagsIntoLoSettingsIfNeeded();
+  void migrateLegacyNvsToLoIfNeeded();
 
   bool _loaded;
   bool _debug;
@@ -57,7 +50,4 @@ private:
   char _pwd[65];
   char _url[257];
   char _token[129];
-  uint8_t _known_cnt;
-  char _known_ssid[KNOWN_WIFI_MAX][33];
-  char _known_pwd[KNOWN_WIFI_MAX][65];
 };

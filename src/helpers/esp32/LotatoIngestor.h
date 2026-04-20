@@ -6,20 +6,13 @@
 
 class LotatoNodeStore;
 
-/**
- * Register once at startup: optional STA DNS policy after GOT_IP.
- * Default: keep DHCP (router) DNS — works on most LANs.
- * Build with -DLOTATO_STA_FORCE_PUBLIC_DNS=1 to force 1.1.1.1 / 8.8.8.8 (old behavior).
- */
+/** Apply lotato STA policy (public DNS override if LOTATO_STA_FORCE_PUBLIC_DNS=1). */
 void lotato_register_sta_dns_override();
-/** Register once at startup: log STA connect/disconnect/IP events. */
+/** No-op (STA event logging is now in lofi::Lofi); kept for call-site compat. */
 void lotato_register_wifi_event_logging();
-/**
- * When two or more known WiFi profiles exist, disable ESP auto-reconnect and rotate to the next
- * saved SSID on hard join failures (e.g. reason 201 NO_AP_FOUND, auth/handshake failures).
- */
+/** No-op (failover lives in lofi::Lofi); kept for call-site compat. */
 void lotato_register_sta_known_wifi_failover();
-/** While true, STA disconnect handler skips failover/reconnect (e.g. during `lotato wifi scan`). */
+/** Proxy to `lofi::Lofi::staFailoverSuppress` (scan vs connect gate). */
 void lotato_sta_failover_suppress(bool suppress);
 
 class LotatoIngestor {
@@ -35,8 +28,8 @@ public:
   void restartAfterConfigChange();
   void setPaused(bool paused);
   bool isPaused() const;
-  /** Last HTTP response code from the worker task (0 = no attempt yet). */
+  /** Last HTTP response code (0 = no attempt yet). */
   int lastHttpCode() const;
 };
 
-#endif // ESP32
+#endif  // ESP32

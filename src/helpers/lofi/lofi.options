@@ -1,0 +1,4 @@
+KnownWifi.ssid max_size:33
+KnownWifi.psk max_size:65
+ScanSeen.ssid max_size:33
+ScanSeen.bssid max_size:6,fixed_length:true

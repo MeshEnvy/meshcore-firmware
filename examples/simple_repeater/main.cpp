@@ -9,7 +9,9 @@
 #include <helpers/esp32/LotatoIngestor.h>
 #include <helpers/esp32/LotatoDebug.h>
 #include <helpers/esp32/LotatoSerialCli.h>
+#include <helpers/lofi/Lofi.h>
 #endif
+#include <lofs/LoFS.h>
 
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
@@ -44,6 +46,12 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
+#ifdef ESP32
+  // VFS logs [E] for every fopen of a missing file; LoDB/LoSettings treat "missing" as normal
+  // (get returns NOT_FOUND). Silence the noise — real errors elsewhere still log.
+  esp_log_level_set("vfs_api", ESP_LOG_NONE);
+#endif
+
   board.begin();
 
 #if defined(MESH_DEBUG) && defined(NRF52_PLATFORM)
@@ -77,9 +85,9 @@ void setup() {
   fs = &InternalFS;
   IdentityStore store(InternalFS, "");
 #elif defined(ESP32)
-  SPIFFS.begin(true);
-  fs = &SPIFFS;
-  IdentityStore store(SPIFFS, "/identity");
+  LittleFS.begin(true);
+  fs = &LittleFS;
+  IdentityStore store(LittleFS, "/identity");
 #elif defined(RP2040_PLATFORM)
   LittleFS.begin();
   fs = &LittleFS;
@@ -88,6 +96,8 @@ void setup() {
 #else
   #error "need to define filesystem"
 #endif
+
+  LoFS::mountDefaults();
   if (!store.load("_main", the_mesh.self_id)) {
     MESH_DEBUG_PRINTLN("Generating new keypair");
     the_mesh.self_id = radio_new_identity();   // create new random identity
@@ -114,19 +124,13 @@ void setup() {
 
 #ifdef ESP32
   lotato_register_sta_dns_override();
-  lotato_register_wifi_event_logging();
-  lotato_register_sta_known_wifi_failover();
   {
     auto& pm_cfg = LotatoConfig::instance();
     if (pm_cfg.ssid()[0] != '\0') {
       board.setInhibitSleep(true);
       WiFi.mode(WIFI_STA);
-      if (pm_cfg.knownWifiCount() >= 2) {
-        WiFi.setAutoReconnect(false);
-      }
-      WiFi.begin(pm_cfg.ssid(), pm_cfg.password());
-      // Repeater has no concurrent BLE; modem sleep can starve TLS handshakes (mbedTLS EOF mid-handshake).
-      WiFi.setSleep(WIFI_PS_NONE);
+      if (lofi::Lofi::instance().knownWifiCount() >= 2) WiFi.setAutoReconnect(false);
+      lofi::Lofi::instance().resumeStaSavedCredentials();
       LOTATO_DBG_LN("lotato ingest: WiFi.begin ssid=%.32s modem_sleep=off", pm_cfg.ssid());
     }
   }

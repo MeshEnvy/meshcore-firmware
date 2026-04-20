@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+message KnownWifi {
+  string ssid = 1;
+  string psk = 2;
+  bool favorite = 3;
+  uint32 last_connected = 4;
+  uint32 connect_count = 5;
+}
+
+message ScanSeen {
+  string ssid = 1;
+  bytes bssid = 2;
+  int32 rssi = 3;
+  uint32 last_seen = 4;
+  uint32 channel = 5;
+  uint32 auth = 6;
+}

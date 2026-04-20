@@ -10,7 +10,7 @@
 #elif defined(RP2040_PLATFORM)
   #include <LittleFS.h>
 #elif defined(ESP32)
-  #include <SPIFFS.h>
+  #include <LittleFS.h>
 #endif
 
 #ifdef WITH_RS232_BRIDGE
@@ -149,7 +149,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks, private lomessage::
   static void lotato_h_token(locommand::Context& ctx);
   static void lotato_h_debug(locommand::Context& ctx);
   static void lotato_h_wifi_status(locommand::Context& ctx);
-  static void lotato_h_wifi_scan(locommand::Context& ctx);
+  static void lotato_h_wifi_list(locommand::Context& ctx);
   static void lotato_h_wifi_connect(locommand::Context& ctx);
 
   struct {
@@ -309,3 +309,8 @@ public:
   void setRxBoostedGain(bool enable) override;
 #endif
 };
+
+#ifdef ESP32
+/** WiFi scan vs mesh CLI busy gate (see `lofi::Lofi`). */
+void my_mesh_set_async_cli_busy(bool busy);
+#endif
