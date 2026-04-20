@@ -1626,16 +1626,17 @@ void MyMesh::handleLotaToCommand(char* args, char* reply) {
     else snprintf(code_str, sizeof(code_str), "%d", code);
     const char* token_str = cfg.apiToken()[0] ? "set" : "(none)";
     const char* url_str = cfg.ingestOrigin()[0] ? cfg.ingestOrigin() : "(none)";
+    const char* dbg_str = cfg.debugEnabled() ? "on" : "off";
     if (wl == WL_CONNECTED) {
-      snprintf(reply, MyMesh::kCliReplyCap, "WiFi: %s\nSSID: %.20s\nIP: %s\nNodes: %d\nQueue: %u\nPaused: %s\nHTTP: %s\nURL: %.72s\nToken: %s",
+      snprintf(reply, MyMesh::kCliReplyCap, "WiFi: %s\nSSID: %.20s\nIP: %s\nNodes: %d\nQueue: %u\nPaused: %s\nHTTP: %s\nURL: %.72s\nToken: %s\nDebug: %s",
                wl_str, WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(),
                _node_store.count(), (unsigned)_ingestor.pendingQueueDepth(),
-               _ingestor.isPaused() ? "yes" : "no", code_str, url_str, token_str);
+               _ingestor.isPaused() ? "yes" : "no", code_str, url_str, token_str, dbg_str);
     } else {
-      snprintf(reply, MyMesh::kCliReplyCap, "WiFi: %s\nSaved: %.20s\nNodes: %d\nQueue: %u\nPaused: %s\nURL: %.72s\nToken: %s",
+      snprintf(reply, MyMesh::kCliReplyCap, "WiFi: %s\nSaved: %.20s\nNodes: %d\nQueue: %u\nPaused: %s\nURL: %.72s\nToken: %s\nDebug: %s",
                wl_str, cfg.ssid()[0] ? cfg.ssid() : "(none)",
                _node_store.count(), (unsigned)_ingestor.pendingQueueDepth(),
-               _ingestor.isPaused() ? "yes" : "no", url_str, token_str);
+               _ingestor.isPaused() ? "yes" : "no", url_str, token_str, dbg_str);
     }
 
   // lotato pause / resume
