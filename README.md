@@ -37,7 +37,7 @@ After that, you should begin to see MeshCore nodes appearing on your Potato Mesh
 
 | Command | Description |
 |---|---|
-| `lotato` | Same as `lotato status` |
+| `lotato` | Show command help (same as `lotato help`) |
 | `lotato status` | Show WiFi, IP, node count, ingest queue, HTTP status, endpoint, token, and Lotato debug (on/off) |
 | `lotato pause` | Pause ingest (stops POSTing to Potato Mesh) |
 | `lotato resume` | Resume ingest |
@@ -61,7 +61,8 @@ Lotato releases use annotated git tags of the form `lotato-v<lotato>-repeater-v<
 ### Unreleased (`lotato` branch, not yet tagged)
 
 - Rename MeshForge-facing naming and unify **Lotato** branding in CLI, configuration, and source (follow-up to the Potato Mesh ingestor naming used in earlier tags).
-- **Debug logging:** removed the compile-time `LOTATO_DEBUG` switch; Lotato debug instrumentation is always in the build and is controlled only at runtime. Use `lotato debug on`, `lotato debug off`, or bare `lotato debug` to toggle; the setting persists in NVS (`lotato` / `dbg`). Fresh devices default to debug **off** until you turn it on. `lotato` / `lotato status` include a `Debug: on|off` line.
+- **Debug logging:** removed the compile-time `LOTATO_DEBUG` switch; Lotato debug instrumentation is always in the build and is controlled only at runtime. Use `lotato debug on`, `lotato debug off`, or bare `lotato debug` to toggle; the setting persists in NVS (`lotato` / `dbg`). Fresh devices default to debug **off** until you turn it on. `lotato status` includes a `Debug: on|off` line.
+- **CLI:** bare `lotato` prints the same help as `lotato help` (use `lotato status` for the WiFi / ingest snapshot).
 
 ### [0.1.2] — 2026-04-11 (`lotato-v0.1.2-repeater-v1.14.1`)
 

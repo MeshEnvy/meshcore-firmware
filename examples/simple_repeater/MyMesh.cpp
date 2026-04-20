@@ -1616,8 +1616,14 @@ void MyMesh::handleLotaToCommand(char* args, char* reply) {
 
   LotatoConfig& cfg = LotatoConfig::instance();
 
+  // lotato (bare) — same output as lotato help
+  if (*args == '\0') {
+    lotato_cli_usage(reply);
+    return;
+  }
+
   // lotato status
-  if (strcmp(args, "status") == 0 || *args == '\0') {
+  if (strcmp(args, "status") == 0) {
     wl_status_t wl = WiFi.status();
     const char* wl_str = (wl == WL_CONNECTED) ? "connected" : "not connected";
     int code = _ingestor.lastHttpCode();
