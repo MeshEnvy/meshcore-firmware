@@ -143,7 +143,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   PotatoMeshIngestor _ingestor;
   PotatoNodeStore    _node_store;
   /** Reply buffer size is `kCliReplyCap` (see main.cpp and onPeerDataRecv temp slice). */
-  void handlePotatoCommand(char* args, char* reply);
+  void handleLotaToCommand(char* args, char* reply);
 #endif
 
   CliReplyJob* _cli_reply_root;  ///< head of outbound CLI reply FIFO (nullptr = empty)

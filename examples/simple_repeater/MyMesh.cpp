@@ -7,9 +7,9 @@
 #include <helpers/esp32/PotatoMeshDebug.h>
 #include <helpers/esp32/PotatoNodeStore.h>
 
-static bool potato_cli_continuation(const char* after_potato) {
-  unsigned char c = static_cast<unsigned char>(after_potato[0]);
-  return after_potato[0] == '\0' || isspace(c) != 0 || c == '?';
+static bool lotato_cli_continuation(const char* after_lotato) {
+  unsigned char c = static_cast<unsigned char>(after_lotato[0]);
+  return after_lotato[0] == '\0' || isspace(c) != 0 || c == '?';
 }
 
 /** True while a long-running async CLI op holds the session; mesh commands are rejected while set. */
@@ -1168,10 +1168,10 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
   if (region_load_active) {
 #ifdef ESP32
     // During `region load`, non-blank lines are consumed as region map rows with no echo.
-    // Allow `potato …` through so e.g. `potato flush` still gets a normal reply.
+    // Allow `lotato …` through so e.g. `lotato flush` still gets a normal reply.
     const char *cmd_scan = command;
     while (*cmd_scan == ' ') cmd_scan++;
-    if (!(memcmp(cmd_scan, "potato", 6) == 0 && potato_cli_continuation(cmd_scan + 6)))
+    if (!(memcmp(cmd_scan, "lotato", 6) == 0 && lotato_cli_continuation(cmd_scan + 6)))
 #endif
     {
       if (StrHelper::isBlank(command)) {  // empty/blank line, signal to terminate 'load' operation
@@ -1361,8 +1361,8 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       strcpy(reply, "OK - Discover sent");
     }
 #ifdef ESP32
-  } else if (memcmp(command, "potato", 6) == 0 && potato_cli_continuation(command + 6)) {
-    handlePotatoCommand(command + 6, reply);
+  } else if (memcmp(command, "lotato", 6) == 0 && lotato_cli_continuation(command + 6)) {
+    handleLotaToCommand(command + 6, reply);
 #endif
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
@@ -1393,7 +1393,7 @@ static void scan_rssi_bars(int32_t rssi, char out[7]) {
   out[5] = ']'; out[6] = '\0';
 }
 
-static void potato_resume_sta_saved_credentials() {
+static void lotato_resume_sta_saved_credentials() {
   PotatoMeshConfig& cfg = PotatoMeshConfig::instance();
   if (cfg.ssid()[0] == '\0') return;
   const char* pw = cfg.password()[0] ? cfg.password() : nullptr;
@@ -1404,12 +1404,12 @@ static void potato_resume_sta_saved_credentials() {
 enum class PotatoWifiScanPhase : uint8_t { Idle, DisconnectWait, Scanning };
 static PotatoWifiScanPhase s_wscan_phase = PotatoWifiScanPhase::Idle;
 static uint32_t s_wscan_t0 = 0;
-/** Set when an async scan finished; cleared after user views page 1 via bare `potato scan`. */
+/** Set when an async scan finished; cleared after user views page 1 via bare `lotato scan`. */
 static bool s_wscan_results_ready = false;
 
 static void format_scan_page(int page, char* reply);
 
-static void potato_wifi_scan_fill_from_driver(int n) {
+static void lotato_wifi_scan_fill_from_driver(int n) {
   s_scan_count = 0;
   for (int i = 0; i < n && s_scan_count < kScanMax; i++) {
     String ss = WiFi.SSID(i);
@@ -1440,7 +1440,7 @@ static void potato_wifi_scan_fill_from_driver(int n) {
   }
 }
 
-void my_mesh_potato_wifi_scan_poll(MyMesh* mesh) {
+void my_mesh_lotato_wifi_scan_poll(MyMesh* mesh) {
   switch (s_wscan_phase) {
     case PotatoWifiScanPhase::Idle:
       break;
@@ -1454,7 +1454,7 @@ void my_mesh_potato_wifi_scan_poll(MyMesh* mesh) {
           POTATO_MESH_DBG_LN("potato CLI: wifi async scan start failed");
           WiFi.scanDelete();
           potato_mesh_sta_failover_suppress(false);
-          potato_resume_sta_saved_credentials();
+          lotato_resume_sta_saved_credentials();
           s_wscan_phase = PotatoWifiScanPhase::Idle;
           s_wscan_results_ready = false;
           if (s_scan_reply_target.valid) {
@@ -1476,7 +1476,7 @@ void my_mesh_potato_wifi_scan_poll(MyMesh* mesh) {
         WiFi.scanDelete();
         s_scan_count = 0;
         potato_mesh_sta_failover_suppress(false);
-        potato_resume_sta_saved_credentials();
+        lotato_resume_sta_saved_credentials();
         s_wscan_phase = PotatoWifiScanPhase::Idle;
         if (s_scan_reply_target.valid) {
           mesh->enqueueTxtCliReply(s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len,
@@ -1501,7 +1501,7 @@ void my_mesh_potato_wifi_scan_poll(MyMesh* mesh) {
           s_scan_reply_target.valid = false;
         }
       } else {
-        potato_wifi_scan_fill_from_driver((int)cnt);
+        lotato_wifi_scan_fill_from_driver((int)cnt);
         WiFi.scanDelete();
         s_wscan_results_ready = true;
         POTATO_MESH_DBG_LN("potato CLI: wifi async scan done nets=%d", s_scan_count);
@@ -1520,7 +1520,7 @@ void my_mesh_potato_wifi_scan_poll(MyMesh* mesh) {
         }
       }
       potato_mesh_sta_failover_suppress(false);
-      potato_resume_sta_saved_credentials();
+      lotato_resume_sta_saved_credentials();
       s_wscan_phase = PotatoWifiScanPhase::Idle;
       s_async_cli_busy = false;
       break;
@@ -1528,8 +1528,8 @@ void my_mesh_potato_wifi_scan_poll(MyMesh* mesh) {
   }
 }
 
-static void run_potato_wifi_scan_cli(const char* page_arg, char* reply, MyMesh* mesh) {
-  my_mesh_potato_wifi_scan_poll(mesh);
+static void run_lotato_wifi_scan_cli(const char* page_arg, char* reply, MyMesh* mesh) {
+  my_mesh_lotato_wifi_scan_poll(mesh);
   if (*page_arg) {
     format_scan_page(atoi(page_arg), reply);
     return;
@@ -1558,7 +1558,7 @@ static void run_potato_wifi_scan_cli(const char* page_arg, char* reply, MyMesh* 
 
 static void format_scan_page(int page, char* reply) {
   if (s_scan_count == 0) {
-    strcpy(reply, "No scan results. Run `potato scan` twice (start, then list).");
+    strcpy(reply, "No scan results. Run `lotato scan` twice (start, then list).");
     return;
   }
   int total_pages = (s_scan_count + kScanPageSize - 1) / kScanPageSize;
@@ -1583,24 +1583,24 @@ static void format_scan_page(int page, char* reply) {
   reply[MyMesh::kCliReplyCap - 1] = '\0';
 }
 
-static void potato_cli_usage(char* reply) {
+static void lotato_cli_usage(char* reply) {
   snprintf(reply, MyMesh::kCliReplyCap,
-           "potato status\n"
-           "potato pause\n"
-           "potato resume\n"
-           "potato contacts\n"
-           "potato flush\n"
-           "potato help\n"
-           "potato scan [pg]  (async: run twice to list)\n"
-           "potato wifi scan [pg]\n"
-           "potato wifi <n> [pwd]\n"
-           "potato wifi <ssid> [pwd]\n"
-           "potato endpoint <url>\n"
-           "potato token <val>\n"
-           "potato debug");
+           "lotato status\n"
+           "lotato pause\n"
+           "lotato resume\n"
+           "lotato contacts\n"
+           "lotato flush\n"
+           "lotato help\n"
+           "lotato scan [pg]  (async: run twice to list)\n"
+           "lotato wifi scan [pg]\n"
+           "lotato wifi <n> [pwd]\n"
+           "lotato wifi <ssid> [pwd]\n"
+           "lotato endpoint <url>\n"
+           "lotato token <val>\n"
+           "lotato debug");
 }
 
-void MyMesh::handlePotatoCommand(char* args, char* reply) {
+void MyMesh::handleLotaToCommand(char* args, char* reply) {
   trim_trailing_ws(args);
   while (*args) {
     unsigned char c = static_cast<unsigned char>(*args);
@@ -1610,13 +1610,13 @@ void MyMesh::handlePotatoCommand(char* args, char* reply) {
 
   // Before any WiFi.* (can stall when the STA stack is wedged).
   if (strcmp(args, "help") == 0 || strcmp(args, "?") == 0) {
-    potato_cli_usage(reply);
+    lotato_cli_usage(reply);
     return;
   }
 
   PotatoMeshConfig& cfg = PotatoMeshConfig::instance();
 
-  // potato status
+  // lotato status
   if (strcmp(args, "status") == 0 || *args == '\0') {
     wl_status_t wl = WiFi.status();
     const char* wl_str = (wl == WL_CONNECTED) ? "connected" : "not connected";
@@ -1638,7 +1638,7 @@ void MyMesh::handlePotatoCommand(char* args, char* reply) {
                _ingestor.isPaused() ? "yes" : "no", url_str, token_str);
     }
 
-  // potato pause / resume
+  // lotato pause / resume
   } else if (strcmp(args, "pause") == 0) {
     _ingestor.setPaused(true);
     strcpy(reply, "OK - ingest paused");
@@ -1647,7 +1647,7 @@ void MyMesh::handlePotatoCommand(char* args, char* reply) {
     _ingestor.setPaused(false);
     strcpy(reply, "OK - ingest resumed");
 
-  // potato endpoint <url>
+  // lotato endpoint <url>
   } else if (strncmp(args, "endpoint ", 9) == 0) {
     const char* url = args + 9;
     while (*url == ' ') url++;
@@ -1656,7 +1656,7 @@ void MyMesh::handlePotatoCommand(char* args, char* reply) {
     POTATO_MESH_DBG_LN("potato CLI: endpoint set url=%.60s", url);
     snprintf(reply, MyMesh::kCliReplyCap, "OK - endpoint: %.100s", url);
 
-  // potato token <val>
+  // lotato token <val>
   } else if (strncmp(args, "token ", 6) == 0) {
     const char* tok = args + 6;
     while (*tok == ' ') tok++;
@@ -1665,25 +1665,25 @@ void MyMesh::handlePotatoCommand(char* args, char* reply) {
     POTATO_MESH_DBG_LN("potato CLI: token set (len=%u)", (unsigned)strlen(tok));
     strcpy(reply, "OK - token saved");
 
-  // potato debug
+  // lotato debug
   } else if (strcmp(args, "debug") == 0) {
     cfg.toggleDebug();
     snprintf(reply, MyMesh::kCliReplyCap, "OK - debug %s", cfg.debugEnabled() ? "on" : "off");
 
-  // potato scan [page]  — alias for potato wifi scan
+  // lotato scan [page]  — alias for lotato wifi scan
   } else if (strcmp(args, "scan") == 0 || strncmp(args, "scan ", 5) == 0) {
     const char* pg_str = (strcmp(args, "scan") == 0) ? "" : (args + 5);
     while (*pg_str == ' ') pg_str++;
-    run_potato_wifi_scan_cli(pg_str, reply, this);
+    run_lotato_wifi_scan_cli(pg_str, reply, this);
 
-  // potato wifi scan [page]
+  // lotato wifi scan [page]
   } else if (strncmp(args, "wifi scan", 9) == 0 &&
              (args[9] == '\0' || isspace(static_cast<unsigned char>(args[9])))) {
     const char* pg_str = args + 9;
     while (*pg_str == ' ') pg_str++;
-    run_potato_wifi_scan_cli(pg_str, reply, this);
+    run_lotato_wifi_scan_cli(pg_str, reply, this);
 
-  // potato wifi <n> [pwd]  or  potato wifi <ssid> [pwd]  or  potato wifi (status)
+  // lotato wifi <n> [pwd]  or  lotato wifi <ssid> [pwd]  or  lotato wifi (status)
   } else if (strncmp(args, "wifi", 4) == 0 &&
              (args[4] == '\0' || isspace(static_cast<unsigned char>(args[4])))) {
     const char* sub = args + 4;
@@ -1696,7 +1696,7 @@ void MyMesh::handlePotatoCommand(char* args, char* reply) {
         snprintf(reply, MyMesh::kCliReplyCap, "WiFi: connected\nSSID: %.30s\nIP: %s",
                  WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
       } else {
-        snprintf(reply, MyMesh::kCliReplyCap, "WiFi: not connected\nSaved: %.30s\nUse: potato scan (async)",
+        snprintf(reply, MyMesh::kCliReplyCap, "WiFi: not connected\nSaved: %.30s\nUse: lotato scan (async)",
                  cfg.ssid()[0] ? cfg.ssid() : "(none)");
       }
     } else {
@@ -1719,7 +1719,7 @@ void MyMesh::handlePotatoCommand(char* args, char* reply) {
         if (idx >= 0 && idx < s_scan_count) {
           strncpy(ssid_to_use, s_scan[idx].ssid, sizeof(ssid_to_use) - 1);
         } else {
-          snprintf(reply, MyMesh::kCliReplyCap, "Err - index out of range (1..%d)\nRun: potato scan first", s_scan_count);
+          snprintf(reply, MyMesh::kCliReplyCap, "Err - index out of range (1..%d)\nRun: lotato scan first", s_scan_count);
           return;
         }
       } else {
@@ -1744,14 +1744,14 @@ void MyMesh::handlePotatoCommand(char* args, char* reply) {
       snprintf(reply, MyMesh::kCliReplyCap, "OK - connecting to %.32s", ssid_to_use);
     }
 
-  // potato contacts
+  // lotato contacts
   } else if (strcmp(args, "contacts") == 0) {
     snprintf(reply, MyMesh::kCliReplyCap, "Nodes: %d/%d\nRepost: %lus\nFile: %s",
              _node_store.count(), PotatoNodeStore::MAX,
              (unsigned long)(POTATO_NODE_REPOST_MS / 1000),
              PotatoNodeStore::PATH);
 
-  // potato flush — re-post all known nodes on next sweep
+  // lotato flush — re-post all known nodes on next sweep
   } else if (strcmp(args, "flush") == 0) {
     _node_store.resetPostTimers();
     _node_store.logFlushTargetsDebug();
@@ -1759,7 +1759,7 @@ void MyMesh::handlePotatoCommand(char* args, char* reply) {
     snprintf(reply, MyMesh::kCliReplyCap, "OK - will re-post %d nodes", _node_store.count());
 
   } else {
-    potato_cli_usage(reply);
+    lotato_cli_usage(reply);
   }
 }
 #endif
@@ -1906,7 +1906,7 @@ void MyMesh::loop() {
   serviceCliReplyQueue();
 
 #ifdef ESP32
-  my_mesh_potato_wifi_scan_poll(this);
+  my_mesh_lotato_wifi_scan_poll(this);
   // Batch all due nodes from the store into one ingest POST (worker task).
   _ingestor.service(&_node_store, self_id.pub_key);
 #endif

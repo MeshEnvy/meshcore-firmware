@@ -24,7 +24,7 @@ void halt() {
   while (1) ;
 }
 
-/** Long multi-line replies (e.g. `potato help`) can fill the default USB-Serial TX buffer; println then
+/** Long multi-line replies (e.g. `lotato help`) can fill the default USB-Serial TX buffer; println then
  *  blocks while WiFi/debug also writes to Serial. Drip-bytes with yield so the CLI never wedges. */
 #if defined(ARDUINO_ARCH_ESP32)
 static void serial_print_mesh_cli_reply(const char* reply) {
