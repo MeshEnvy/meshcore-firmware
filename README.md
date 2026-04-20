@@ -53,8 +53,33 @@ After that, you should begin to see MeshCore nodes appearing on your Potato Mesh
 | `lotato debug` | Toggle debug logging |
 | `lotato help` | Show command help |
 
+## Changelog (Lotato)
 
+Lotato releases use annotated git tags of the form `lotato-v<lotato>-repeater-v<meshcore>`, for example `lotato-v0.1.0-repeater-v1.14.1`, where the `repeater-v…` suffix is the upstream [MeshCore](https://github.com/ripplebiz/MeshCore) repeater release that revision was based on.
 
+### Unreleased (`lotato` branch, not yet tagged)
+
+- Rename MeshForge-facing naming and unify **Lotato** branding in CLI, configuration, and source (follow-up to the Potato Mesh ingestor naming used in earlier tags).
+
+### [0.1.2] — 2026-04-11 (`lotato-v0.1.2-repeater-v1.14.1`)
+
+- Documentation refresh for Lotato usage and setup.
+
+### [0.1.1] — 2026-04-11 (`lotato-v0.1.1-repeater-v1.14.1`)
+
+- MeshForge / flasher-oriented project configuration updates.
+- **Lotato** branding (project and user-facing naming).
+
+### [0.1.0] — 2026-04-09 (`lotato-v0.1.0-repeater-v1.14.1`)
+
+First tagged Lotato release, based on MeshCore **repeater v1.14.1**.
+
+- Initial Potato Mesh / MeshEnvy ingestor firmware path (WiFi repeater ingest to a remote HTTP endpoint).
+- Batch posting fixes for the ingest pipeline.
+- Fix MeshCore platform reporting for this build.
+- ESP32 CLI improvements: chunked serial replies to reduce blocking, larger reply buffer, WiFi failover with rotation across known networks, and related serial output handling.
+- Asynchronous handling for certain CLI command responses.
+- HTTPS / TLS certificate handling fixes for outbound ingest.
 
 -------
 
