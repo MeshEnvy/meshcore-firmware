@@ -37,6 +37,7 @@
 #include "RateLimiter.h"
 
 #ifdef ESP32
+#include <helpers/locommand/Engine.h>
 #include <helpers/esp32/LotatoConfig.h>
 #include <helpers/esp32/LotatoIngestor.h>
 #include <helpers/esp32/LotatoNodeStore.h>
@@ -137,7 +138,20 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks, private lomessage::
 #ifdef ESP32
   LotatoIngestor _ingestor;
   LotatoNodeStore    _node_store;
-  void handleLotaToCommand(char* args, char* reply, uint32_t sender_timestamp);
+  locommand::Engine _lotato_cli{"lotato"};
+
+  static void lotato_h_status(locommand::Context& ctx);
+  static void lotato_h_pause(locommand::Context& ctx);
+  static void lotato_h_resume(locommand::Context& ctx);
+  static void lotato_h_contacts(locommand::Context& ctx);
+  static void lotato_h_flush(locommand::Context& ctx);
+  static void lotato_h_endpoint(locommand::Context& ctx);
+  static void lotato_h_token(locommand::Context& ctx);
+  static void lotato_h_debug(locommand::Context& ctx);
+  static void lotato_h_wifi_status(locommand::Context& ctx);
+  static void lotato_h_wifi_scan(locommand::Context& ctx);
+  static void lotato_h_wifi_connect(locommand::Context& ctx);
+
   struct {
     bool valid;
     int acl_idx;

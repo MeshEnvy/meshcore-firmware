@@ -27,7 +27,7 @@ Test remote admin access now to be sure.
 **Essential Setup**
 Log in via remote access and access the CLI tool. Lotato implements some extra CLI commands to help you get set up:
 
-* `lotato wifi <ssid> <pwd>` to connect to your WiFi network
+* `lotato wifi connect <ssid> <pwd>` to connect to your WiFi network
 * `lotato endpoint <url>` to set the Potato Mesh ingestor URL (example: https://monitor.meshenvy.org)
 * `lotato token <val>` to set the Potato Mesh API key (see Potato Mesh docs)
 
@@ -43,15 +43,14 @@ After that, you should begin to see MeshCore nodes appearing on your Potato Mesh
 | `lotato resume` | Resume ingest |
 | `lotato contacts` | Show node store stats (count, max, repost interval, file path) |
 | `lotato flush` | Mark all known nodes for immediate re-post on next ingest sweep |
-| `lotato scan` | Scan for nearby WiFi networks (async — run twice to see results) |
-| `lotato wifi` | Show current WiFi connection status |
-| `lotato wifi scan` | Scan for nearby WiFi networks |
-| `lotato wifi <n> [pwd]` | Connect to a network by scan result index |
-| `lotato wifi <ssid> [pwd]` | Connect to a network by SSID |
+| `lotato wifi` | Show WiFi subcommand help |
+| `lotato wifi status` | Show current WiFi connection status |
+| `lotato wifi scan` | Scan for nearby WiFi networks (async — run twice to see results) |
+| `lotato wifi connect <n> [pwd]` | Connect to a network by scan result index |
+| `lotato wifi connect <ssid> [pwd]` | Connect to a network by SSID |
 | `lotato endpoint <url>` | Set the Potato Mesh ingest endpoint URL |
 | `lotato token <val>` | Set the API bearer token |
-| `lotato debug on` / `off` | Enable or disable Lotato `Serial` debug logging (stored in NVS; default off until set) |
-| `lotato debug` | Toggle debug logging (same NVS flag) |
+| `lotato debug <on\|off\|toggle>` | Enable, disable, or toggle Lotato `Serial` debug logging (stored in NVS; default off until set) |
 | `lotato help` | Show command help |
 
 ## Changelog (Lotato)
@@ -61,8 +60,9 @@ Lotato releases use annotated git tags of the form `lotato-v<lotato>-repeater-v<
 ### Unreleased (`lotato` branch, not yet tagged)
 
 - Rename MeshForge-facing naming and unify **Lotato** branding in CLI, configuration, and source (follow-up to the Potato Mesh ingestor naming used in earlier tags).
-- **Debug logging:** removed the compile-time `LOTATO_DEBUG` switch; Lotato debug instrumentation is always in the build and is controlled only at runtime. Use `lotato debug on`, `lotato debug off`, or bare `lotato debug` to toggle; the setting persists in NVS (`lotato` / `dbg`). Fresh devices default to debug **off** until you turn it on. `lotato status` includes a `Debug: on|off` line.
+- **Debug logging:** removed the compile-time `LOTATO_DEBUG` switch; Lotato debug instrumentation is always in the build and is controlled only at runtime. Use `lotato debug on`, `lotato debug off`, or `lotato debug toggle`; the setting persists in NVS (`lotato` / `dbg`). Fresh devices default to debug **off** until you turn it on. `lotato status` includes a `Debug: on|off` line.
 - **CLI:** bare `lotato` prints the same help as `lotato help` (use `lotato status` for the WiFi / ingest snapshot).
+- **`locommand`:** added nested CLI helper at `src/helpers/locommand/` (`Engine`, strict group-or-leaf command tree, flat help, `Context::printHelp()` for per-leaf usage). Depends on `lomessage::Buffer` for replies. The Lotato CLI is registered on `MyMesh` via `locommand::Engine`. **Breaking:** `lotato wifi <ssid> [pwd]` is now `lotato wifi connect <ssid|n> [pwd]`; bare `lotato wifi` prints WiFi subcommand help (use `lotato wifi status` for the old one-line snapshot); bare `lotato debug` now prints its usage line (use `lotato debug toggle` instead of bare `lotato debug` to toggle).
 - **`lomessage`:** added transport-agnostic helper library at `src/helpers/lomessage/` — `Buffer` (append / appendf, capped growth), `Split.h` (`next_chunk_len` / `next_chunk` with newline-aware chunk policy and optional line-boundary absorption), and `Queue` (FIFO of outbound text jobs with pluggable `Sink`). `MyMesh` now owns a single `lomessage::Queue` and implements `lomessage::Sink::sendChunk` to build the `TXT_MSG` datagram; all split / queue / schedule / drop logic lives in the library. No radio, network, or `Serial` dependencies inside `lomessage`.
 - **Long Lotato replies:** replies longer than the mesh/serial snapshot buffer are delivered via one mesh FIFO job (chunked over the air as before) or drip-printed on USB serial; `lotato scan` / `lotato wifi scan` return a single full WiFi list (no `Pg x/y` pages or `[pg]` in help); optional trailing scan arguments are ignored for compatibility.
 

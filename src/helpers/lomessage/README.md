@@ -2,6 +2,8 @@
 
 Small, **transport-agnostic** helpers for building, splitting, queuing, and driving long text messages through any byte-oriented transport.
 
+See also **[`locommand`](../locommand/README.md)** — nested CLI dispatcher that uses `lomessage::Buffer` for command replies.
+
 - **`Buffer`** ([`Buffer.h`](./Buffer.h), [`Buffer.cpp`](./Buffer.cpp)) — heap-backed `append` / `appendf` with a hard max size cap.
 - **`Split.h`** — stateless chunking policy
   - `next_chunk_len(data, total_len, offset, max_chunk)` — raw chunk length; prefers breaking at the last newline in the second half of a full-sized window.
