@@ -8,6 +8,7 @@
 #include <helpers/esp32/LotatoConfig.h>
 #include <helpers/esp32/LotatoIngestor.h>
 #include <helpers/esp32/LotatoDebug.h>
+#include <helpers/esp32/LotatoSerialCli.h>
 #endif
 
 #ifdef DISPLAY_CLASS
@@ -23,28 +24,6 @@ MyMesh the_mesh(board, radio_driver, *new ArduinoMillis(), fast_rng, rtc_clock, 
 void halt() {
   while (1) ;
 }
-
-/** Long multi-line replies (e.g. `lotato help`) can fill the default USB-Serial TX buffer; println then
- *  blocks while WiFi/debug also writes to Serial. Drip-bytes with yield so the CLI never wedges. */
-#if defined(ARDUINO_ARCH_ESP32)
-static void serial_print_mesh_cli_reply(const char* reply) {
-  Serial.print("  -> ");
-  constexpr size_t kChunk = 48;
-  size_t n = 0;
-  for (const char* p = reply; *p != '\0'; ++p) {
-    Serial.write(static_cast<uint8_t>(*p));
-    if (++n % kChunk == 0) {
-      yield();
-    }
-  }
-  Serial.print("\r\n");
-}
-#else
-static void serial_print_mesh_cli_reply(const char* reply) {
-  Serial.print("  -> ");
-  Serial.println(reply);
-}
-#endif
 
 // Must fit `lotato endpoint ` + LotatoConfig ingest URL (257) with terminator.
 static char command[288];
@@ -206,7 +185,12 @@ void loop() {
     lotato_dbg_trace_cli_exchange("serial", cmd_snap, reply);
 #endif
     if (reply[0]) {
-      serial_print_mesh_cli_reply(reply);
+#ifdef ESP32
+      lotato_serial_print_mesh_cli_reply(reply);
+#else
+      Serial.print("  -> ");
+      Serial.println(reply);
+#endif
     }
 
     command[0] = 0;  // reset command buffer

@@ -43,9 +43,9 @@ After that, you should begin to see MeshCore nodes appearing on your Potato Mesh
 | `lotato resume` | Resume ingest |
 | `lotato contacts` | Show node store stats (count, max, repost interval, file path) |
 | `lotato flush` | Mark all known nodes for immediate re-post on next ingest sweep |
-| `lotato scan [pg]` | Scan for nearby WiFi networks (async — run twice to see results) |
+| `lotato scan` | Scan for nearby WiFi networks (async — run twice to see results) |
 | `lotato wifi` | Show current WiFi connection status |
-| `lotato wifi scan [pg]` | Scan for nearby WiFi networks |
+| `lotato wifi scan` | Scan for nearby WiFi networks |
 | `lotato wifi <n> [pwd]` | Connect to a network by scan result index |
 | `lotato wifi <ssid> [pwd]` | Connect to a network by SSID |
 | `lotato endpoint <url>` | Set the Potato Mesh ingest endpoint URL |
@@ -63,6 +63,8 @@ Lotato releases use annotated git tags of the form `lotato-v<lotato>-repeater-v<
 - Rename MeshForge-facing naming and unify **Lotato** branding in CLI, configuration, and source (follow-up to the Potato Mesh ingestor naming used in earlier tags).
 - **Debug logging:** removed the compile-time `LOTATO_DEBUG` switch; Lotato debug instrumentation is always in the build and is controlled only at runtime. Use `lotato debug on`, `lotato debug off`, or bare `lotato debug` to toggle; the setting persists in NVS (`lotato` / `dbg`). Fresh devices default to debug **off** until you turn it on. `lotato status` includes a `Debug: on|off` line.
 - **CLI:** bare `lotato` prints the same help as `lotato help` (use `lotato status` for the WiFi / ingest snapshot).
+- **`lomessage`:** added `src/helpers/lomessage/` — transport-agnostic text `Buffer` (append / appendf, capped growth) and `Split.h` (`next_chunk_len` for newline-aware fixed-size chunks). Mesh admin TXT reply chunking uses the splitter so policy lives in one place.
+- **Long Lotato replies:** replies longer than the mesh/serial snapshot buffer are delivered via one mesh FIFO job (chunked over the air as before) or drip-printed on USB serial; `lotato scan` / `lotato wifi scan` return a single full WiFi list (no `Pg x/y` pages or `[pg]` in help); optional trailing scan arguments are ignored for compatibility.
 
 ### [0.1.2] — 2026-04-11 (`lotato-v0.1.2-repeater-v1.14.1`)
 

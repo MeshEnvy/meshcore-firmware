@@ -142,8 +142,14 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
 #ifdef ESP32
   LotatoIngestor _ingestor;
   LotatoNodeStore    _node_store;
-  /** Reply buffer size is `kCliReplyCap` (see main.cpp and onPeerDataRecv temp slice). */
-  void handleLotaToCommand(char* args, char* reply);
+  void handleLotaToCommand(char* args, char* reply, uint32_t sender_timestamp);
+  struct {
+    bool valid;
+    int acl_idx;
+    uint8_t out_path[MAX_PATH_SIZE];
+    uint8_t out_path_len;
+    uint8_t path_hash_size;
+  } _lotato_txt_route;
 #endif
 
   CliReplyJob* _cli_reply_root;  ///< head of outbound CLI reply FIFO (nullptr = empty)
@@ -217,6 +223,11 @@ public:
    *  Heap-allocates a copy of @p text; returns false on OOM (reply is dropped). */
   bool enqueueTxtCliReply(int acl_idx, uint8_t out_path_len, const uint8_t* out_path,
                           uint8_t path_hash_size, uint32_t sender_ts, const char* text);
+
+#ifdef ESP32
+  /** Long text: copy into @p reply if it fits; else mesh-enqueue using route snapshot, else serial drip. */
+  void deliverLotatoReply(uint32_t sender_ts, const char* text, char* reply);
+#endif
 
   MyMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables);
 
