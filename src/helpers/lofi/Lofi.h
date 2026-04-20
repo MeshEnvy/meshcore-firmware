@@ -56,6 +56,11 @@ public:
   /** Suppress STA disconnect failover (e.g. during scan). */
   void staFailoverSuppress(bool suppress) { _failover_suppress = suppress; }
 
+  /** Kick an async connect attempt. Completion via `setConnectCompleteCallback`. */
+  void beginConnect(const char* ssid, const char* psk);
+  /** Completion callback: `ok` true => `detail` is the IP; false => reason code / "timeout". */
+  void setConnectCompleteCallback(void (*fn)(void* ctx, bool ok, const char* detail), void* ctx);
+
   // --- HTTP ---
   /**
    * Generic POST. `full_url` selects HTTPS (esp_http_client + CA bundle) or HTTP (HTTPClient session).
@@ -72,6 +77,10 @@ private:
   void ensureTables();
   void registerWifiHandlers();
   void rememberKnownUnlocked(const char* ssid, const char* psk);
+  /** Rehydrate the in-RAM known-wifi cache from LoDB (sorted MRU). */
+  void reloadKnownCache();
+  /** Re-read active.ssid/psk from LoSettings into RAM. */
+  void reloadActiveCache();
 
   LoDb _db;
   bool _tables_registered = false;
@@ -80,6 +89,8 @@ private:
   bool _failover_suppress = false;
   void (*_scan_cb)(void*, const char*) = nullptr;
   void* _scan_cb_ctx = nullptr;
+  void (*_connect_cb)(void*, bool, const char*) = nullptr;
+  void* _connect_cb_ctx = nullptr;
 };
 
 }  // namespace lofi

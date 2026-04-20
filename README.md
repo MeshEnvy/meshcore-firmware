@@ -45,7 +45,7 @@ After that, you should begin to see MeshCore nodes appearing on your Potato Mesh
 | `lotato flush` | Mark all known nodes for immediate re-post on next ingest sweep |
 | `lotato wifi` | Show WiFi subcommand help |
 | `lotato wifi status` | Show current WiFi connection status |
-| `lotato wifi list` | List nearby WiFi networks (async — triggers a scan if none cached) |
+| `lotato wifi scan` | Scan for nearby WiFi networks (async — returns results when the scan completes) |
 | `lotato wifi connect <n> [pwd]` | Connect to a network by scan result index |
 | `lotato wifi connect <ssid> [pwd]` | Connect to a network by SSID |
 | `lotato endpoint <url>` | Set the Potato Mesh ingest endpoint URL |
@@ -64,7 +64,7 @@ Lotato releases use annotated git tags of the form `lotato-v<lotato>-repeater-v<
 - **CLI:** bare `lotato` prints the same help as `lotato help` (use `lotato status` for the WiFi / ingest snapshot).
 - **`locommand`:** added nested CLI helper at `src/helpers/locommand/` (`Engine`, strict group-or-leaf command tree, flat help, `Context::printHelp()` for per-leaf usage). Depends on `lomessage::Buffer` for replies. The Lotato CLI is registered on `MyMesh` via `locommand::Engine`. **Breaking:** `lotato wifi <ssid> [pwd]` is now `lotato wifi connect <ssid|n> [pwd]`; bare `lotato wifi` prints WiFi subcommand help (use `lotato wifi status` for the old one-line snapshot); bare `lotato debug` now prints its usage line (use `lotato debug toggle` instead of bare `lotato debug` to toggle).
 - **`lomessage`:** added transport-agnostic helper library at `src/helpers/lomessage/` — `Buffer` (append / appendf, capped growth), `Split.h` (`next_chunk_len` / `next_chunk` with newline-aware chunk policy and optional line-boundary absorption), and `Queue` (FIFO of outbound text jobs with pluggable `Sink`). `MyMesh` now owns a single `lomessage::Queue` and implements `lomessage::Sink::sendChunk` to build the `TXT_MSG` datagram; all split / queue / schedule / drop logic lives in the library. No radio, network, or `Serial` dependencies inside `lomessage`.
-- **Long Lotato replies:** replies longer than the mesh/serial snapshot buffer are delivered via one mesh FIFO job (chunked over the air as before) or drip-printed on USB serial; `lotato wifi list` returns a single full WiFi list (no `Pg x/y` pages or `[pg]` in help); optional trailing scan arguments are ignored for compatibility.
+- **Long Lotato replies:** replies longer than the mesh/serial snapshot buffer are delivered via one mesh FIFO job (chunked over the air as before) or drip-printed on USB serial; `lotato wifi scan` returns a single full WiFi list (no `Pg x/y` pages or `[pg]` in help); optional trailing scan arguments are ignored for compatibility.
 
 ### [0.1.2] — 2026-04-11 (`lotato-v0.1.2-repeater-v1.14.1`)
 

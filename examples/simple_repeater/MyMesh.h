@@ -149,7 +149,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks, private lomessage::
   static void lotato_h_token(locommand::Context& ctx);
   static void lotato_h_debug(locommand::Context& ctx);
   static void lotato_h_wifi_status(locommand::Context& ctx);
-  static void lotato_h_wifi_list(locommand::Context& ctx);
+  static void lotato_h_wifi_scan(locommand::Context& ctx);
   static void lotato_h_wifi_connect(locommand::Context& ctx);
 
   struct {

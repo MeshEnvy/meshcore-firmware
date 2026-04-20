@@ -56,6 +56,32 @@ static WifiScanPhase s_wscan_phase = WifiScanPhase::Idle;
 static uint32_t s_wscan_t0 = 0;
 static bool s_wscan_results_ready = false;
 
+constexpr int kKnownCacheMax = 8;
+struct KnownCacheEntry {
+  char ssid[33];
+  char psk[65];
+  uint32_t last_connected;
+};
+static KnownCacheEntry s_known[kKnownCacheMax];
+static uint8_t s_known_count = 0;
+static char s_active_ssid[33] = {};
+static char s_active_psk[65] = {};
+
+/** Async-connect state. Written from arduino_events task, read from loop task. */
+struct ConnectState {
+  bool pending;
+  bool result_ready;
+  bool ok;
+  uint32_t t0;
+  char detail[48];
+};
+static ConnectState s_connect = {};
+#ifndef LOFI_WIFI_CONNECT_TIMEOUT_MS
+#define LOFI_WIFI_CONNECT_TIMEOUT_MS 20000
+#endif
+/** Ignore the self-induced disconnect that fires right after WiFi.disconnect() in beginConnect. */
+static constexpr uint32_t kConnectSettleMs = 300;
+
 static int cmp_known_by_time(const void* a, const void* b) {
   const KnownWifi* x = (const KnownWifi*)a;
   const KnownWifi* y = (const KnownWifi*)b;
@@ -217,7 +243,6 @@ Lofi::Lofi() : _db("lofi") {}
 void Lofi::ensureTables() {
   if (_tables_registered) return;
   _db.registerTable("known_wifi", &KnownWifi_msg, sizeof(KnownWifi));
-  _db.registerTable("scan_seen", &ScanSeen_msg, sizeof(ScanSeen));
   _tables_registered = true;
 }
 
@@ -249,50 +274,63 @@ void Lofi::rememberKnownUnlocked(const char* ssid, const char* psk) {
   }
 }
 
-void Lofi::saveWifiConnect(const char* ssid, const char* psk) {
-  ensureTables();
-  losettings::LoSettings st("lofi");
-  st.setString("active.ssid", ssid ? ssid : "");
-  st.setString("active.psk", psk ? psk : "");
-  rememberKnownUnlocked(ssid, psk);
-}
-
-uint8_t Lofi::knownWifiCount() {
-  ensureTables();
-  int c = _db.count("known_wifi");
-  if (c < 0) return 0;
-  if (c > 255) return 255;
-  return (uint8_t)c;
-}
-
-bool Lofi::getKnownWifi(uint8_t idx, char* out_ssid, size_t ssid_cap, char* out_pwd, size_t pwd_cap) {
-  ensureTables();
-  if (!out_ssid || ssid_cap < 1) return false;
-  auto rows = _db.select("known_wifi", LoDbFilter(), cmp_known_by_time, 0);
-  if (idx >= rows.size()) {
-    LoDb::freeRecords(rows);
-    return false;
-  }
-  const KnownWifi* w = (const KnownWifi*)rows[idx];
-  strncpy(out_ssid, w->ssid, ssid_cap - 1);
-  out_ssid[ssid_cap - 1] = '\0';
-  if (out_pwd && pwd_cap > 0) {
-    strncpy(out_pwd, w->psk, pwd_cap - 1);
-    out_pwd[pwd_cap - 1] = '\0';
+void Lofi::reloadKnownCache() {
+  if (!_tables_registered) return;
+  auto rows = _db.select("known_wifi", LoDbFilter(), cmp_known_by_time, kKnownCacheMax);
+  s_known_count = 0;
+  for (void* r : rows) {
+    if (s_known_count >= kKnownCacheMax) break;
+    const KnownWifi* k = (const KnownWifi*)r;
+    strncpy(s_known[s_known_count].ssid, k->ssid, sizeof(s_known[0].ssid) - 1);
+    s_known[s_known_count].ssid[sizeof(s_known[0].ssid) - 1] = '\0';
+    strncpy(s_known[s_known_count].psk, k->psk, sizeof(s_known[0].psk) - 1);
+    s_known[s_known_count].psk[sizeof(s_known[0].psk) - 1] = '\0';
+    s_known[s_known_count].last_connected = k->last_connected;
+    s_known_count++;
   }
   LoDb::freeRecords(rows);
+}
+
+void Lofi::reloadActiveCache() {
+  losettings::LoSettings st("lofi");
+  st.getString("active.ssid", s_active_ssid, sizeof(s_active_ssid), "");
+  st.getString("active.psk", s_active_psk, sizeof(s_active_psk), "");
+}
+
+void Lofi::saveWifiConnect(const char* ssid, const char* psk) {
+  ensureTables();
+  {
+    losettings::LoSettings st("lofi");
+    st.setString("active.ssid", ssid ? ssid : "");
+    st.setString("active.psk", psk ? psk : "");
+  }
+  rememberKnownUnlocked(ssid, psk);
+  reloadActiveCache();
+  reloadKnownCache();
+}
+
+uint8_t Lofi::knownWifiCount() { return s_known_count; }
+
+bool Lofi::getKnownWifi(uint8_t idx, char* out_ssid, size_t ssid_cap, char* out_pwd, size_t pwd_cap) {
+  if (!out_ssid || ssid_cap < 1 || idx >= s_known_count) return false;
+  strncpy(out_ssid, s_known[idx].ssid, ssid_cap - 1);
+  out_ssid[ssid_cap - 1] = '\0';
+  if (out_pwd && pwd_cap > 0) {
+    strncpy(out_pwd, s_known[idx].psk, pwd_cap - 1);
+    out_pwd[pwd_cap - 1] = '\0';
+  }
   return true;
 }
 
 bool Lofi::getKnownWifiPassword(const char* ssid, char* out_pwd, size_t pwd_cap) {
-  ensureTables();
   if (!ssid || !out_pwd || pwd_cap < 1) return false;
-  lodb_uuid_t id = lodb_new_uuid(ssid, 0);
-  KnownWifi w = KnownWifi_init_zero;
-  if (_db.get("known_wifi", id, &w) != LODB_OK) return false;
-  strncpy(out_pwd, w.psk, pwd_cap - 1);
-  out_pwd[pwd_cap - 1] = '\0';
-  return true;
+  for (uint8_t i = 0; i < s_known_count; i++) {
+    if (strcmp(s_known[i].ssid, ssid) != 0) continue;
+    strncpy(out_pwd, s_known[i].psk, pwd_cap - 1);
+    out_pwd[pwd_cap - 1] = '\0';
+    return true;
+  }
+  return false;
 }
 
 bool Lofi::forgetKnownWifi(const char* ssid) {
@@ -300,33 +338,33 @@ bool Lofi::forgetKnownWifi(const char* ssid) {
   if (!ssid || !ssid[0]) return false;
   lodb_uuid_t id = lodb_new_uuid(ssid, 0);
   bool ok = _db.deleteRecord("known_wifi", id) == LODB_OK;
-  if (ok) {
-    char active[33];
+  if (!ok) return false;
+  if (strcmp(s_active_ssid, ssid) == 0) {
     losettings::LoSettings st("lofi");
-    st.getString("active.ssid", active, sizeof(active), "");
-    if (strcmp(active, ssid) == 0) {
-      st.setString("active.ssid", "");
-      st.setString("active.psk", "");
-    }
+    st.setString("active.ssid", "");
+    st.setString("active.psk", "");
   }
-  return ok;
+  reloadActiveCache();
+  reloadKnownCache();
+  return true;
 }
 
 void Lofi::resumeStaSavedCredentials() {
-  char s[33]{}, p[65]{};
-  losettings::LoSettings st("lofi");
-  st.getString("active.ssid", s, sizeof(s), "");
-  st.getString("active.psk", p, sizeof(p), "");
-  if (s[0] == '\0') return;
-  const char* pw = p[0] ? p : nullptr;
-  WiFi.begin(s, pw);
+  if (s_active_ssid[0] == '\0') return;
+  const char* pw = s_active_psk[0] ? s_active_psk : nullptr;
+  WiFi.begin(s_active_ssid, pw);
   WiFi.setSleep(WIFI_PS_NONE);
 }
 
 void Lofi::getActiveCredentials(char* ssid_out, size_t ssid_cap, char* psk_out, size_t psk_cap) {
-  losettings::LoSettings st("lofi");
-  if (ssid_out && ssid_cap) st.getString("active.ssid", ssid_out, ssid_cap, "");
-  if (psk_out && psk_cap) st.getString("active.psk", psk_out, psk_cap, "");
+  if (ssid_out && ssid_cap) {
+    strncpy(ssid_out, s_active_ssid, ssid_cap - 1);
+    ssid_out[ssid_cap - 1] = '\0';
+  }
+  if (psk_out && psk_cap) {
+    strncpy(psk_out, s_active_psk, psk_cap - 1);
+    psk_out[psk_cap - 1] = '\0';
+  }
 }
 
 HttpResult Lofi::httpPost(const char* url, const char* bearer, const char* body, uint16_t n, const char* hn,
@@ -342,6 +380,26 @@ void Lofi::resetHttpTransport() { reset_session(); }
 void Lofi::setScanCompleteCallback(void (*fn)(void*, const char*), void* ctx) {
   _scan_cb = fn;
   _scan_cb_ctx = ctx;
+}
+
+void Lofi::setConnectCompleteCallback(void (*fn)(void*, bool, const char*), void* ctx) {
+  _connect_cb = fn;
+  _connect_cb_ctx = ctx;
+}
+
+void Lofi::beginConnect(const char* ssid, const char* psk) {
+  if (!ssid || !ssid[0]) return;
+  s_connect.pending = true;
+  s_connect.result_ready = false;
+  s_connect.ok = false;
+  s_connect.detail[0] = '\0';
+  s_connect.t0 = millis();
+  _failover_suppress = true;
+  WiFi.disconnect(false, false);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, psk && psk[0] ? psk : nullptr);
+  WiFi.setSleep(WIFI_PS_NONE);
+  lofi_async_busy(true);
 }
 
 void Lofi::registerWifiHandlers() {
@@ -373,9 +431,22 @@ void Lofi::registerWifiHandlers() {
         break;
       case ARDUINO_EVENT_WIFI_STA_GOT_IP:
         dbg("wifi sta: got ip %s", WiFi.localIP().toString().c_str());
+        if (s_connect.pending) {
+          s_connect.pending = false;
+          s_connect.ok = true;
+          snprintf(s_connect.detail, sizeof(s_connect.detail), "%s", WiFi.localIP().toString().c_str());
+          s_connect.result_ready = true;
+        }
         break;
       case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
         dbg("wifi sta: disconnected reason=%u", (unsigned)info.wifi_sta_disconnected.reason);
+        if (s_connect.pending && (uint32_t)(millis() - s_connect.t0) > kConnectSettleMs) {
+          s_connect.pending = false;
+          s_connect.ok = false;
+          snprintf(s_connect.detail, sizeof(s_connect.detail), "reason=%u",
+                   (unsigned)info.wifi_sta_disconnected.reason);
+          s_connect.result_ready = true;
+        }
         break;
       default:
         break;
@@ -386,8 +457,11 @@ void Lofi::registerWifiHandlers() {
   WiFi.onEvent([self](WiFiEvent_t event, WiFiEventInfo_t info) {
     if (event != ARDUINO_EVENT_WIFI_STA_DISCONNECTED) return;
     if (self->_failover_suppress) return;
+    if (s_connect.pending || s_connect.result_ready) return;  // let connect state handle it
 
-    uint8_t n = self->knownWifiCount();
+    // Event runs in arduino_events task (~4 KB stack) — must avoid LoDB/LoFS calls here.
+    // Read-only cache access in RAM only.
+    uint8_t n = s_known_count;
     if (n < 2) {
       WiFi.setAutoReconnect(true);
       return;
@@ -414,45 +488,33 @@ void Lofi::registerWifiHandlers() {
     }
 
     uint8_t idx = 0;
-    bool found = false;
+    const char* cur = ev_ssid[0] ? ev_ssid : s_active_ssid;
     for (uint8_t i = 0; i < n; i++) {
-      char s[33], p[65];
-      if (!self->getKnownWifi(i, s, sizeof(s), p, sizeof(p))) continue;
-      if (ev_ssid[0] != '\0' && strcmp(s, ev_ssid) == 0) {
+      if (strcmp(s_known[i].ssid, cur) == 0) {
         idx = i;
-        found = true;
         break;
-      }
-    }
-    if (!found) {
-      char cur[33];
-      losettings::LoSettings st("lofi");
-      st.getString("active.ssid", cur, sizeof(cur), "");
-      for (uint8_t i = 0; i < n; i++) {
-        char s[33], p[65];
-        if (!self->getKnownWifi(i, s, sizeof(s), p, sizeof(p))) continue;
-        if (strcmp(s, cur) == 0) {
-          idx = i;
-          break;
-        }
       }
     }
 
     uint8_t next = (uint8_t)((idx + 1) % n);
-    char ssid[33], pwd[65];
-    if (!self->getKnownWifi(next, ssid, sizeof(ssid), pwd, sizeof(pwd))) return;
-    const char* pw = pwd[0] ? pwd : nullptr;
+    const char* nssid = s_known[next].ssid;
+    const char* pw = s_known[next].psk[0] ? s_known[next].psk : nullptr;
     dbg("wifi sta: failover reason=%u idx %u -> %u ssid=%.32s", (unsigned)reason, (unsigned)idx,
-        (unsigned)next, ssid);
+        (unsigned)next, nssid);
     WiFi.disconnect(false, false);
-    WiFi.begin(ssid, pw);
+    WiFi.begin(nssid, pw);
     WiFi.setSleep(WIFI_PS_NONE);
   });
 }
 
 void Lofi::begin() {
   ensureTables();
+  reloadKnownCache();
+  reloadActiveCache();
   registerWifiHandlers();
+  // Kick a one-shot scan so the list is populated before the user asks.
+  // Scan completion auto-calls resumeStaSavedCredentials() which reconnects to the active AP.
+  requestWifiScan();
 }
 
 static void wifi_scan_fill_from_driver(int n) {
@@ -510,6 +572,20 @@ bool Lofi::scanSnapshotEntry(int idx, char ssid_out[33], int32_t* rssi_out) {
 }
 
 void Lofi::serviceWifiScan() {
+  // Connect-attempt completion tick: event handler stores result, loop task delivers it.
+  if (s_connect.result_ready) {
+    s_connect.result_ready = false;
+    _failover_suppress = false;
+    lofi_async_busy(false);
+    if (_connect_cb) _connect_cb(_connect_cb_ctx, s_connect.ok, s_connect.detail);
+  } else if (s_connect.pending && (uint32_t)(millis() - s_connect.t0) > LOFI_WIFI_CONNECT_TIMEOUT_MS) {
+    s_connect.pending = false;
+    _failover_suppress = false;
+    lofi_async_busy(false);
+    snprintf(s_connect.detail, sizeof(s_connect.detail), "timeout");
+    if (_connect_cb) _connect_cb(_connect_cb_ctx, false, s_connect.detail);
+  }
+
   switch (s_wscan_phase) {
     case WifiScanPhase::Idle:
       break;

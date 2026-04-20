@@ -127,11 +127,11 @@ void setup() {
   {
     auto& pm_cfg = LotatoConfig::instance();
     if (pm_cfg.ssid()[0] != '\0') {
+      // Don't call WiFi.begin here — `Lofi::begin()` already kicked the boot scan, and its
+      // completion path invokes `resumeStaSavedCredentials()`. Touching the radio here would
+      // race the scan state machine.
       board.setInhibitSleep(true);
-      WiFi.mode(WIFI_STA);
       if (lofi::Lofi::instance().knownWifiCount() >= 2) WiFi.setAutoReconnect(false);
-      lofi::Lofi::instance().resumeStaSavedCredentials();
-      LOTATO_DBG_LN("lotato ingest: WiFi.begin ssid=%.32s modem_sleep=off", pm_cfg.ssid());
     }
   }
 #endif

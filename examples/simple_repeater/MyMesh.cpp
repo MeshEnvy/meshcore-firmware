@@ -41,11 +41,39 @@ extern "C" void lofi_async_busy(bool busy) { s_async_cli_busy = busy; }
 
 namespace {
 MyMesh* g_mesh_for_scan = nullptr;
+bool s_scan_from_serial = false;
+bool s_connect_from_serial = false;
+
 void scan_complete_cb(void*, const char* text) {
-  if (!g_mesh_for_scan || !s_scan_reply_target.valid) return;
-  g_mesh_for_scan->enqueueTxtCliReply(s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len,
-                                      s_scan_reply_target.out_path, s_scan_reply_target.path_hash_size, 0, text);
-  s_scan_reply_target.valid = false;
+  if (s_scan_reply_target.valid && g_mesh_for_scan) {
+    g_mesh_for_scan->enqueueTxtCliReply(
+      s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len, s_scan_reply_target.out_path,
+      s_scan_reply_target.path_hash_size, 0, text);
+    s_scan_reply_target.valid = false;
+  }
+  if (s_scan_from_serial) {
+    s_scan_from_serial = false;
+    lotato_serial_print_mesh_cli_reply(text);
+  }
+}
+
+void connect_complete_cb(void*, bool ok, const char* detail) {
+  char msg[96];
+  if (ok) {
+    snprintf(msg, sizeof(msg), "OK - WiFi connected (%s)", detail ? detail : "");
+  } else {
+    snprintf(msg, sizeof(msg), "Err - WiFi connect failed (%s)", detail ? detail : "?");
+  }
+  if (s_scan_reply_target.valid && g_mesh_for_scan) {
+    g_mesh_for_scan->enqueueTxtCliReply(
+      s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len, s_scan_reply_target.out_path,
+      s_scan_reply_target.path_hash_size, 0, msg);
+    s_scan_reply_target.valid = false;
+  }
+  if (s_connect_from_serial) {
+    s_connect_from_serial = false;
+    lotato_serial_print_mesh_cli_reply(msg);
+  }
 }
 }  // namespace
 #endif
@@ -1000,6 +1028,7 @@ void MyMesh::begin(FILESYSTEM *fs) {
   g_mesh_for_scan = this;
   lofi::Lofi::instance().begin();
   lofi::Lofi::instance().setScanCompleteCallback(scan_complete_cb, nullptr);
+  lofi::Lofi::instance().setConnectCompleteCallback(connect_complete_cb, nullptr);
   _lotato_cli.add("status", &MyMesh::lotato_h_status, nullptr, nullptr, "show lotato/ingest status");
   _lotato_cli.add("pause", &MyMesh::lotato_h_pause, nullptr, nullptr, "pause ingestion");
   _lotato_cli.add("resume", &MyMesh::lotato_h_resume, nullptr, nullptr, "resume ingestion");
@@ -1008,8 +1037,8 @@ void MyMesh::begin(FILESYSTEM *fs) {
   _lotato_cli.add("endpoint", &MyMesh::lotato_h_endpoint, "<url>", nullptr, "set ingest endpoint URL");
   _lotato_cli.add("token", &MyMesh::lotato_h_token, "<val>", nullptr, "set API token");
   _lotato_cli.add("wifi.status", &MyMesh::lotato_h_wifi_status, nullptr, nullptr, "show WiFi connection info");
-  _lotato_cli.add("wifi.list", &MyMesh::lotato_h_wifi_list, nullptr, nullptr,
-                  "list nearby WiFi networks");
+  _lotato_cli.add("wifi.scan", &MyMesh::lotato_h_wifi_scan, nullptr, nullptr,
+                  "scan for nearby WiFi networks");
   _lotato_cli.add("wifi.connect", &MyMesh::lotato_h_wifi_connect, "<n|ssid> [pwd]", nullptr,
                   "connect to a WiFi network");
   _lotato_cli.add("debug", &MyMesh::lotato_h_debug, "<on|off|toggle>", nullptr, "toggle debug logging");
@@ -1422,7 +1451,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 
 #ifdef ESP32
 
-static void run_lotato_wifi_list_cli(lomessage::Buffer& out, MyMesh* mesh, uint32_t /*sender_ts*/) {
+static void run_lotato_wifi_scan_cli(lomessage::Buffer& out, MyMesh* mesh, uint32_t sender_ts) {
   g_mesh_for_scan = mesh;
   lofi::Lofi& lf = lofi::Lofi::instance();
   lf.serviceWifiScan();
@@ -1434,6 +1463,7 @@ static void run_lotato_wifi_list_cli(lomessage::Buffer& out, MyMesh* mesh, uint3
     out.append("WiFi scan in progress...");
     return;
   }
+  s_scan_from_serial = (sender_ts == 0);
   lf.requestWifiScan();
   out.append("Scanning for WiFi devices...");
 }
@@ -1452,12 +1482,12 @@ void MyMesh::lotato_h_status(locommand::Context& ctx) {
   const char* url_str = cfg.ingestOrigin()[0] ? cfg.ingestOrigin() : "(none)";
   const char* dbg_str = cfg.debugEnabled() ? "on" : "off";
   if (wl == WL_CONNECTED) {
-    ctx.out.appendf("WiFi: %s\nSSID: %.20s\nIP: %s\nNodes: %d\nQueue: %u\nPaused: %s\nHTTP: %s\nURL: %.72s\nToken: %s\nDebug: %s",
-                     wl_str, WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(),
-                     self->_node_store.count(), (unsigned)self->_ingestor.pendingQueueDepth(),
-                     self->_ingestor.isPaused() ? "yes" : "no", code_str, url_str, token_str, dbg_str);
+    ctx.out.appendf("WiFi: %s\nSSID: %s\nIP: %s\nNodes: %d\nQueue: %u\nPaused: %s\nHTTP: %s\nURL: %s\nToken: %s\nDebug: %s",
+                    wl_str, WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(),
+                    self->_node_store.count(), (unsigned)self->_ingestor.pendingQueueDepth(),
+                    self->_ingestor.isPaused() ? "yes" : "no", code_str, url_str, token_str, dbg_str);
   } else {
-    ctx.out.appendf("WiFi: %s\nSaved: %.20s\nNodes: %d\nQueue: %u\nPaused: %s\nURL: %.72s\nToken: %s\nDebug: %s",
+    ctx.out.appendf("WiFi: %s\nSaved: %s\nNodes: %d\nQueue: %u\nPaused: %s\nURL: %s\nToken: %s\nDebug: %s",
                     wl_str, cfg.ssid()[0] ? cfg.ssid() : "(none)",
                     self->_node_store.count(), (unsigned)self->_ingestor.pendingQueueDepth(),
                     self->_ingestor.isPaused() ? "yes" : "no", url_str, token_str, dbg_str);
@@ -1503,8 +1533,8 @@ void MyMesh::lotato_h_endpoint(locommand::Context& ctx) {
   }
   cfg.setIngestOrigin(url);
   lc->self->_ingestor.restartAfterConfigChange();
-  LOTATO_DBG_LN("lotato CLI: endpoint set url=%.60s", url);
-  ctx.out.appendf("OK - endpoint: %.100s", url);
+  LOTATO_DBG_LN("lotato CLI: endpoint set url=%s", url);
+  ctx.out.appendf("OK - endpoint: %s", url);
 }
 
 void MyMesh::lotato_h_token(locommand::Context& ctx) {
@@ -1547,17 +1577,17 @@ void MyMesh::lotato_h_wifi_status(locommand::Context& ctx) {
   LotatoConfig& cfg = LotatoConfig::instance();
   wl_status_t wl = WiFi.status();
   if (wl == WL_CONNECTED) {
-    ctx.out.appendf("WiFi: connected\nSSID: %.30s\nIP: %s",
-                    WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+    ctx.out.appendf("WiFi: connected\nSSID: %s\nIP: %s", WiFi.SSID().c_str(),
+                    WiFi.localIP().toString().c_str());
   } else {
-    ctx.out.appendf("WiFi: not connected\nSaved: %.30s\nUse: lotato scan (async)",
+    ctx.out.appendf("WiFi: not connected\nSaved: %s\nUse: lotato wifi scan",
                     cfg.ssid()[0] ? cfg.ssid() : "(none)");
   }
 }
 
-void MyMesh::lotato_h_wifi_list(locommand::Context& ctx) {
+void MyMesh::lotato_h_wifi_scan(locommand::Context& ctx) {
   auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
-  run_lotato_wifi_list_cli(ctx.out, lc->self, lc->sender_ts);
+  run_lotato_wifi_scan_cli(ctx.out, lc->self, lc->sender_ts);
 }
 
 void MyMesh::lotato_h_wifi_connect(locommand::Context& ctx) {
@@ -1583,7 +1613,7 @@ void MyMesh::lotato_h_wifi_connect(locommand::Context& ctx) {
     int idx = atoi(tok1) - 1;
     int32_t rssi;
     if (idx < 0 || !lf.scanSnapshotEntry(idx, ssid_to_use, &rssi)) {
-      ctx.out.appendf("Err - index out of range (1..%d)\nRun: lotato wifi list first",
+      ctx.out.appendf("Err - index out of range (1..%d)\nRun: lotato wifi scan first",
                       lf.scanSnapshotCount());
       return;
     }
@@ -1601,12 +1631,10 @@ void MyMesh::lotato_h_wifi_connect(locommand::Context& ctx) {
 
   cfg.setWifi(ssid_to_use, pwd_to_use);
   lc->self->_ingestor.restartAfterConfigChange();
-  WiFi.disconnect(false, false);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid_to_use, pwd_to_use);
-  WiFi.setSleep(WIFI_PS_NONE);
-  LOTATO_DBG_LN("lotato CLI: wifi connecting ssid=%.32s modem_sleep=off", ssid_to_use);
-  ctx.out.appendf("OK - connecting to %.32s", ssid_to_use);
+  s_connect_from_serial = (lc->sender_ts == 0);
+  lf.beginConnect(ssid_to_use, pwd_to_use);
+  LOTATO_DBG_LN("lotato CLI: wifi connecting ssid=%s modem_sleep=off", ssid_to_use);
+  ctx.out.appendf("Connecting to %s...", ssid_to_use);
 }
 
 void MyMesh::deliverLotatoReply(uint32_t sender_ts, const char* text, char* reply) {
