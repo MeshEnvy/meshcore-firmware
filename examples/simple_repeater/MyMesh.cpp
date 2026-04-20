@@ -913,7 +913,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   set_radio_at = revert_radio_at = 0;
   _logging = false;
   region_load_active = false;
-  _cli_reply_root = _cli_reply_tip = nullptr;
 #ifdef ESP32
   _lotato_txt_route.valid = false;
 #endif
@@ -1795,136 +1794,71 @@ void MyMesh::handleLotaToCommand(char* args, char* reply, uint32_t sender_timest
 }
 #endif
 
-/* ── CLI reply FIFO ─────────────────────────────────────────────────── */
+/* ── CLI reply FIFO (lomessage::Queue) ─────────────────────────────── */
 
 bool MyMesh::enqueueTxtCliReply(int acl_idx, uint8_t out_path_len, const uint8_t* out_path,
                                 uint8_t path_hash_size, uint32_t sender_ts, const char* text) {
-  size_t len = strlen(text);
-  if (len == 0) return false;
+  CliReplyRoute ctx;
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.sender_ts      = sender_ts;
+  ctx.acl_idx        = acl_idx;
+  memcpy(ctx.out_path, out_path, sizeof(ctx.out_path));
+  ctx.out_path_len   = out_path_len;
+  ctx.path_hash_size = path_hash_size;
 
-  CliReplyJob* job = new CliReplyJob();
-  if (!job) {
-    LOTATO_DBG_LN("cli reply q: OOM job acl=%d", acl_idx);
-    return false;
-  }
-  job->text = new char[len + 1];
-  if (!job->text) {
-    LOTATO_DBG_LN("cli reply q: OOM text acl=%d len=%u", acl_idx, (unsigned)len);
-    delete job;
-    return false;
-  }
-  memcpy(job->text, text, len + 1);
-  job->total_len      = len;
-  job->offset         = 0;
-  job->sender_ts      = sender_ts;
-  job->next_send_at   = millis();
-  job->acl_idx        = acl_idx;
-  memcpy(job->out_path, out_path, sizeof(job->out_path));
-  job->out_path_len   = out_path_len;
-  job->path_hash_size = path_hash_size;
-  job->next           = nullptr;
+  lomessage::Options opts;
+  opts.max_chunk            = kMaxTxtChunk;
+  opts.inter_chunk_delay_ms = CLI_REPLY_DELAY_MILLIS;
+  opts.split_flags          = lomessage::CHUNK_ABSORB_LINE_BOUNDARY;
 
-  if (_cli_reply_tip) {
-    _cli_reply_tip->next = job;
-    _cli_reply_tip = job;
+  bool ok = _reply_queue.send(text, &ctx, sizeof(ctx), opts, millis());
+  if (ok) {
+    LOTATO_DBG_LN("cli reply q: enqueue len=%u acl=%d", (unsigned)strlen(text), acl_idx);
   } else {
-    _cli_reply_root = _cli_reply_tip = job;
+    LOTATO_DBG_LN("cli reply q: enqueue FAILED (empty or OOM) acl=%d", acl_idx);
   }
-
-  size_t chunks = (len + kMaxTxtChunk - 1) / kMaxTxtChunk;
-  LOTATO_DBG_LN("cli reply q: enqueue len=%u chunks~%u acl=%d", (unsigned)len, (unsigned)chunks, acl_idx);
-  return true;
+  return ok;
 }
 
-void MyMesh::serviceCliReplyQueue() {
-  if (!_cli_reply_root) return;
-  CliReplyJob* job = _cli_reply_root;
-  if ((long)(millis() - job->next_send_at) < 0) return;
-
-  if (job->acl_idx < 0 || job->acl_idx >= acl.getNumClients()) {
-    LOTATO_DBG_LN("cli reply q: drop stale acl=%d", job->acl_idx);
-    _cli_reply_root = job->next;
-    if (!_cli_reply_root) _cli_reply_tip = nullptr;
-    delete[] job->text;
-    delete job;
-    return;
+lomessage::SendResult MyMesh::sendChunk(const uint8_t* data, size_t len,
+                                        size_t chunk_idx, size_t total_chunks,
+                                        bool /*is_final*/, void* user_ctx) {
+  auto* ctx = static_cast<CliReplyRoute*>(user_ctx);
+  if (!ctx || ctx->acl_idx < 0 || ctx->acl_idx >= acl.getNumClients()) {
+    LOTATO_DBG_LN("cli reply q: drop stale acl=%d", ctx ? ctx->acl_idx : -1);
+    return lomessage::SendResult::Abandon;
   }
-  ClientInfo* client = acl.getClientByIdx(job->acl_idx);
-
-  size_t chunk = lomessage::next_chunk_len(job->text, job->total_len, job->offset, kMaxTxtChunk);
-  if (chunk == 0) {
-    LOTATO_DBG_LN("cli reply q: zero chunk drop acl=%d", job->acl_idx);
-    _cli_reply_root = job->next;
-    if (!_cli_reply_root) _cli_reply_tip = nullptr;
-    delete[] job->text;
-    delete job;
-    return;
-  }
-
-  size_t total_chunks = (job->total_len + kMaxTxtChunk - 1) / kMaxTxtChunk;
-  size_t cur_chunk    = (job->offset / kMaxTxtChunk) + 1;
+  ClientInfo* client = acl.getClientByIdx(ctx->acl_idx);
 
   uint8_t temp[5 + kMaxTxtChunk];
   uint32_t ts = getRTCClock()->getCurrentTimeUnique();
-  if (ts == job->sender_ts) ts++;
+  if (ts == ctx->sender_ts) ts++;
   memcpy(temp, &ts, 4);
   temp[4] = (TXT_TYPE_CLI_DATA << 2);
-  memcpy(&temp[5], job->text + job->offset, chunk);
+  memcpy(&temp[5], data, len);
 
   uint8_t secret[PUB_KEY_SIZE];
   memcpy(secret, client->shared_secret, PUB_KEY_SIZE);
 
-  mesh::Packet* pkt = createDatagram(PAYLOAD_TYPE_TXT_MSG, client->id, secret, temp, 5 + chunk);
+  mesh::Packet* pkt = createDatagram(PAYLOAD_TYPE_TXT_MSG, client->id, secret, temp, 5 + len);
   bool sent = false;
   if (pkt) {
-    if (job->out_path_len == OUT_PATH_UNKNOWN) {
-      sendFlood(pkt, 0, job->path_hash_size);
+    if (ctx->out_path_len == OUT_PATH_UNKNOWN) {
+      sendFlood(pkt, 0, ctx->path_hash_size);
     } else {
-      sendDirect(pkt, job->out_path, job->out_path_len, 0);
+      sendDirect(pkt, ctx->out_path, ctx->out_path_len, 0);
     }
     sent = true;
   }
 
   LOTATO_DBG_LN("cli reply tx: chunk %u/%u bytes=%u %s acl=%d peer=%02x%02x%02x%02x %s",
-    (unsigned)cur_chunk, (unsigned)total_chunks, (unsigned)chunk,
-    (job->out_path_len == OUT_PATH_UNKNOWN) ? "flood" : "direct",
-    job->acl_idx,
+    (unsigned)chunk_idx, (unsigned)total_chunks, (unsigned)len,
+    (ctx->out_path_len == OUT_PATH_UNKNOWN) ? "flood" : "direct",
+    ctx->acl_idx,
     (unsigned)client->id.pub_key[0], (unsigned)client->id.pub_key[1],
     (unsigned)client->id.pub_key[2], (unsigned)client->id.pub_key[3],
     sent ? "ok" : "FAIL");
-#ifdef ESP32
-  if (lotato_dbg_active()) {
-    Serial.print("Lotato: cli reply tx: full msg len=");
-    Serial.print((unsigned)job->total_len);
-    Serial.print(": ");
-    const char* p = job->text;
-    size_t n = 0;
-    while (*p) { Serial.write(static_cast<uint8_t>(*p++)); if (++n % 48 == 0) yield(); }
-    Serial.print("\r\n");
-  }
-#endif
-
-  job->offset += chunk;
-  if (job->offset >= job->total_len) {
-    LOTATO_DBG_LN("cli reply q: complete %u/%u acl=%d",
-      (unsigned)cur_chunk, (unsigned)total_chunks, job->acl_idx);
-    _cli_reply_root = job->next;
-    if (!_cli_reply_root) _cli_reply_tip = nullptr;
-    delete[] job->text;
-    delete job;
-  } else {
-    job->next_send_at = millis() + CLI_REPLY_DELAY_MILLIS;
-  }
-}
-
-void MyMesh::clearCliReplyQueue() {
-  while (_cli_reply_root) {
-    CliReplyJob* j = _cli_reply_root;
-    _cli_reply_root = j->next;
-    delete[] j->text;
-    delete j;
-  }
-  _cli_reply_tip = nullptr;
+  return sent ? lomessage::SendResult::Sent : lomessage::SendResult::Retry;
 }
 
 /* ── end CLI reply FIFO ─────────────────────────────────────────────── */
@@ -1935,7 +1869,7 @@ void MyMesh::loop() {
 #endif
 
   mesh::Mesh::loop();
-  serviceCliReplyQueue();
+  _reply_queue.service(millis(), *this);
 
 #ifdef ESP32
   my_mesh_lotato_wifi_scan_poll(this);
@@ -1986,6 +1920,6 @@ bool MyMesh::hasPendingWork() const {
 #if defined(WITH_BRIDGE)
   if (bridge.isRunning()) return true;  // bridge needs WiFi radio, can't sleep
 #endif
-  if (_cli_reply_root != nullptr) return true;  // CLI reply chunks still queued
+  if (!_reply_queue.empty()) return true;  // CLI reply chunks still queued
   return _mgr->getOutboundTotal() > 0;
 }

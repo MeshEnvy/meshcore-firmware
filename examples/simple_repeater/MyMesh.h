@@ -33,6 +33,7 @@
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RegionMap.h>
+#include <helpers/lomessage/Queue.h>
 #include "RateLimiter.h"
 
 #ifdef ESP32
@@ -86,22 +87,16 @@ struct NeighbourInfo {
 
 #define PACKET_LOG_FILE  "/packet_log"
 
-/** One logical CLI reply queued for deferred, chunked mesh delivery.
- *  Allocated on heap; freed when fully drained from the FIFO. */
-struct CliReplyJob {
-  CliReplyJob*  next;
-  char*         text;           ///< heap copy of full reply (new char[total_len+1])
-  size_t        total_len;      ///< strlen(text)
-  size_t        offset;         ///< bytes already sent
-  uint32_t      sender_ts;      ///< original command timestamp (uniqueness guard); 0 for async-push jobs
-  unsigned long next_send_at;   ///< millis() deadline for next chunk
-  int           acl_idx;        ///< ClientACL index (peer id + shared_secret)
-  uint8_t       out_path[MAX_PATH_SIZE];
-  uint8_t       out_path_len;   ///< OUT_PATH_UNKNOWN = flood
-  uint8_t       path_hash_size;
+/** Opaque routing ctx copied into each lomessage::Queue job; consumed by MyMesh's Sink. */
+struct CliReplyRoute {
+  uint32_t sender_ts;   ///< original command timestamp; 0 for async-push
+  int      acl_idx;     ///< ClientACL index (peer id + shared_secret)
+  uint8_t  out_path[MAX_PATH_SIZE];
+  uint8_t  out_path_len;
+  uint8_t  path_hash_size;
 };
 
-class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
+class MyMesh : public mesh::Mesh, public CommonCLICallbacks, private lomessage::Sink {
   FILESYSTEM* _fs;
   uint32_t last_millis;
   uint64_t uptime_millis;
@@ -152,11 +147,12 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   } _lotato_txt_route;
 #endif
 
-  CliReplyJob* _cli_reply_root;  ///< head of outbound CLI reply FIFO (nullptr = empty)
-  CliReplyJob* _cli_reply_tip;   ///< tail of outbound CLI reply FIFO
+  lomessage::Queue _reply_queue;  ///< generic outbound CLI reply FIFO
 
-  void serviceCliReplyQueue();   ///< called from loop(); sends one chunk from the head job
-  void clearCliReplyQueue();     ///< frees all pending jobs (shutdown / factory-reset)
+  /** lomessage::Sink override; builds a TXT_MSG datagram for one chunk and hands it to the radio. */
+  lomessage::SendResult sendChunk(const uint8_t* data, size_t len,
+                                  size_t chunk_idx, size_t total_chunks,
+                                  bool is_final, void* user_ctx) override;
 
   void putNeighbour(const mesh::Identity& id, uint32_t timestamp, float snr);
   void sendNodeDiscoverReq();
