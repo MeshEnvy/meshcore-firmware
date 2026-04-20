@@ -977,17 +977,19 @@ void MyMesh::begin(FILESYSTEM *fs) {
   acl.load(_fs, self_id);
 #ifdef ESP32
   _node_store.begin(_fs);
-  _lotato_cli.add("status", &MyMesh::lotato_h_status);
-  _lotato_cli.add("pause", &MyMesh::lotato_h_pause);
-  _lotato_cli.add("resume", &MyMesh::lotato_h_resume);
-  _lotato_cli.add("contacts", &MyMesh::lotato_h_contacts);
-  _lotato_cli.add("flush", &MyMesh::lotato_h_flush);
-  _lotato_cli.add("endpoint", &MyMesh::lotato_h_endpoint, "<url>");
-  _lotato_cli.add("token", &MyMesh::lotato_h_token, "<val>");
-  _lotato_cli.add("wifi.status", &MyMesh::lotato_h_wifi_status);
-  _lotato_cli.add("wifi.scan", &MyMesh::lotato_h_wifi_scan, nullptr, "async: run twice to list");
-  _lotato_cli.add("wifi.connect", &MyMesh::lotato_h_wifi_connect, "<n|ssid> [pwd]");
-  _lotato_cli.add("debug", &MyMesh::lotato_h_debug, "<on|off|toggle>");
+  _lotato_cli.add("status", &MyMesh::lotato_h_status, nullptr, nullptr, "show lotato/ingest status");
+  _lotato_cli.add("pause", &MyMesh::lotato_h_pause, nullptr, nullptr, "pause ingestion");
+  _lotato_cli.add("resume", &MyMesh::lotato_h_resume, nullptr, nullptr, "resume ingestion");
+  _lotato_cli.add("contacts", &MyMesh::lotato_h_contacts, nullptr, nullptr, "show node store info");
+  _lotato_cli.add("flush", &MyMesh::lotato_h_flush, nullptr, nullptr, "re-post all known nodes");
+  _lotato_cli.add("endpoint", &MyMesh::lotato_h_endpoint, "<url>", nullptr, "set ingest endpoint URL");
+  _lotato_cli.add("token", &MyMesh::lotato_h_token, "<val>", nullptr, "set API token");
+  _lotato_cli.add("wifi.status", &MyMesh::lotato_h_wifi_status, nullptr, nullptr, "show WiFi connection info");
+  _lotato_cli.add("wifi.scan", &MyMesh::lotato_h_wifi_scan, nullptr, "async: run twice to list",
+                  "scan for WiFi networks");
+  _lotato_cli.add("wifi.connect", &MyMesh::lotato_h_wifi_connect, "<n|ssid> [pwd]", nullptr,
+                  "connect to a WiFi network");
+  _lotato_cli.add("debug", &MyMesh::lotato_h_debug, "<on|off|toggle>", nullptr, "toggle debug logging");
 #endif
   // TODO: key_store.begin();
   region_map.load(_fs);

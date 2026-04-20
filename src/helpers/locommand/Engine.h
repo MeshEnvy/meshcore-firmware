@@ -25,7 +25,7 @@ public:
   /** Dispatch text after the root token (e.g. " wifi status"). Bare / help / ? => full help. */
   void dispatch(const char* input_after_root, lomessage::Buffer& out, void* app_ctx);
 
-  /** One help line per leaf: "<root> <path> [usage]  [hint]". @p sub_path is space-separated segments
+  /** One help line per leaf: "<root> <path> [usage]  (hint) - <brief>". @p sub_path is space-separated segments
    *  under root (e.g. "wifi") or nullptr for all commands. */
   void formatHelp(lomessage::Buffer& out, const char* sub_path = nullptr) const;
 

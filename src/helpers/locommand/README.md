@@ -6,7 +6,7 @@ Small **transport-agnostic** nested command dispatcher for firmware CLIs. Depend
 
 - **Group-or-leaf tree:** every registered node is either a **group** (`handler == nullptr`, has children) or a **leaf** (`handler != nullptr`, no children). `Engine::add()` rejects ambiguous paths.
 - **Root name:** the engine owns a root token (e.g. `lotato`). `matchesRoot(line)` mirrors the usual `memcmp` + continuation check. The substring **after** the root token is passed to `dispatch()`.
-- **Help:** bare root / empty input / `help` / `?` prints full flat help. `help <topic>` prints help for that subtree. At a group with no further tokens (e.g. `lotato wifi`), the engine prints that group’s subtree help.
+- **Help:** bare root / empty input / `help` / `?` prints full flat help. `help <topic>` prints help for that subtree. At a group with no further tokens (e.g. `lotato wifi`), the engine prints that group’s subtree help. Each leaf line is `<root> <path> [usage]  (hint) - <brief>`; `usage_suffix`, `hint`, and `brief` are optional (omit trailing parts when unset).
 - **Strings:** `path`, `usage_suffix`, `hint`, `brief`, and segment names passed to `add()` must be **string literals** (or otherwise live for the lifetime of the `Engine`); they are not copied.
 
 ## Example
@@ -20,8 +20,8 @@ static void h_status(locommand::Context& ctx) {
 }
 
 void setup_cli(locommand::Engine& eng) {
-  eng.add("status", h_status);
-  eng.add("wifi.scan", h_wifi_scan, nullptr, "(async)");
+  eng.add("status", h_status, nullptr, nullptr, "show device status");
+  eng.add("wifi.scan", h_wifi_scan, nullptr, "(async)", "scan for WiFi networks");
 }
 
 void on_line(char* line, char* reply_buf, size_t cap) {
@@ -42,4 +42,4 @@ Leaf handlers receive `locommand::Context`:
 - `out` — append the full reply (`lomessage::Buffer`).
 - `args_raw` — remainder of the line after the matched path (leading spaces trimmed). Use for values that may contain spaces (e.g. URLs).
 - `argc` / `argv` — whitespace-split tokens of the remainder (capped at `kMaxArgc`).
-- `printHelp()` — emit one-line usage for the current leaf (`<root> <path> [usage]  (hint)`). Use when arg parsing fails.
+- `printHelp()` — emit one-line usage for the current leaf (`<root> <path> [usage]  (hint) - <brief>`). Use when arg parsing fails.

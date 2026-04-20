@@ -65,6 +65,7 @@ void format_help_recursive(const char* root_name, const Command* parent, const c
       out.append(c->name);
       if (c->usage_suffix && c->usage_suffix[0] != '\0') out.appendf(" %s", c->usage_suffix);
       if (c->hint && c->hint[0] != '\0') out.appendf("  (%s)", c->hint);
+      if (c->brief && c->brief[0] != '\0') out.appendf(" - %s", c->brief);
       out.append("\n");
     } else if (!c->handler && c->first_child) {
       char next[120];
@@ -85,6 +86,7 @@ void format_one_leaf_line(const char* root_name, const char* prefix, const Comma
   out.append(leaf->name);
   if (leaf->usage_suffix && leaf->usage_suffix[0] != '\0') out.appendf(" %s", leaf->usage_suffix);
   if (leaf->hint && leaf->hint[0] != '\0') out.appendf("  (%s)", leaf->hint);
+  if (leaf->brief && leaf->brief[0] != '\0') out.appendf(" - %s", leaf->brief);
   out.append("\n");
 }
 

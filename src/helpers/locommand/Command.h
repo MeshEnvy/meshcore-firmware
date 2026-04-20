@@ -19,7 +19,7 @@ struct Context {
   const char* path_prefix;    ///< Space-separated path without root and without leaf name (e.g. "wifi " or "").
 
   /** Emit one-line usage for the current leaf into @ref out:
-   *  "<root> [prefix]<name> [usage_suffix]  (hint)\n". No-op if @ref command is null. */
+   *  "<root> [prefix]<name> [usage_suffix]  (hint) - <brief>\n". No-op if @ref command is null. */
   void printHelp() const;
 };
 
@@ -30,7 +30,7 @@ struct Command {
   const char* name;           ///< Segment name; string literal, not copied.
   const char* usage_suffix;   ///< Optional; printed after path in flat help (leaves only).
   const char* hint;           ///< Optional parenthetical in flat help.
-  const char* brief;        ///< Optional longer description (reserved for future use).
+  const char* brief;        ///< Optional short description; appended in help as " - <brief>".
   Handler handler;            ///< Non-null on leaves; null on groups.
   Command* first_child;       ///< Non-null on groups; null on leaves.
   Command* next_sibling;      ///< Sibling chain under the same parent.
