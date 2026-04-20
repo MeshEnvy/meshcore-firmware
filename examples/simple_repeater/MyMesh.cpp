@@ -1597,7 +1597,7 @@ static void lotato_cli_usage(char* reply) {
            "lotato wifi <ssid> [pwd]\n"
            "lotato endpoint <url>\n"
            "lotato token <val>\n"
-           "lotato debug");
+           "lotato debug on|off  (bare lotato debug toggles)");
 }
 
 void MyMesh::handleLotaToCommand(char* args, char* reply) {
@@ -1665,9 +1665,21 @@ void MyMesh::handleLotaToCommand(char* args, char* reply) {
     LOTATO_DBG_LN("lotato CLI: token set (len=%u)", (unsigned)strlen(tok));
     strcpy(reply, "OK - token saved");
 
-  // lotato debug
-  } else if (strcmp(args, "debug") == 0) {
-    cfg.toggleDebug();
+  // lotato debug on|off  (bare lotato debug toggles)
+  } else if (strncmp(args, "debug", 5) == 0 &&
+             (args[5] == '\0' || isspace(static_cast<unsigned char>(args[5])))) {
+    const char* sub = args + 5;
+    while (*sub == ' ') sub++;
+    if (*sub == '\0') {
+      cfg.toggleDebug();
+    } else if (strcmp(sub, "on") == 0) {
+      cfg.setDebug(true);
+    } else if (strcmp(sub, "off") == 0) {
+      cfg.setDebug(false);
+    } else {
+      snprintf(reply, MyMesh::kCliReplyCap, "Use: lotato debug on|off  (bare lotato debug toggles)");
+      return;
+    }
     snprintf(reply, MyMesh::kCliReplyCap, "OK - debug %s", cfg.debugEnabled() ? "on" : "off");
 
   // lotato scan [page]  — alias for lotato wifi scan

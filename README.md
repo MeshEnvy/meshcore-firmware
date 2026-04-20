@@ -50,7 +50,8 @@ After that, you should begin to see MeshCore nodes appearing on your Potato Mesh
 | `lotato wifi <ssid> [pwd]` | Connect to a network by SSID |
 | `lotato endpoint <url>` | Set the Potato Mesh ingest endpoint URL |
 | `lotato token <val>` | Set the API bearer token |
-| `lotato debug` | Toggle debug logging |
+| `lotato debug on` / `off` | Enable or disable Lotato `Serial` debug logging (stored in NVS; default off until set) |
+| `lotato debug` | Toggle debug logging (same NVS flag) |
 | `lotato help` | Show command help |
 
 ## Changelog (Lotato)
@@ -60,6 +61,7 @@ Lotato releases use annotated git tags of the form `lotato-v<lotato>-repeater-v<
 ### Unreleased (`lotato` branch, not yet tagged)
 
 - Rename MeshForge-facing naming and unify **Lotato** branding in CLI, configuration, and source (follow-up to the Potato Mesh ingestor naming used in earlier tags).
+- **Debug logging:** removed the compile-time `LOTATO_DEBUG` switch; Lotato debug instrumentation is always in the build and is controlled only at runtime. Use `lotato debug on`, `lotato debug off`, or bare `lotato debug` to toggle; the setting persists in NVS (`lotato` / `dbg`). Fresh devices default to debug **off** until you turn it on.
 
 ### [0.1.2] — 2026-04-11 (`lotato-v0.1.2-repeater-v1.14.1`)
 

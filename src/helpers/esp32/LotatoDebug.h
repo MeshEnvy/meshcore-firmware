@@ -1,19 +1,9 @@
 #pragma once
 
-#ifndef LOTATO_DEBUG
-#define LOTATO_DEBUG 1
-#endif
-
 #ifdef ESP32
 #include <Arduino.h>
 #include <helpers/esp32/LotatoConfig.h>
-inline bool lotato_dbg_active() {
-#if LOTATO_DEBUG
-  return true;
-#else
-  return LotatoConfig::instance().debugEnabled();
-#endif
-}
+inline bool lotato_dbg_active() { return LotatoConfig::instance().debugEnabled(); }
 /** When debug is on: log full CLI command and reply (may include secrets — for field debug only). */
 void lotato_dbg_trace_cli_exchange(const char* route_tag, const char* cmd_snapshot, const char* reply);
 #define LOTATO_DBG(F, ...) \
