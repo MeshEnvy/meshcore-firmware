@@ -57,4 +57,11 @@ void lotato_dbg_cli_tx_chunk(uint32_t rtc_ts_used, unsigned chunk_idx, unsigned 
       (unsigned)ESP.getFreeHeap());
 }
 
+void lotato_dbg_task_stack(const char* tag) {
+  // Always log (not gated by debugEnabled) so we can diagnose canary panics without mesh config.
+  UBaseType_t words = uxTaskGetStackHighWaterMark(NULL);
+  Serial.printf("Lotato: stack %s: free_bytes=%u heap=%u\r\n", tag ? tag : "?",
+                (unsigned)(words * sizeof(StackType_t)), (unsigned)ESP.getFreeHeap());
+}
+
 #endif

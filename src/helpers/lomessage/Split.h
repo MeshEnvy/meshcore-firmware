@@ -22,7 +22,8 @@ struct Chunk {
 
 /** Next segment length for transport-sized chunks of a byte stream (raw bytes; no decoding).
  *  When a chunk would use the full @p max_chunk window, shrink it to end at the last newline (0x0A)
- *  in the second half of that window so line-oriented text splits cleanly when possible.
+ *  anywhere in that window so line-oriented text always splits on a line boundary when one is
+ *  available. If no newline is present the chunk is cut at @p max_chunk (may split mid-line).
  *
  *  @return 0 when done or invalid args; otherwise 1..max_chunk */
 inline size_t next_chunk_len(const char* data, size_t total_len, size_t offset, size_t max_chunk) {
@@ -31,9 +32,7 @@ inline size_t next_chunk_len(const char* data, size_t total_len, size_t offset, 
   if (remaining == 0) return 0;
   size_t chunk = remaining < max_chunk ? remaining : max_chunk;
   if (chunk == max_chunk) {
-    const int hi = (int)max_chunk - 1;
-    const int lo = (int)(max_chunk / 2);
-    for (int j = hi; j >= lo; j--) {
+    for (int j = (int)max_chunk - 1; j >= 0; j--) {
       if (data[offset + (size_t)j] == '\n') {
         chunk = (size_t)j + 1;
         break;

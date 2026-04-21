@@ -53,10 +53,9 @@ void Router::clear() {
 
 bool Router::matchesAnyRoot(const char* cmd) const {
   if (!cmd) return false;
-  char scratch[256];
-  strncpy(scratch, cmd, sizeof(scratch) - 1);
-  scratch[sizeof(scratch) - 1] = '\0';
-  char* p = trim_left(scratch);
+  if (!_n) return false;
+  const char* p = cmd;
+  while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
   for (int i = 0; i < _n; i++) {
     if (_engines[i] && _engines[i]->matchesRoot(p)) return true;
   }
@@ -65,14 +64,14 @@ bool Router::matchesAnyRoot(const char* cmd) const {
 
 bool Router::matchesGlobalHelp(const char* cmd) const {
   if (!cmd) return false;
-  char scratch[512];
-  strncpy(scratch, cmd, sizeof(scratch) - 1);
-  scratch[sizeof(scratch) - 1] = '\0';
-  trim_right(scratch);
-  char* p = trim_left(scratch);
-  if (*p == '\0') return false;
-  if (strcmp(p, "help") == 0 || strcmp(p, "?") == 0) return true;
-  if (strncmp(p, "help ", 5) == 0) return true;
+  const char* p = cmd;
+  while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+  size_t n = strlen(p);
+  while (n > 0 && (p[n - 1] == ' ' || p[n - 1] == '\t' || p[n - 1] == '\r' || p[n - 1] == '\n')) n--;
+  if (n == 0) return false;
+  if (n == 4 && strncmp(p, "help", 4) == 0) return true;
+  if (n == 1 && p[0] == '?') return true;
+  if (n >= 5 && strncmp(p, "help ", 5) == 0) return true;
   return false;
 }
 
@@ -91,7 +90,9 @@ void Router::formatGlobalHelp(lomessage::Buffer& out) const {
 
 bool Router::dispatch(const char* command, lomessage::Buffer& out, void* app_ctx) {
   if (!command) return false;
-  char scratch[512];
+  // Dispatch is serialized on the single loop task; keeping this scratch off the
+  // stack shaves ~512 bytes from the mesh TXT → CLI → LoDB path.
+  static char scratch[512];
   strncpy(scratch, command, sizeof(scratch) - 1);
   scratch[sizeof(scratch) - 1] = '\0';
   trim_right(scratch);

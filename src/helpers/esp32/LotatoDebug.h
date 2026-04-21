@@ -20,6 +20,8 @@ void lotato_dbg_lotato_dispatch_stats(size_t out_len, int truncated);
 /** Each outbound TXT chunk for CLI reply queue (indices are 1-based for human log). */
 void lotato_dbg_cli_tx_chunk(uint32_t rtc_ts_used, unsigned chunk_idx, unsigned total_chunks, size_t emit_len,
                              const char* mode, int acl_idx, bool sent);
+/** Current task stack headroom (bytes) from `uxTaskGetStackHighWaterMark`; log label @p tag. */
+void lotato_dbg_task_stack(const char* tag);
 #define LOTATO_DBG(F, ...) \
   do { if (lotato_dbg_active()) Serial.printf("Lotato: " F, ##__VA_ARGS__); } while (0)
 #define LOTATO_DBG_LN(F, ...) \

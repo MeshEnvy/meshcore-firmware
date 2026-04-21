@@ -1078,6 +1078,7 @@ void MyMesh::begin(FILESYSTEM *fs) {
   _cli_router.add(&_cli_lotato);
   _cli_router.add(&_cli_wifi);
   _cli_router.add(&_cli_config);
+  lotato_dbg_task_stack("begin");
 #endif
   // TODO: key_store.begin();
   region_map.load(_fs);
@@ -1475,12 +1476,14 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     }
 #ifdef ESP32
   } else if (_cli_router.matchesAnyRoot(command) || _cli_router.matchesGlobalHelp(command)) {
+    lotato_dbg_task_stack("cli pre");
     LotatoCliCtx lctx{this, sender_timestamp};
     lomessage::Buffer buf(MyMesh::kCliReplyCap * 4);
     if (_cli_router.dispatch(command, buf, &lctx)) {
       lotato_dbg_lotato_dispatch_stats(buf.length(), buf.truncated() ? 1 : 0);
       deliverLotatoReply(sender_timestamp, buf.c_str(), reply);
     }
+    lotato_dbg_task_stack("cli post");
 #endif
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands

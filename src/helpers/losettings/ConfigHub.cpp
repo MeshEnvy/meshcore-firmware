@@ -286,7 +286,8 @@ static void h_config_set(locommand::Context& ctx) {
     ctx.printHelp();
     return;
   }
-  char valbuf[320];
+  // Serialized on the single loop task; keeping this off the mesh-CLI → LoDB stack.
+  static char valbuf[320];
   valbuf[0] = '\0';
   size_t pos = 0;
   for (int i = 1; i < ctx.argc && pos + 1 < sizeof(valbuf); i++) {

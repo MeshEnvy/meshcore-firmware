@@ -337,7 +337,8 @@ void Engine::formatHelp(lomessage::Buffer& out, const char* sub_path) const {
 }
 
 void Engine::dispatch(const char* input_after_root, lomessage::Buffer& out, void* app_ctx) {
-  char scratch[512];
+  // Dispatch is serialized on the single loop task; keep large scratch off the stack.
+  static char scratch[512];
   if (!input_after_root) input_after_root = "";
   strncpy(scratch, input_after_root, sizeof(scratch) - 1);
   scratch[sizeof(scratch) - 1] = '\0';
@@ -398,7 +399,7 @@ void Engine::dispatch(const char* input_after_root, lomessage::Buffer& out, void
 
       static const char* argv_storage[kMaxArgc];
       int ac = 0;
-      char arg_copy[384];
+      static char arg_copy[384];
       arg_copy[0] = '\0';
       if (rest && rest[0] != '\0') {
         strncpy(arg_copy, rest, sizeof(arg_copy) - 1);
