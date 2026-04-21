@@ -1,96 +1,8 @@
 #include "MyMesh.h"
 #include <algorithm>
 
-#include <lomessage/Split.h>
-
-#ifdef ESP32
-#include <WiFi.h>
-#include <cctype>
-#include <LotatoCliCtx.h>
-#include <lolog/LoLog.h>
-#include <LotatoIngestTtl.h>
-#include <LotatoNodeStore.h>
-#include <loserial/LoSerial.h>
-#include <locommand/Command.h>
-#include <locommand/Router.h>
-#include <lofi/Lofi.h>
-#include <lomessage/Buffer.h>
-#include <losettings/ConfigHub.h>
-#endif
-
-namespace {
-/** `Mesh::onRecvPacket` decrypts into `uint8_t[MAX_PACKET_PAYLOAD]`; `data[len]` is only safe if len < MAX. */
-inline void null_terminate_mesh_data(uint8_t* data, size_t len) {
-  if (!data) return;
-  if (len < (size_t)MAX_PACKET_PAYLOAD) {
-    data[len] = 0;
-  } else if ((size_t)MAX_PACKET_PAYLOAD > 0) {
-    data[MAX_PACKET_PAYLOAD - 1] = 0;
-  }
-}
-}  // namespace
-
-/** Admin TXT_MSG path: `Mesh::onRecvPacket` already has `data[MAX_PACKET_PAYLOAD]` on the stack — keep reply
- *  scratch out of that frame to avoid blowing the loop stack (manifests as random Guru / flash-cache faults). */
-static uint8_t s_on_peer_mesh_cli_temp[5 + MyMesh::kCliReplyCap];
-
-#ifdef ESP32
-
-MyMesh* g_mesh_for_scan = nullptr;
-
-static char s_on_peer_mesh_cli_snap[MyMesh::kCliReplyCap];
-
-/** True while a long-running async CLI op holds the session; mesh commands are rejected while set. */
-static bool s_async_cli_busy = false;
-/** Routing snapshot set at command-receive time; persists for async completion push. */
-static struct {
-  bool    valid;
-  int     acl_idx;
-  uint8_t out_path[MAX_PATH_SIZE];
-  uint8_t out_path_len;
-  uint8_t path_hash_size;
-} s_scan_reply_target = {};
-
-void my_mesh_set_async_cli_busy(bool busy) { s_async_cli_busy = busy; }
-
-extern "C" void lofi_async_busy(bool busy) { s_async_cli_busy = busy; }
-
-namespace {
-bool s_scan_from_serial = false;
-bool s_connect_from_serial = false;
-
-void scan_complete_cb(void*, const char* text) {
-  if (s_scan_reply_target.valid && g_mesh_for_scan) {
-    g_mesh_for_scan->enqueueTxtCliReply(
-      s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len, s_scan_reply_target.out_path,
-      s_scan_reply_target.path_hash_size, 0, text);
-    s_scan_reply_target.valid = false;
-  }
-  if (s_scan_from_serial) {
-    s_scan_from_serial = false;
-    ::loserial::LoSerial::printMeshCliReply(text);
-  }
-}
-
-void connect_complete_cb(void*, bool ok, const char* detail) {
-  char msg[96];
-  if (ok) {
-    snprintf(msg, sizeof(msg), "OK - WiFi connected (%s)", detail ? detail : "");
-  } else {
-    snprintf(msg, sizeof(msg), "Err - WiFi connect failed (%s)", detail ? detail : "?");
-  }
-  if (s_scan_reply_target.valid && g_mesh_for_scan) {
-    g_mesh_for_scan->enqueueTxtCliReply(
-      s_scan_reply_target.acl_idx, s_scan_reply_target.out_path_len, s_scan_reply_target.out_path,
-      s_scan_reply_target.path_hash_size, 0, msg);
-    s_scan_reply_target.valid = false;
-  }
-  if (s_connect_from_serial) {
-    s_connect_from_serial = false;
-    ::loserial::LoSerial::printMeshCliReply(msg);
-  }
-}
-}  // namespace
+#ifdef LOTATO_ENABLED
+#include <Lotato.h>
 #endif
 
 /* ------------------------------ Config -------------------------------- */
@@ -112,7 +24,7 @@ void connect_complete_cb(void*, bool ok, const char* detail) {
 #endif
 
 #ifndef ADVERT_NAME
-  #define ADVERT_NAME "Lotato repeater"
+  #define ADVERT_NAME "repeater"
 #endif
 #ifndef ADVERT_LAT
   #define ADVERT_LAT 0.0
@@ -540,9 +452,10 @@ const char *MyMesh::getLogDateTime() {
 
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 #if MESH_PACKET_LOGGING
-  ::loserial::LoSerial::printf("%s RAW: ", getLogDateTime());
-  mesh::Utils::printHex(::loserial::LoSerial::stream(), raw, len);
-  ::loserial::LoSerial::printLine("");
+  Serial.print(getLogDateTime());
+  Serial.print(" RAW: ");
+  mesh::Utils::printHex(Serial, raw, len);
+  Serial.println();
 #endif
 }
 
@@ -647,7 +560,7 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
     uint32_t timestamp;
     memcpy(&timestamp, data, 4);
 
-    null_terminate_mesh_data(data, len);
+    data[len] = 0;  // ensure null terminator
     uint8_t reply_len;
 
     reply_path_len = -1;
@@ -712,35 +625,16 @@ void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32
                           const uint8_t *app_data, size_t app_data_len) {
   mesh::Mesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len); // chain to super impl
 
-  AdvertDataParser parser(app_data, app_data_len);
-
   // if this a zero hop advert (and not via 'Share'), add it to neighbours
   if (packet->path_len == 0 && !isShare(packet)) {
+    AdvertDataParser parser(app_data, app_data_len);
     if (parser.isValid() && parser.getType() == ADV_TYPE_REPEATER) { // just keep neigbouring Repeaters
       putNeighbour(id, timestamp, packet->getSNR());
     }
   }
 
-#ifdef ESP32
-  // persist all valid adverts (any hop count) and POST when cooloff has elapsed
-  if (parser.isValid()) {
-    int32_t lat = parser.hasLatLon() ? parser.getIntLat() : 0;
-    int32_t lon = parser.hasLatLon() ? parser.getIntLon() : 0;
-    const char* name = parser.hasName() ? parser.getName() : "";
-    uint8_t atype = parser.getType();
-    char id_hex[9]; // first 4 bytes as hex
-    static const char* hexd = "0123456789abcdef";
-    for (int _i = 0; _i < 4; _i++) {
-      id_hex[_i*2]   = hexd[id.pub_key[_i] >> 4];
-      id_hex[_i*2+1] = hexd[id.pub_key[_i] & 0xf];
-    }
-    id_hex[8] = '\0';
-    ::lolog::LoLog::debug("lotato", "advert: !%s name=\"%.32s\" type=%u hops=%u ts=%lu gps=%s",
-                        id_hex, name, (unsigned)atype, (unsigned)packet->path_len,
-                        (unsigned long)timestamp, parser.hasLatLon() ? "yes" : "no");
-    int slot = _node_store.put(id.pub_key, name, atype, timestamp, lat, lon);
-    ::lolog::LoLog::debug("lotato", "advert: !%s stored slot=%d (total=%d)", id_hex, slot, _node_store.count());
-  }
+#ifdef LOTATO_ENABLED
+  Lotato::delegate().onAdvertRecv(packet, id, timestamp, app_data, app_data_len);
 #endif
 }
 
@@ -796,22 +690,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       client->last_activity = getRTCClock()->getCurrentTime();
 
       // len can be > original length, but 'text' will be padded with zeroes
-      null_terminate_mesh_data(data, len);
-#ifdef ESP32
-      if (::lolog::LoLog::isVerbose()) {
-        const char* cmd_preview = (const char*)&data[5];
-        size_t cmd_len = strlen(cmd_preview);
-        ::lolog::LoLog::debug("lotato",
-                              "mesh txt rx: ts=%lu raw_b4=0x%02x txt_flags=%u decrypt_len=%zu is_retry=%d",
-                              (unsigned long)sender_timestamp, (unsigned)data[4], (unsigned)flags, len,
-                              is_retry ? 1 : 0);
-        if (cmd_len) {
-          unsigned show = cmd_len > 200u ? 200u : (unsigned)cmd_len;
-          ::lolog::LoLog::debug("lotato", "mesh txt cmd len=%u preview: \"%.*s\"%s", (unsigned)cmd_len,
-                                (int)show, cmd_preview, cmd_len > 200u ? "..." : "");
-        }
-      }
-#endif
+      data[len] = 0; // need to make a C string again, with null terminator
 
       if (flags == TXT_TYPE_PLAIN) { // for legacy CLI, send Acks
         uint32_t ack_hash; // calc truncated hash of the message timestamp + text + sender pub_key, to prove
@@ -829,66 +708,43 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
         }
       }
 
+#ifdef LOTATO_ENABLED
+      // Lotato intercepts only commands it owns (`lotato …` / `wifi …` / `config …`). Every other
+      // command — including all of upstream's admin CLI — flows through the upstream reply path
+      // below, verbatim, so we stay drift-free if upstream changes its framing/timing.
+      if (!Lotato::delegate().handleAdminTxtCliIfMine(sender_timestamp, client->id.pub_key, secret,
+                                                      client->out_path, client->out_path_len,
+                                                      packet->getPathHashSize(), (char*)&data[5],
+                                                      is_retry))
+#endif
+      {
+      uint8_t temp[166];
       char *command = (char *)&data[5];
-      char *reply = (char *)&s_on_peer_mesh_cli_temp[5];
+      char *reply = (char *)&temp[5];
       if (is_retry) {
         *reply = 0;
       } else {
-#ifdef ESP32
-        if (s_async_cli_busy) {
-          strncpy(reply, "Err - busy (operation in progress)", MyMesh::kCliReplyCap - 1);
-          reply[MyMesh::kCliReplyCap - 1] = '\0';
-          ::lolog::LoLog::debug("lotato", "cli reply: reject (busy) cmd=%.60s", command);
-        } else {
-          // preset routing snapshot so async ops (e.g. wifi list) can push results later
-          s_scan_reply_target.valid          = true;
-          s_scan_reply_target.acl_idx        = i;
-          s_scan_reply_target.out_path_len   = client->out_path_len;
-          memcpy(s_scan_reply_target.out_path, client->out_path, sizeof(s_scan_reply_target.out_path));
-          s_scan_reply_target.path_hash_size = packet->getPathHashSize();
-          _lotato_txt_route.valid            = true;
-          _lotato_txt_route.acl_idx          = i;
-          _lotato_txt_route.out_path_len     = client->out_path_len;
-          memcpy(_lotato_txt_route.out_path, client->out_path, sizeof(_lotato_txt_route.out_path));
-          _lotato_txt_route.path_hash_size   = packet->getPathHashSize();
-          strncpy(s_on_peer_mesh_cli_snap, command, sizeof(s_on_peer_mesh_cli_snap) - 1);
-          s_on_peer_mesh_cli_snap[sizeof(s_on_peer_mesh_cli_snap) - 1] = '\0';
-          handleCommand(sender_timestamp, command, reply);
-          // if an async op started it set s_async_cli_busy; leave snapshot valid for completion push
-          if (!s_async_cli_busy) s_scan_reply_target.valid = false;
-          _lotato_txt_route.valid = false;
-          if (::lolog::LoLog::isVerbose()) {
-            ::lolog::LoLog::debug("lotato.cli", "mesh cmd: %.200s", s_on_peer_mesh_cli_snap);
-            ::lolog::LoLog::debug("lotato.cli", "mesh reply: %.200s", reply);
+        handleCommand(sender_timestamp, command, reply);
+      }
+      int text_len = strlen(reply);
+      if (text_len > 0) {
+        uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
+        if (timestamp == sender_timestamp) {
+          // WORKAROUND: the two timestamps need to be different, in the CLI view
+          timestamp++;
+        }
+        memcpy(temp, &timestamp, 4);        // mostly an extra blob to help make packet_hash unique
+        temp[4] = (TXT_TYPE_CLI_DATA << 2); // NOTE: legacy was: TXT_TYPE_PLAIN
+
+        auto reply = createDatagram(PAYLOAD_TYPE_TXT_MSG, client->id, secret, temp, 5 + text_len);
+        if (reply) {
+          if (client->out_path_len == OUT_PATH_UNKNOWN) {
+            sendFlood(reply, CLI_REPLY_DELAY_MILLIS, packet->getPathHashSize());
+          } else {
+            sendDirect(reply, client->out_path, client->out_path_len, CLI_REPLY_DELAY_MILLIS);
           }
         }
-#else
-        handleCommand(sender_timestamp, command, reply);
-#endif
       }
-#ifdef ESP32
-      if (::lolog::LoLog::isVerbose()) {
-        int will_q = (!is_retry && reply[0] != '\0') ? 1 : 0;
-        size_t rn = strlen(reply);
-        ::lolog::LoLog::debug("lotato", "mesh after handle: reply_len=%zu will_enqueue=%d", rn, will_q);
-        if (rn) {
-          unsigned show = rn > 200u ? 200u : (unsigned)rn;
-          ::lolog::LoLog::debug("lotato", "mesh reply preview: \"%.*s\"%s", (int)show, reply,
-                                rn > 200u ? "..." : "");
-        }
-      }
-#endif
-      if (strlen(reply) > 0) {
-#ifdef ESP32
-        if (::lolog::LoLog::isVerbose()) {
-          size_t rn = strlen(reply);
-          unsigned show = rn > 200u ? 200u : (unsigned)rn;
-          ::lolog::LoLog::debug("lotato", "mesh enqueue len=%u preview: \"%.*s\"%s", (unsigned)rn,
-                                (int)show, reply, rn > 200u ? "..." : "");
-        }
-#endif
-        enqueueTxtCliReply(i, client->out_path_len, client->out_path,
-                           packet->getPathHashSize(), sender_timestamp, reply);
       }
     } else {
       MESH_DEBUG_PRINTLN("onPeerDataRecv: possible replay attack detected");
@@ -1011,9 +867,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   set_radio_at = revert_radio_at = 0;
   _logging = false;
   region_load_active = false;
-#ifdef ESP32
-  _lotato_txt_route.valid = false;
-#endif
 
 #if MAX_NEIGHBOURS
   memset(neighbours, 0, sizeof(neighbours));
@@ -1073,37 +926,8 @@ void MyMesh::begin(FILESYSTEM *fs) {
   // load persisted prefs
   _cli.loadPrefs(_fs);
   acl.load(_fs, self_id);
-#ifdef ESP32
-  LotatoConfig::instance().load();
-  lofi::Lofi::instance().begin();
-  lotato_ingest_ttl_store().begin();
-  _node_store.begin(_fs);
-  g_mesh_for_scan = this;
-  lofi::Lofi::instance().setScanCompleteCallback(scan_complete_cb, nullptr);
-  lofi::Lofi::instance().setConnectCompleteCallback(connect_complete_cb, nullptr);
-
-  losettings::ConfigHub::instance().bindConfigCli(_cli_config);
-  _cli_config.setRootBrief("LoSettings keys (ls/get/set/unset)");
-
-  lofi::bindWifiCli(_cli_wifi);
-  _cli_wifi.setRootBrief("WiFi STA scan/connect");
-
-  _cli_lotato.add("status", &MyMesh::lotato_h_status, nullptr, nullptr, "show lotato/ingest status");
-  _cli_lotato.add("pause", &MyMesh::lotato_h_pause, nullptr, nullptr, "pause ingest (shortcut for config)");
-  _cli_lotato.add("resume", &MyMesh::lotato_h_resume, nullptr, nullptr, "resume ingest (shortcut for config)");
-  _cli_lotato.add("contacts", &MyMesh::lotato_h_contacts, nullptr, nullptr, "node store summary");
-  _cli_lotato.add("force", &MyMesh::lotato_h_force, nullptr, nullptr, "clear TTL for all nodes (re-ingest all)");
-  _cli_lotato.add("flush", &MyMesh::lotato_h_flush, nullptr, nullptr, "alias of force");
-  _cli_lotato.setRootBrief("ingest status / force / contacts");
-
-  _cli_router.clear();
-  _cli_router.add(&_cli_lotato);
-  _cli_router.add(&_cli_wifi);
-  _cli_router.add(&_cli_config);
-  {
-    UBaseType_t words = uxTaskGetStackHighWaterMark(nullptr);
-    ::lolog::LoLog::info("lotato.stack", "begin: free_bytes=%u", (unsigned)(words * sizeof(StackType_t)));
-  }
+#ifdef LOTATO_ENABLED
+  Lotato::init(_fs, self_id.pub_key, this);
 #endif
   // TODO: key_store.begin();
   region_map.load(_fs);
@@ -1147,7 +971,7 @@ bool MyMesh::formatFileSystem() {
 #elif defined(RP2040_PLATFORM)
   return LittleFS.format();
 #elif defined(ESP32)
-  return LittleFS.format();
+  return SPIFFS.format();
 #else
 #error "need to implement file system erase"
   return false;
@@ -1190,18 +1014,11 @@ void MyMesh::dumpLogFile() {
   File f = _fs->open(PACKET_LOG_FILE);
 #endif
   if (f) {
-    char buf[64];
-    size_t n = 0;
     while (f.available()) {
       int c = f.read();
       if (c < 0) break;
-      buf[n++] = (char)c;
-      if (n == sizeof(buf)) {
-        ::loserial::LoSerial::writeChunked(buf, n);
-        n = 0;
-      }
+      Serial.print((char)c);
     }
-    if (n) ::loserial::LoSerial::writeChunked(buf, n);
     f.close();
   }
 }
@@ -1273,13 +1090,6 @@ void MyMesh::removeNeighbor(const uint8_t *pubkey, int key_len) {
 
 void MyMesh::formatStatsReply(char *reply) {
   StatsFormatHelper::formatCoreStats(reply, board, *_ms, _err_flags, _mgr);
-#ifdef ESP32
-  // Append lotato node count to the JSON object.
-  int len = strlen(reply);
-  if (len > 1 && reply[len - 1] == '}') {
-    snprintf(reply + len - 1, 48, ",\"lotato_nodes\":%d}", _node_store.count());
-  }
-#endif
 }
 
 void MyMesh::formatRadioStatsReply(char *reply) {
@@ -1312,46 +1122,37 @@ void MyMesh::clearStats() {
 
 void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply) {
   if (region_load_active) {
-#ifdef ESP32
-    // During `region load`, non-blank lines are consumed as region map rows with no echo.
-    // Allow `lotato …` through so e.g. `lotato flush` still gets a normal reply.
-    const char *cmd_scan = command;
-    while (*cmd_scan == ' ') cmd_scan++;
-    if (!this->_cli_router.matchesAnyRoot(cmd_scan) && !this->_cli_router.matchesGlobalHelp(cmd_scan))
-#endif
-    {
-      if (StrHelper::isBlank(command)) {  // empty/blank line, signal to terminate 'load' operation
-        region_map = temp_map;  // copy over the temp instance as new current map
-        region_load_active = false;
+    if (StrHelper::isBlank(command)) {  // empty/blank line, signal to terminate 'load' operation
+      region_map = temp_map;  // copy over the temp instance as new current map
+      region_load_active = false;
 
-        sprintf(reply, "OK - loaded %d regions", region_map.getCount());
-      } else {
-        char *np = command;
-        while (*np == ' ') np++;   // skip indent
-        int indent = np - command;
+      sprintf(reply, "OK - loaded %d regions", region_map.getCount());
+    } else {
+      char *np = command;
+      while (*np == ' ') np++;   // skip indent
+      int indent = np - command;
 
-        char *ep = np;
-        while (RegionMap::is_name_char(*ep)) ep++;
-        if (*ep) { *ep++ = 0; }  // set null terminator for end of name
+      char *ep = np;
+      while (RegionMap::is_name_char(*ep)) ep++;
+      if (*ep) { *ep++ = 0; }  // set null terminator for end of name
 
-        while (*ep && *ep != 'F') ep++;  // look for (optional) flags
+      while (*ep && *ep != 'F') ep++;  // look for (optional) flags
 
-        if (indent > 0 && indent < 8 && strlen(np) > 0) {
-          auto parent = load_stack[indent - 1];
-          if (parent) {
-            auto old = region_map.findByName(np);
-            auto nw = temp_map.putRegion(np, parent->id, old ? old->id : 0);  // carry-over the current ID (if name already exists)
-            if (nw) {
-              nw->flags = old ? old->flags : (*ep == 'F' ? 0 : REGION_DENY_FLOOD);   // carry-over flags from curr
+      if (indent > 0 && indent < 8 && strlen(np) > 0) {
+        auto parent = load_stack[indent - 1];
+        if (parent) {
+          auto old = region_map.findByName(np);
+          auto nw = temp_map.putRegion(np, parent->id, old ? old->id : 0);  // carry-over the current ID (if name already exists)
+          if (nw) {
+            nw->flags = old ? old->flags : (*ep == 'F' ? 0 : REGION_DENY_FLOOD);   // carry-over flags from curr
 
-              load_stack[indent] = nw;  // keep pointers to parent regions, to resolve parent_id's
-            }
+            load_stack[indent] = nw;  // keep pointers to parent regions, to resolve parent_id's
           }
         }
-        reply[0] = 0;
       }
-      return;
+      reply[0] = 0;
     }
+    return;
   }
 
   while (*command == ' ') command++; // skip leading spaces
@@ -1386,14 +1187,14 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       }
     }
   } else if (sender_timestamp == 0 && strcmp(command, "get acl") == 0) {
-    ::loserial::LoSerial::printLine("ACL:");
+    Serial.println("ACL:");
     for (int i = 0; i < acl.getNumClients(); i++) {
       auto c = acl.getClientByIdx(i);
       if (c->permissions == 0) continue;  // skip deleted (or guest) entries
 
-      ::loserial::LoSerial::printf("%02X ", c->permissions);
-      mesh::Utils::printHex(::loserial::LoSerial::stream(), c->id.pub_key, PUB_KEY_SIZE);
-      ::loserial::LoSerial::printLine("");
+      Serial.printf("%02X ", c->permissions);
+      mesh::Utils::printHex(Serial, c->id.pub_key, PUB_KEY_SIZE);
+      Serial.printf("\n");
     }
     reply[0] = 0;
   } else if (memcmp(command, "region", 6) == 0) {
@@ -1506,298 +1307,14 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       sendNodeDiscoverReq();
       strcpy(reply, "OK - Discover sent");
     }
-#ifdef ESP32
-  } else if (_cli_router.matchesAnyRoot(command) || _cli_router.matchesGlobalHelp(command)) {
-    {
-      UBaseType_t words = uxTaskGetStackHighWaterMark(nullptr);
-      ::lolog::LoLog::info("lotato.stack", "cli pre: free_bytes=%u",
-                           (unsigned)(words * sizeof(StackType_t)));
-    }
-    LotatoCliCtx lctx{this, sender_timestamp};
-    lomessage::Buffer buf(MyMesh::kCliReplyCap * 4);
-    if (_cli_router.dispatch(command, buf, &lctx)) {
-      ::lolog::LoLog::debug("lotato", "lotato dispatch: out_len=%u truncated=%d",
-                            (unsigned)buf.length(), buf.truncated() ? 1 : 0);
-      deliverLotatoReply(sender_timestamp, buf.c_str(), reply);
-    }
-    {
-      UBaseType_t words = uxTaskGetStackHighWaterMark(nullptr);
-      ::lolog::LoLog::info("lotato.stack", "cli post: free_bytes=%u",
-                           (unsigned)(words * sizeof(StackType_t)));
-    }
+#ifdef LOTATO_ENABLED
+  } else if (Lotato::delegate().tryDispatchCommand(command, sender_timestamp, reply)) {
+    // lotato / wifi / config / ? / help — delegate filled `reply` (and queued chunks if long).
 #endif
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
 }
-
-#ifdef ESP32
-
-static void run_lotato_wifi_scan_cli(lomessage::Buffer& out, MyMesh* mesh, uint32_t sender_ts) {
-  g_mesh_for_scan = mesh;
-  lofi::Lofi& lf = lofi::Lofi::instance();
-  lf.serviceWifiScan();
-  if (lf.scanSnapshotCount() > 0 && !s_async_cli_busy) {
-    lf.formatScanBody(out);
-    return;
-  }
-  if (s_async_cli_busy) {
-    out.append("WiFi scan in progress...");
-    return;
-  }
-  s_scan_from_serial = (sender_ts == 0);
-  lf.requestWifiScan();
-  out.append("Scanning for WiFi devices...");
-}
-
-void MyMesh::lotato_h_status(locommand::Context& ctx) {
-  auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
-  MyMesh* self = lc->self;
-  LotatoConfig& cfg = LotatoConfig::instance();
-  wl_status_t wl = WiFi.status();
-  const char* wl_str = (wl == WL_CONNECTED) ? "connected" : "not connected";
-  int code = self->_ingestor.lastHttpCode();
-  char code_str[12];
-  if (code == 0) strcpy(code_str, "none");
-  else snprintf(code_str, sizeof(code_str), "%d", code);
-  const char* token_str = cfg.apiToken()[0] ? "set" : "(none)";
-  const char* url_str = cfg.ingestOrigin()[0] ? cfg.ingestOrigin() : "(none)";
-  const char* dbg_str = ::lolog::LoLog::isVerbose() ? "on" : "off";
-  const int due = self->_node_store.countDueNodes();
-  if (wl == WL_CONNECTED) {
-    ctx.out.appendf("WiFi: %s\nSSID: %s\nIP: %s\nNodes: %d\nDue: %d\nPaused: %s\nLast API Response: %s\nURL: %s\nToken: %s\nDebug: %s",
-                    wl_str, WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(),
-                    self->_node_store.count(), due,
-                    self->_ingestor.isPaused() ? "yes" : "no", code_str, url_str, token_str, dbg_str);
-  } else {
-    ctx.out.appendf("WiFi: %s\nSaved: %s\nNodes: %d\nDue: %d\nPaused: %s\nURL: %s\nToken: %s\nDebug: %s",
-                    wl_str, cfg.ssid()[0] ? cfg.ssid() : "(none)",
-                    self->_node_store.count(), due,
-                    self->_ingestor.isPaused() ? "yes" : "no", url_str, token_str, dbg_str);
-  }
-}
-
-void MyMesh::lotato_h_pause(locommand::Context& ctx) {
-  auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
-  lc->self->_ingestor.setPaused(true);
-  ctx.out.append("OK - ingest paused");
-}
-
-void MyMesh::lotato_h_resume(locommand::Context& ctx) {
-  auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
-  lc->self->_ingestor.setPaused(false);
-  ctx.out.append("OK - ingest resumed");
-}
-
-void MyMesh::lotato_h_contacts(locommand::Context& ctx) {
-  auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
-  LotatoConfig& cfg = LotatoConfig::instance();
-  lc->self->_node_store.dumpAllNodesDebug();
-  ctx.out.appendf("Nodes: %d\nDue: %d\nRefresh: %lus\nGC: %lus\n",
-                  lc->self->_node_store.count(), lc->self->_node_store.countDueNodes(),
-                  (unsigned long)cfg.ingestRefreshSecs(), (unsigned long)cfg.ingestGcStaleSecs());
-}
-
-void MyMesh::lotato_h_force(locommand::Context& ctx) {
-  auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
-  lc->self->_node_store.flushAllTtl();
-  lc->self->_node_store.logFlushTargetsDebug();
-  const int due = lc->self->_node_store.countDueNodes();
-  ::lolog::LoLog::debug("lotato", "lotato CLI: force — TTL cleared for all nodes, due=%d", due);
-  ctx.out.appendf("OK - due nodes: %d", due);
-}
-
-void MyMesh::lotato_h_flush(locommand::Context& ctx) { lotato_h_force(ctx); }
-
-void MyMesh::lotato_h_wifi_status(locommand::Context& ctx) {
-  LotatoConfig& cfg = LotatoConfig::instance();
-  wl_status_t wl = WiFi.status();
-  if (wl == WL_CONNECTED) {
-    ctx.out.appendf("WiFi: connected\nSSID: %s\nIP: %s", WiFi.SSID().c_str(),
-                    WiFi.localIP().toString().c_str());
-  } else {
-    ctx.out.appendf("WiFi: not connected\nSaved: %s\nUse: wifi scan",
-                    cfg.ssid()[0] ? cfg.ssid() : "(none)");
-  }
-}
-
-void MyMesh::lotato_h_wifi_scan(locommand::Context& ctx) {
-  auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
-  run_lotato_wifi_scan_cli(ctx.out, lc->self, lc->sender_ts);
-}
-
-void MyMesh::lotato_h_wifi_connect(locommand::Context& ctx) {
-  auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
-  LotatoConfig& cfg = LotatoConfig::instance();
-  if (ctx.argc < 1) {
-    ctx.printHelp();
-    return;
-  }
-  const char* tok1 = ctx.argv[0];
-  const char* tok2 = (ctx.argc >= 2) ? ctx.argv[1] : "";
-
-  char ssid_to_use[33] = {};
-  bool is_index = true;
-  for (const char* q = tok1; *q; q++) {
-    if (*q < '0' || *q > '9') {
-      is_index = false;
-      break;
-    }
-  }
-  lofi::Lofi& lf = lofi::Lofi::instance();
-  if (is_index && tok1[0] != '\0') {
-    int idx = atoi(tok1) - 1;
-    int32_t rssi;
-    if (idx < 0 || !lf.scanSnapshotEntry(idx, ssid_to_use, &rssi)) {
-      ctx.out.appendf("Err - index out of range (1..%d)\nRun: wifi scan first",
-                      lf.scanSnapshotCount());
-      return;
-    }
-  } else {
-    strncpy(ssid_to_use, tok1, sizeof(ssid_to_use) - 1);
-  }
-
-  char pwd_to_use[65] = {};
-  if (tok2[0] != '\0') {
-    strncpy(pwd_to_use, tok2, sizeof(pwd_to_use) - 1);
-    pwd_to_use[sizeof(pwd_to_use) - 1] = '\0';
-  } else {
-    cfg.getKnownWifiPassword(ssid_to_use, pwd_to_use, sizeof(pwd_to_use));
-  }
-
-  cfg.setWifi(ssid_to_use, pwd_to_use);
-  lc->self->_ingestor.restartAfterConfigChange();
-  s_connect_from_serial = (lc->sender_ts == 0);
-  lf.beginConnect(ssid_to_use, pwd_to_use);
-  ::lolog::LoLog::debug("lotato", "lotato CLI: wifi connecting ssid=%s modem_sleep=off", ssid_to_use);
-  ctx.out.appendf("Connecting to %s...", ssid_to_use);
-}
-
-void MyMesh::lotato_h_wifi_forget(locommand::Context& ctx) {
-  LotatoConfig& cfg = LotatoConfig::instance();
-  if (ctx.argc < 1) {
-    ctx.printHelp();
-    return;
-  }
-  if (!cfg.forgetKnownWifi(ctx.argv[0])) {
-    ctx.out.append("Err - SSID not in known list\n");
-    return;
-  }
-  ctx.out.append("OK\n");
-}
-
-void MyMesh::deliverLotatoReply(uint32_t sender_ts, const char* text, char* reply) {
-  reply[0] = '\0';
-  if (!text || !text[0]) return;
-  size_t n = strlen(text);
-  if (n + 1 <= kCliReplyCap) {
-    memcpy(reply, text, n + 1);
-    return;
-  }
-  if (sender_ts != 0 && _lotato_txt_route.valid) {
-    enqueueTxtCliReply(_lotato_txt_route.acl_idx, _lotato_txt_route.out_path_len, _lotato_txt_route.out_path,
-                        _lotato_txt_route.path_hash_size, sender_ts, text);
-    return;
-  }
-  ::loserial::LoSerial::printMeshCliReply(text);
-}
-
-namespace lofi {
-
-static const locommand::ArgSpec k_wifi_connect_args[] = {
-    {"n_or_ssid", "string", nullptr, true, "Scan index (1-based) or SSID"},
-    {"password", "secret", nullptr, false, "PSK if not already saved"},
-};
-
-static const locommand::ArgSpec k_wifi_forget_args[] = {
-    {"ssid", "string", nullptr, true, "Network SSID to remove from known list"},
-};
-
-void bindWifiCli(locommand::Engine& eng) {
-  eng.add("status", &MyMesh::lotato_h_wifi_status, nullptr, nullptr, "STA / saved SSID snapshot");
-  eng.add("scan", &MyMesh::lotato_h_wifi_scan, nullptr, nullptr, "scan for APs (async reply)");
-  eng.addWithArgs("connect", &MyMesh::lotato_h_wifi_connect, k_wifi_connect_args, 2, nullptr, "connect by index or SSID");
-  eng.addWithArgs("forget", &MyMesh::lotato_h_wifi_forget, k_wifi_forget_args, 1, nullptr, "remove SSID from known list");
-}
-
-}  // namespace lofi
-
-#endif
-
-/* ── CLI reply FIFO (lomessage::Queue) ─────────────────────────────── */
-
-bool MyMesh::enqueueTxtCliReply(int acl_idx, uint8_t out_path_len, const uint8_t* out_path,
-                                uint8_t path_hash_size, uint32_t sender_ts, const char* text) {
-  CliReplyRoute ctx;
-  memset(&ctx, 0, sizeof(ctx));
-  ctx.sender_ts      = sender_ts;
-  ctx.acl_idx        = acl_idx;
-  memcpy(ctx.out_path, out_path, sizeof(ctx.out_path));
-  ctx.out_path_len   = out_path_len;
-  ctx.path_hash_size = path_hash_size;
-
-  lomessage::Options opts;
-  opts.max_chunk            = kMaxTxtChunk;
-  opts.inter_chunk_delay_ms = CLI_REPLY_DELAY_MILLIS;
-  opts.split_flags          = lomessage::CHUNK_ABSORB_LINE_BOUNDARY;
-
-  bool ok = _reply_queue.send(text, &ctx, sizeof(ctx), opts, millis());
-  if (ok) {
-    ::lolog::LoLog::debug("lotato", "cli reply q: enqueue len=%u acl=%d", (unsigned)strlen(text), acl_idx);
-  } else {
-    ::lolog::LoLog::debug("lotato", "cli reply q: enqueue FAILED (empty or OOM) acl=%d", acl_idx);
-  }
-  return ok;
-}
-
-lomessage::SendResult MyMesh::sendChunk(const uint8_t* data, size_t len,
-                                        size_t chunk_idx, size_t total_chunks,
-                                        bool /*is_final*/, void* user_ctx) {
-  auto* ctx = static_cast<CliReplyRoute*>(user_ctx);
-  if (!ctx || ctx->acl_idx < 0 || ctx->acl_idx >= acl.getNumClients()) {
-    ::lolog::LoLog::debug("lotato", "cli reply q: drop stale acl=%d", ctx ? ctx->acl_idx : -1);
-    return lomessage::SendResult::Abandon;
-  }
-  ClientInfo* client = acl.getClientByIdx(ctx->acl_idx);
-
-  if (len == 0 || len > kMaxTxtChunk) {
-    ::lolog::LoLog::debug("lotato", "cli reply tx: BAD emit_len=%u (max=%u) — abandon job", (unsigned)len,
-                  (unsigned)kMaxTxtChunk);
-    return lomessage::SendResult::Abandon;
-  }
-
-  uint8_t temp[5 + kMaxTxtChunk];
-  uint32_t ts = getRTCClock()->getCurrentTimeUnique();
-  if (ts == ctx->sender_ts) ts++;
-  memcpy(temp, &ts, 4);
-  temp[4] = (TXT_TYPE_CLI_DATA << 2);
-  memcpy(&temp[5], data, len);
-
-  uint8_t secret[PUB_KEY_SIZE];
-  memcpy(secret, client->shared_secret, PUB_KEY_SIZE);
-
-  mesh::Packet* pkt = createDatagram(PAYLOAD_TYPE_TXT_MSG, client->id, secret, temp, 5 + len);
-  bool sent = false;
-  if (pkt) {
-    if (ctx->out_path_len == OUT_PATH_UNKNOWN) {
-      sendFlood(pkt, 0, ctx->path_hash_size);
-    } else {
-      sendDirect(pkt, ctx->out_path, ctx->out_path_len, 0);
-    }
-    sent = true;
-  }
-
-  ::lolog::LoLog::debug("lotato", "cli reply tx: chunk %u/%u bytes=%u %s acl=%d peer=%02x%02x%02x%02x %s",
-    (unsigned)chunk_idx, (unsigned)total_chunks, (unsigned)len,
-    (ctx->out_path_len == OUT_PATH_UNKNOWN) ? "flood" : "direct",
-    ctx->acl_idx,
-    (unsigned)client->id.pub_key[0], (unsigned)client->id.pub_key[1],
-    (unsigned)client->id.pub_key[2], (unsigned)client->id.pub_key[3],
-    sent ? "ok" : "FAIL");
-  return sent ? lomessage::SendResult::Sent : lomessage::SendResult::Retry;
-}
-
-/* ── end CLI reply FIFO ─────────────────────────────────────────────── */
 
 void MyMesh::loop() {
 #ifdef WITH_BRIDGE
@@ -1805,12 +1322,9 @@ void MyMesh::loop() {
 #endif
 
   mesh::Mesh::loop();
-  _reply_queue.service(millis(), *this);
 
-#ifdef ESP32
-  lofi::Lofi::instance().serviceWifiScan();
-  // Batch all due nodes from the store into one ingest POST (worker task).
-  _ingestor.service(&_node_store, self_id.pub_key);
+#ifdef LOTATO_ENABLED
+  Lotato::delegate().service();
 #endif
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
@@ -1856,9 +1370,8 @@ bool MyMesh::hasPendingWork() const {
 #if defined(WITH_BRIDGE)
   if (bridge.isRunning()) return true;  // bridge needs WiFi radio, can't sleep
 #endif
-  if (!_reply_queue.empty()) return true;  // CLI reply chunks still queued
-#ifdef ESP32
-  if (_ingestor.pendingQueueDepth() > 0) return true;  // batch POST in flight / retry backoff
+#ifdef LOTATO_ENABLED
+  if (Lotato::delegate().isBusy()) return true;  // ingest in flight, CLI chunks queued, or WiFi up
 #endif
   return _mgr->getOutboundTotal() > 0;
 }

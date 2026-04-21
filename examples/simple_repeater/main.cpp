@@ -3,16 +3,6 @@
 
 #include "MyMesh.h"
 
-#ifdef ESP32
-#include <WiFi.h>
-#include <LotatoConfig.h>
-#include <LotatoIngestor.h>
-#include <lofi/Lofi.h>
-#endif
-#include <lolog/LoLog.h>
-#include <loserial/LoSerial.h>
-#include <lofs/LoFS.h>
-
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
   static UITask ui_task(display);
@@ -27,8 +17,7 @@ void halt() {
   while (1) ;
 }
 
-// Must fit `lotato endpoint ` + LotatoConfig ingest URL (257) with terminator.
-static char command[288];
+static char command[160];
 
 // For power saving
 unsigned long lastActive = 0; // mark last active time
@@ -40,18 +29,8 @@ static unsigned long userBtnDownAt = 0;
 #endif
 
 void setup() {
-#if defined(ARDUINO_ARCH_ESP32)
-  Serial.setTxBufferSize(1024);
-#endif
   Serial.begin(115200);
   delay(1000);
-  ::loserial::LoSerial::begin(Serial);
-
-#ifdef ESP32
-  // VFS logs [E] for every fopen of a missing file; LoDB/LoSettings treat "missing" as normal
-  // (get returns NOT_FOUND). Silence the noise — real errors elsewhere still log.
-  esp_log_level_set("vfs_api", ESP_LOG_NONE);
-#endif
 
   board.begin();
 
@@ -86,9 +65,9 @@ void setup() {
   fs = &InternalFS;
   IdentityStore store(InternalFS, "");
 #elif defined(ESP32)
-  LittleFS.begin(true);
-  fs = &LittleFS;
-  IdentityStore store(LittleFS, "/identity");
+  SPIFFS.begin(true);
+  fs = &SPIFFS;
+  IdentityStore store(SPIFFS, "/identity");
 #elif defined(RP2040_PLATFORM)
   LittleFS.begin();
   fs = &LittleFS;
@@ -97,10 +76,6 @@ void setup() {
 #else
   #error "need to define filesystem"
 #endif
-
-  LoFS::mountDefaults();
-  ::lolog::LoLog::registerConfigSchema();
-  ::lolog::LoLog::loadFromSettings();
   if (!store.load("_main", the_mesh.self_id)) {
     MESH_DEBUG_PRINTLN("Generating new keypair");
     the_mesh.self_id = radio_new_identity();   // create new random identity
@@ -111,34 +86,14 @@ void setup() {
     store.save("_main", the_mesh.self_id);
   }
 
-  ::loserial::LoSerial::printf("Repeater ID: ");
-  mesh::Utils::printHex(::loserial::LoSerial::stream(), the_mesh.self_id.pub_key, PUB_KEY_SIZE);
-  ::loserial::LoSerial::printLine("");
+  Serial.print("Repeater ID: ");
+  mesh::Utils::printHex(Serial, the_mesh.self_id.pub_key, PUB_KEY_SIZE); Serial.println();
 
   command[0] = 0;
 
   sensors.begin();
 
-#ifdef ESP32
-  // Load config before begin() so debug flag is active during node store init.
-  LotatoConfig::instance().load();
-#endif
-
   the_mesh.begin(fs);
-
-#ifdef ESP32
-  lotato_register_sta_dns_override();
-  {
-    auto& pm_cfg = LotatoConfig::instance();
-    if (pm_cfg.ssid()[0] != '\0') {
-      // Don't call WiFi.begin here — `Lofi::begin()` already kicked the boot scan, and its
-      // completion path invokes `resumeStaSavedCredentials()`. Touching the radio here would
-      // race the scan state machine.
-      board.setInhibitSleep(true);
-      if (lofi::Lofi::instance().knownWifiCount() >= 2) WiFi.setAutoReconnect(false);
-    }
-  }
-#endif
 
 #ifdef DISPLAY_CLASS
   ui_task.begin(the_mesh.getNodePrefs(), FIRMWARE_BUILD_DATE, FIRMWARE_VERSION);
@@ -154,25 +109,12 @@ void loop() {
   int len = strlen(command);
   while (Serial.available() && len < sizeof(command)-1) {
     char c = Serial.read();
-    // LF-only line endings (common from web serial / Unix terminals) were ignored before,
-    // so the command buffer never completed and the CLI looked hung.
-    if (c == '\n') {
-      Serial.print('\n');
-      if (len > 0) {
-        command[len++] = '\r';
-        command[len] = 0;
-      }
-      break;
+    if (c != '\n') {
+      command[len++] = c;
+      command[len] = 0;
+      Serial.print(c);
     }
-    command[len++] = c;
-    command[len] = 0;
-    Serial.print(c);
-    if (c == '\r') {
-      if (Serial.available() && Serial.peek() == '\n') {
-        Serial.read();
-      }
-      break;
-    }
+    if (c == '\r') break;
   }
   if (len == sizeof(command)-1) {  // command buffer full
     command[sizeof(command)-1] = '\r';
@@ -181,18 +123,10 @@ void loop() {
   if (len > 0 && command[len - 1] == '\r') {  // received complete line
     Serial.print('\n');
     command[len - 1] = 0;  // replace newline with C string null terminator
-    char reply[MyMesh::kCliReplyCap];
-    reply[0] = '\0';
-    char cmd_snap[sizeof(command)];
-    strncpy(cmd_snap, command, sizeof(cmd_snap) - 1);
-    cmd_snap[sizeof(cmd_snap) - 1] = '\0';
+    char reply[160];
     the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
-    if (::lolog::LoLog::isVerbose()) {
-      ::lolog::LoLog::debug("lotato.cli", "serial cmd: %.200s", cmd_snap);
-      ::lolog::LoLog::debug("lotato.cli", "serial reply: %.200s", reply);
-    }
     if (reply[0]) {
-      ::loserial::LoSerial::printMeshCliReply(reply);
+      Serial.print("  -> "); Serial.println(reply);
     }
 
     command[0] = 0;  // reset command buffer
@@ -205,7 +139,7 @@ void loop() {
     if (userBtnDownAt == 0) {
       userBtnDownAt = millis();
     } else if ((unsigned long)(millis() - userBtnDownAt) >= USER_BTN_HOLD_OFF_MILLIS) {
-      ::loserial::LoSerial::printLine("Powering off...");
+      Serial.println("Powering off...");
       board.powerOff();  // does not return
     }
   } else {

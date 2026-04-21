@@ -10,7 +10,7 @@
 #elif defined(RP2040_PLATFORM)
   #include <LittleFS.h>
 #elif defined(ESP32)
-  #include <LittleFS.h>
+  #include <SPIFFS.h>
 #endif
 
 #ifdef WITH_RS232_BRIDGE
@@ -33,16 +33,7 @@
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RegionMap.h>
-#include <lomessage/Queue.h>
 #include "RateLimiter.h"
-
-#ifdef ESP32
-#include <locommand/Engine.h>
-#include <locommand/Router.h>
-#include <LotatoConfig.h>
-#include <LotatoIngestor.h>
-#include <LotatoNodeStore.h>
-#endif
 
 #ifdef WITH_BRIDGE
 extern AbstractBridge* bridge;
@@ -89,16 +80,7 @@ struct NeighbourInfo {
 
 #define PACKET_LOG_FILE  "/packet_log"
 
-/** Opaque routing ctx copied into each lomessage::Queue job; consumed by MyMesh's Sink. */
-struct CliReplyRoute {
-  uint32_t sender_ts;   ///< original command timestamp; 0 for async-push
-  int      acl_idx;     ///< ClientACL index (peer id + shared_secret)
-  uint8_t  out_path[MAX_PATH_SIZE];
-  uint8_t  out_path_len;
-  uint8_t  path_hash_size;
-};
-
-class MyMesh : public mesh::Mesh, public CommonCLICallbacks, private lomessage::Sink {
+class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   FILESYSTEM* _fs;
   uint32_t last_millis;
   uint64_t uptime_millis;
@@ -135,30 +117,6 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks, private lomessage::
 #elif defined(WITH_ESPNOW_BRIDGE)
   ESPNowBridge bridge;
 #endif
-
-#ifdef ESP32
-  LotatoIngestor _ingestor;
-  LotatoNodeStore _node_store;
-  locommand::Engine _cli_lotato{"lotato"};
-  locommand::Engine _cli_wifi{"wifi"};
-  locommand::Engine _cli_config{"config"};
-  locommand::Router _cli_router;
-
-  struct {
-    bool valid;
-    int acl_idx;
-    uint8_t out_path[MAX_PATH_SIZE];
-    uint8_t out_path_len;
-    uint8_t path_hash_size;
-  } _lotato_txt_route;
-#endif
-
-  lomessage::Queue _reply_queue;  ///< generic outbound CLI reply FIFO
-
-  /** lomessage::Sink override; builds a TXT_MSG datagram for one chunk and hands it to the radio. */
-  lomessage::SendResult sendChunk(const uint8_t* data, size_t len,
-                                  size_t chunk_idx, size_t total_chunks,
-                                  bool is_final, void* user_ctx) override;
 
   void putNeighbour(const mesh::Identity& id, uint32_t timestamp, float snr);
   void sendNodeDiscoverReq();
@@ -216,34 +174,6 @@ protected:
   void onControlDataRecv(mesh::Packet* packet) override;
 
 public:
-#ifdef ESP32
-  static void lotato_h_status(locommand::Context& ctx);
-  static void lotato_h_pause(locommand::Context& ctx);
-  static void lotato_h_resume(locommand::Context& ctx);
-  static void lotato_h_contacts(locommand::Context& ctx);
-  static void lotato_h_force(locommand::Context& ctx);
-  static void lotato_h_flush(locommand::Context& ctx);
-  static void lotato_h_wifi_status(locommand::Context& ctx);
-  static void lotato_h_wifi_scan(locommand::Context& ctx);
-  static void lotato_h_wifi_connect(locommand::Context& ctx);
-  static void lotato_h_wifi_forget(locommand::Context& ctx);
-#endif
-
-  /** Serial + mesh admin TXT_MSG reply; must match main.cpp `reply[]` and `temp[5 + …]` in onPeerDataRecv. */
-  static constexpr size_t kCliReplyCap = 320;
-  /** Max text bytes per TXT_MSG chunk; sized for createDatagram's MAX_PACKET_PAYLOAD limit. */
-  static constexpr size_t kMaxTxtChunk = 160;
-
-  /** Append a full CLI reply to the outbound FIFO for chunked deferred delivery.
-   *  Heap-allocates a copy of @p text; returns false on OOM (reply is dropped). */
-  bool enqueueTxtCliReply(int acl_idx, uint8_t out_path_len, const uint8_t* out_path,
-                          uint8_t path_hash_size, uint32_t sender_ts, const char* text);
-
-#ifdef ESP32
-  /** Long text: copy into @p reply if it fits; else mesh-enqueue using route snapshot, else serial drip. */
-  void deliverLotatoReply(uint32_t sender_ts, const char* text, char* reply);
-#endif
-
   MyMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables);
 
   void begin(FILESYSTEM* fs);
@@ -314,8 +244,3 @@ public:
   void setRxBoostedGain(bool enable) override;
 #endif
 };
-
-#ifdef ESP32
-/** WiFi scan vs mesh CLI busy gate (see `lofi::Lofi`). */
-void my_mesh_set_async_cli_busy(bool busy);
-#endif
