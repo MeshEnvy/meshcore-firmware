@@ -1307,10 +1307,6 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       sendNodeDiscoverReq();
       strcpy(reply, "OK - Discover sent");
     }
-#ifdef LOTATO_ENABLED
-  } else if (Lotato::delegate().tryDispatchCommand(command, sender_timestamp, reply)) {
-    // lotato / wifi / config / ? / help — delegate filled `reply` (and queued chunks if long).
-#endif
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
