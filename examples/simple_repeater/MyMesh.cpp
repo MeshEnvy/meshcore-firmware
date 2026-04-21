@@ -1511,7 +1511,7 @@ void MyMesh::lotato_h_status(locommand::Context& ctx) {
   const char* url_str = cfg.ingestOrigin()[0] ? cfg.ingestOrigin() : "(none)";
   const char* dbg_str = cfg.debugEnabled() ? "on" : "off";
   if (wl == WL_CONNECTED) {
-    ctx.out.appendf("WiFi: %s\nSSID: %s\nIP: %s\nNodes: %d\nQueue: %u\nPaused: %s\nHTTP: %s\nURL: %s\nToken: %s\nDebug: %s",
+    ctx.out.appendf("WiFi: %s\nSSID: %s\nIP: %s\nNodes: %d\nQueue: %u\nPaused: %s\nLast API Response: %s\nURL: %s\nToken: %s\nDebug: %s",
                     wl_str, WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(),
                     self->_node_store.count(), (unsigned)self->_ingestor.pendingQueueDepth(),
                     self->_ingestor.isPaused() ? "yes" : "no", code_str, url_str, token_str, dbg_str);
@@ -1821,5 +1821,8 @@ bool MyMesh::hasPendingWork() const {
   if (bridge.isRunning()) return true;  // bridge needs WiFi radio, can't sleep
 #endif
   if (!_reply_queue.empty()) return true;  // CLI reply chunks still queued
+#ifdef ESP32
+  if (_ingestor.pendingQueueDepth() > 0) return true;  // batch POST in flight / retry backoff
+#endif
   return _mgr->getOutboundTotal() > 0;
 }
