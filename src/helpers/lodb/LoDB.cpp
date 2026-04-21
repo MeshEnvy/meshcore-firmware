@@ -8,6 +8,82 @@
 #include <pb_decode.h>
 #include <pb_encode.h>
 
+namespace {
+
+constexpr char kB64url[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+void lodb_uuid_to_fn11(lodb_uuid_t u, char out[12])
+{
+    for (int i = 10; i >= 0; --i) {
+        out[i] = kB64url[u & 63];
+        u >>= 6;
+    }
+    out[11] = '\0';
+}
+
+bool lodb_fn11_to_uuid(const char s[11], lodb_uuid_t *out)
+{
+    lodb_uuid_t v = 0;
+    for (int i = 0; i < 11; ++i) {
+        char c = s[i];
+        uint32_t x = 256;
+        if (c >= 'A' && c <= 'Z')
+            x = (uint32_t)(c - 'A');
+        else if (c >= 'a' && c <= 'z')
+            x = (uint32_t)(c - 'a' + 26);
+        else if (c >= '0' && c <= '9')
+            x = (uint32_t)(c - '0' + 52);
+        else if (c == '-')
+            x = 62;
+        else if (c == '_')
+            x = 63;
+        if (x >= 64) return false;
+        v = (v << 6) | (lodb_uuid_t)x;
+    }
+    *out = v;
+    return true;
+}
+
+void fill_ns_hex(const std::string &db, const char *table, char ns_out[7])
+{
+    uint32_t h = 2166136261u;
+    for (unsigned char c : db) {
+        h ^= c;
+        h *= 16777619u;
+    }
+    h ^= ':';
+    h *= 16777619u;
+    for (const char *p = table; *p; ++p) {
+        h ^= (unsigned char)*p;
+        h *= 16777619u;
+    }
+    snprintf(ns_out, 7, "%06x", (unsigned)(h & 0xffffffu));
+}
+
+void record_file_path(const char *table_path, const char *ns_hex, lodb_uuid_t uuid, char *path, size_t cap)
+{
+    char fn11[12];
+    lodb_uuid_to_fn11(uuid, fn11);
+    snprintf(path, cap, "%s/%s%s.pr", table_path, ns_hex, fn11);
+}
+
+bool parse_record_filename(const std::string &filename, const char *ns_hex, lodb_uuid_t *uuid_out)
+{
+    if (filename.size() != 20) return false;
+    if (strncmp(filename.c_str(), ns_hex, 6) != 0) return false;
+    if (filename.compare(17, 3, ".pr") != 0) return false;
+    return lodb_fn11_to_uuid(filename.c_str() + 6, uuid_out);
+}
+
+bool record_filename_belongs_table(const std::string &filename, const char *ns_hex)
+{
+    if (filename.size() != 20) return false;
+    if (strncmp(filename.c_str(), ns_hex, 6) != 0) return false;
+    return filename.compare(17, 3, ".pr") == 0;
+}
+
+}  // namespace
+
 __attribute__((weak)) uint32_t lodb_now_ms(void)
 {
     return static_cast<uint32_t>(millis());
@@ -50,8 +126,7 @@ lodb_uuid_t lodb_new_uuid(const char *str, uint64_t salt)
 LoDb::LoDb(const char *db_name, const char *mount) : db_name(db_name)
 {
     const char *m = mount && mount[0] ? mount : "/__ext__";
-    static const char kSeg[] = "/__lodb__";
-    int n = snprintf(db_path, sizeof(db_path), "%s%s/%s", m, kSeg, db_name);
+    int n = snprintf(db_path, sizeof(db_path), "%s/l", m);
     if (n <= 0 || (size_t)n >= sizeof(db_path)) {
         db_path[0] = '\0';
         LODB_LOG_ERROR("LoDB: db_path overflow");
@@ -61,14 +136,9 @@ LoDb::LoDb(const char *db_name, const char *mount) : db_name(db_name)
     if (!LoFS::mkdir(m)) {
         LODB_LOG_DEBUG("LoDB: mount dir may exist: %s", m);
     }
-    char lodb_root[96];
-    snprintf(lodb_root, sizeof(lodb_root), "%s%s", m, kSeg);
-    if (!LoFS::mkdir(lodb_root)) {
-        LODB_LOG_DEBUG("LoDB: lodb root may exist: %s", lodb_root);
-    }
 
     if (!LoFS::mkdir(db_path)) {
-        LODB_LOG_DEBUG("Database directory may already exist: %s", db_path);
+        LODB_LOG_DEBUG("LoDB: records dir may already exist: %s", db_path);
     }
 
     LODB_LOG_INFO("Initialized LoDB database: %s", db_path);
@@ -86,12 +156,9 @@ LoDbError LoDb::registerTable(const char *table_name, const pb_msgdesc_t *pb_des
     metadata.table_name = table_name;
     metadata.pb_descriptor = pb_descriptor;
     metadata.record_size = record_size;
+    fill_ns_hex(db_name, table_name, metadata.ns_hex);
 
-    snprintf(metadata.table_path, sizeof(metadata.table_path), "%s/%s", db_path, table_name);
-
-    if (!LoFS::mkdir(metadata.table_path)) {
-        LODB_LOG_DEBUG("Table directory may already exist: %s", metadata.table_path);
-    }
+    snprintf(metadata.table_path, sizeof(metadata.table_path), "%s", db_path);
 
     tables[table_name] = metadata;
     LODB_LOG_INFO("Registered table: %s at %s", table_name, metadata.table_path);
@@ -119,11 +186,8 @@ LoDbError LoDb::insert(const char *table_name, lodb_uuid_t uuid, const void *rec
         return LODB_ERR_INVALID;
     }
 
-    char uuid_hex[17];
-    lodb_uuid_to_hex(uuid, uuid_hex);
-
     char file_path[192];
-    snprintf(file_path, sizeof(file_path), "%s/%s.pr", table->table_path, uuid_hex);
+    record_file_path(table->table_path, table->ns_hex, uuid, file_path, sizeof(file_path));
 
     {
         auto existing = LoFS::open(file_path, FILE_O_READ);
@@ -173,11 +237,8 @@ LoDbError LoDb::get(const char *table_name, lodb_uuid_t uuid, void *record_out)
         return LODB_ERR_INVALID;
     }
 
-    char uuid_hex[17];
-    lodb_uuid_to_hex(uuid, uuid_hex);
-
     char file_path[192];
-    snprintf(file_path, sizeof(file_path), "%s/%s.pr", table->table_path, uuid_hex);
+    record_file_path(table->table_path, table->ns_hex, uuid, file_path, sizeof(file_path));
     LODB_LOG_DEBUG("file_path: %s", file_path);
 
     constexpr size_t kBufSize = 2048;
@@ -219,11 +280,8 @@ LoDbError LoDb::update(const char *table_name, lodb_uuid_t uuid, const void *rec
         return LODB_ERR_INVALID;
     }
 
-    char uuid_hex[17];
-    lodb_uuid_to_hex(uuid, uuid_hex);
-
     char file_path[192];
-    snprintf(file_path, sizeof(file_path), "%s/%s.pr", table->table_path, uuid_hex);
+    record_file_path(table->table_path, table->ns_hex, uuid, file_path, sizeof(file_path));
 
     {
         auto file = LoFS::open(file_path, FILE_O_READ);
@@ -276,11 +334,8 @@ LoDbError LoDb::deleteRecord(const char *table_name, lodb_uuid_t uuid)
         return LODB_ERR_INVALID;
     }
 
-    char uuid_hex[17];
-    lodb_uuid_to_hex(uuid, uuid_hex);
-
     char file_path[192];
-    snprintf(file_path, sizeof(file_path), "%s/%s.pr", table->table_path, uuid_hex);
+    record_file_path(table->table_path, table->ns_hex, uuid, file_path, sizeof(file_path));
 
     if (LoFS::remove(file_path)) {
         LODB_LOG_DEBUG("Deleted record: " LODB_UUID_FMT, LODB_UUID_ARGS(uuid));
@@ -334,21 +389,11 @@ std::vector<void *> LoDb::select(const char *table_name, LoDbFilter filter, LoDb
         size_t lastSlash = pathStr.rfind('/');
         std::string filename = (lastSlash != std::string::npos) ? pathStr.substr(lastSlash + 1) : pathStr;
 
-        size_t prPos = filename.find(".pr");
-        if (prPos == std::string::npos) {
-            LODB_LOG_DEBUG("Skipped non-.pr file: %s", filename.c_str());
-            continue;
-        }
-
-        std::string uuid_hex_str = filename.substr(0, prPos);
-
         lodb_uuid_t uuid;
-        uint32_t high, low;
-        if (sscanf(uuid_hex_str.c_str(), "%08x%08x", &high, &low) != 2) {
-            LODB_LOG_WARN("Failed to parse UUID from filename: %s", uuid_hex_str.c_str());
+        if (!parse_record_filename(filename, table->ns_hex, &uuid)) {
+            LODB_LOG_DEBUG("Skipped non-record file: %s", filename.c_str());
             continue;
         }
-        uuid = ((uint64_t)high << 32) | (uint64_t)low;
 
         uint8_t *record_buffer = new uint8_t[table->record_size];
         if (!record_buffer) {
@@ -450,7 +495,7 @@ int LoDb::count(const char *table_name, LoDbFilter filter)
             size_t lastSlash = pathStr.rfind('/');
             std::string filename = (lastSlash != std::string::npos) ? pathStr.substr(lastSlash + 1) : pathStr;
 
-            if (filename.find(".pr") != std::string::npos) {
+            if (record_filename_belongs_table(filename, table->ns_hex)) {
                 cnt++;
             }
         }
@@ -511,6 +556,10 @@ LoDbError LoDb::truncate(const char *table_name)
         size_t lastSlash = pathStr.rfind('/');
         std::string filename = (lastSlash != std::string::npos) ? pathStr.substr(lastSlash + 1) : pathStr;
 
+        if (!record_filename_belongs_table(filename, table->ns_hex)) {
+            continue;
+        }
+
         char file_path[192];
         snprintf(file_path, sizeof(file_path), "%s/%s", table->table_path, filename.c_str());
 
@@ -543,12 +592,6 @@ LoDbError LoDb::drop(const char *table_name)
     LoDbError err = truncate(table_name);
     if (err != LODB_OK) {
         LODB_LOG_WARN("Failed to truncate table before drop: %s", table_name);
-    }
-
-    if (LoFS::rmdir(table->table_path, true)) {
-        LODB_LOG_DEBUG("Removed table directory: %s", table->table_path);
-    } else {
-        LODB_LOG_WARN("Failed to remove table directory: %s", table->table_path);
     }
 
     tables.erase(table_name);

@@ -12,11 +12,14 @@
 /**
  * LoDB - Synchronous Protobuf Database
  *
- * Filesystem-backed records under `<mount>/__lodb__/<db_name>/…` (default mount `/__ext__`).
+ * Logical paths are `<mount>/l/<file>.pr` (e.g. mount `/__ext__`, `/__int__`). LoFS strips the
+ * virtual mount prefix before SPIFFS/LittleFS; only that on-device path must respect the backend
+ * name limit (e.g. SPIFFS 31 chars + NUL). Filenames are `{6-hex}{11-base64url}.pr` from
+ * FNV-1a(db,table) + uuid so the stripped path stays short; mount prefixes are unchanged.
  */
 
 #ifndef LODB_VERSION
-#define LODB_VERSION "1.4.0"
+#define LODB_VERSION "1.5.0"
 #endif
 
 #ifndef LODB_LOG_DEBUG
@@ -58,7 +61,7 @@ uint32_t lodb_now_ms(void);
 class LoDb
 {
   public:
-    /** @param mount Virtual mount prefix (e.g. `/__ext__`); must match a LoFS mount. */
+    /** @param mount VFS-only prefix (e.g. `/__ext__`); stripped by LoFS before the real FS path. */
     LoDb(const char *db_name, const char *mount = "/__ext__");
     ~LoDb();
 
@@ -80,6 +83,7 @@ class LoDb
         const pb_msgdesc_t *pb_descriptor;
         size_t record_size;
         char table_path[160];
+        char ns_hex[7]; /* 6 lowercase hex + NUL: FNV-1a(db_name + ':' + table_name) & 0xffffff */
     };
 
     std::string db_name;
