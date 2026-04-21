@@ -12,8 +12,8 @@ Small **transport-agnostic** nested command dispatcher for firmware CLIs. Depend
 ## Example
 
 ```cpp
-#include <helpers/locommand/Engine.h>
-#include <helpers/lomessage/Buffer.h>
+#include <locommand/Engine.h>
+#include <lomessage/Buffer.h>
 
 static void h_status(locommand::Context& ctx) {
   ctx.out.append("OK\n");

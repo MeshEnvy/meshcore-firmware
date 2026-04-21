@@ -3,7 +3,7 @@
 #ifdef ESP32
 
 #include <Arduino.h>
-#include <helpers/lomessage/Buffer.h>
+#include <lomessage/Buffer.h>
 #include <lodb/LoDB.h>
 
 #include "lofi.pb.h"

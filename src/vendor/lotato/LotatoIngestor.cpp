@@ -4,10 +4,10 @@
 
 #include <MeshCore.h>
 #include <helpers/AdvertDataHelpers.h>
-#include <helpers/esp32/LotatoConfig.h>
-#include <helpers/esp32/LotatoDebug.h>
-#include <helpers/esp32/LotatoNodeStore.h>
-#include <helpers/lofi/Lofi.h>
+#include <LotatoConfig.h>
+#include <LotatoDebug.h>
+#include <LotatoNodeStore.h>
+#include <lofi/Lofi.h>
 #include <losettings/LoSettings.h>
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>

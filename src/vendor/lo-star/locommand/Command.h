@@ -1,6 +1,6 @@
 #pragma once
 
-#include <helpers/lomessage/Buffer.h>
+#include <lomessage/Buffer.h>
 
 namespace locommand {
 

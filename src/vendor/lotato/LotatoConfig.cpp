@@ -4,9 +4,9 @@
 
 #include <cstring>
 
-#include <helpers/esp32/LotatoDebug.h>
-#include <helpers/esp32/LotatoIngestor.h>
-#include <helpers/lofi/Lofi.h>
+#include <LotatoDebug.h>
+#include <LotatoIngestor.h>
+#include <lofi/Lofi.h>
 #include <losettings/ConfigHub.h>
 #include <losettings/LoSettings.h>
 
@@ -229,5 +229,9 @@ void LotatoConfig::setDebug(bool on) {
 }
 
 void LotatoConfig::toggleDebug() { setDebug(!debugEnabled()); }
+
+extern "C" void lofi_on_lo_settings_changed(void) {
+  LotatoConfig::instance().refreshFromLoSettings();
+}
 
 #endif  // ESP32

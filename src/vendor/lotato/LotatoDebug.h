@@ -3,7 +3,7 @@
 #ifdef ESP32
 #include <Arduino.h>
 #include <stddef.h>
-#include <helpers/esp32/LotatoConfig.h>
+#include <LotatoConfig.h>
 inline bool lotato_dbg_active() { return LotatoConfig::instance().debugEnabled(); }
 /** When debug is on: log full CLI command and reply (may include secrets — for field debug only). */
 void lotato_dbg_trace_cli_exchange(const char* route_tag, const char* cmd_snapshot, const char* reply);

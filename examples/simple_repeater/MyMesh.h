@@ -33,15 +33,15 @@
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RegionMap.h>
-#include <helpers/lomessage/Queue.h>
+#include <lomessage/Queue.h>
 #include "RateLimiter.h"
 
 #ifdef ESP32
-#include <helpers/locommand/Engine.h>
-#include <helpers/locommand/Router.h>
-#include <helpers/esp32/LotatoConfig.h>
-#include <helpers/esp32/LotatoIngestor.h>
-#include <helpers/esp32/LotatoNodeStore.h>
+#include <locommand/Engine.h>
+#include <locommand/Router.h>
+#include <LotatoConfig.h>
+#include <LotatoIngestor.h>
+#include <LotatoNodeStore.h>
 #endif
 
 #ifdef WITH_BRIDGE

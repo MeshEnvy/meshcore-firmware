@@ -1,0 +1,22 @@
+{
+  "name": "lotato",
+  "version": "0.1.0",
+  "description": "Lotato ingest, LoSettings integration, and ESP32 repeater helpers for MeshCore firmware.",
+  "keywords": ["meshcore", "lotato", "esp32", "ingest", "potato"],
+  "authors": [{ "name": "MeshEnvy", "maintainer": true }],
+  "license": "MIT",
+  "homepage": "https://github.com/MeshEnvy/mesh-forge",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MeshEnvy/mesh-forge.git"
+  },
+  "frameworks": ["arduino"],
+  "platforms": ["espressif32"],
+  "build": {
+    "libArchive": false,
+    "srcDir": ".",
+    "srcFilter": ["+<*.cpp>", "+<*.c>"],
+    "flags": ["-D PB_FIELD_32BIT=1"],
+    "extraScript": "extra_script.py"
+  }
+}

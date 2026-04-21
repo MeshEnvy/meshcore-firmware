@@ -3,9 +3,9 @@
 #ifdef ESP32
 
 #include <LittleFS.h>
-#include <helpers/esp32/LotatoConfig.h>
-#include <helpers/esp32/LotatoDebug.h>
-#include <helpers/esp32/LotatoIngestTtl.h>
+#include <LotatoConfig.h>
+#include <LotatoDebug.h>
+#include <LotatoIngestTtl.h>
 #include <cstdint>
 #include <cstring>
 #include <time.h>

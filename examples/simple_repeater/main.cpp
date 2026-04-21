@@ -5,11 +5,11 @@
 
 #ifdef ESP32
 #include <WiFi.h>
-#include <helpers/esp32/LotatoConfig.h>
-#include <helpers/esp32/LotatoIngestor.h>
-#include <helpers/esp32/LotatoDebug.h>
-#include <helpers/esp32/LotatoSerialCli.h>
-#include <helpers/lofi/Lofi.h>
+#include <LotatoConfig.h>
+#include <LotatoIngestor.h>
+#include <LotatoDebug.h>
+#include <LotatoSerialCli.h>
+#include <lofi/Lofi.h>
 #endif
 #include <lofs/LoFS.h>
 

@@ -1,20 +1,20 @@
 #include "MyMesh.h"
 #include <algorithm>
 
-#include <helpers/lomessage/Split.h>
+#include <lomessage/Split.h>
 
 #ifdef ESP32
 #include <WiFi.h>
 #include <cctype>
-#include <helpers/esp32/LotatoCliCtx.h>
-#include <helpers/esp32/LotatoDebug.h>
-#include <helpers/esp32/LotatoIngestTtl.h>
-#include <helpers/esp32/LotatoNodeStore.h>
-#include <helpers/esp32/LotatoSerialCli.h>
-#include <helpers/locommand/Command.h>
-#include <helpers/locommand/Router.h>
-#include <helpers/lofi/Lofi.h>
-#include <helpers/lomessage/Buffer.h>
+#include <LotatoCliCtx.h>
+#include <LotatoDebug.h>
+#include <LotatoIngestTtl.h>
+#include <LotatoNodeStore.h>
+#include <LotatoSerialCli.h>
+#include <locommand/Command.h>
+#include <locommand/Router.h>
+#include <lofi/Lofi.h>
+#include <lomessage/Buffer.h>
 #include <losettings/ConfigHub.h>
 #endif
 

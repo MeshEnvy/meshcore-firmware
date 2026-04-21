@@ -1,4 +1,4 @@
-#include <helpers/lofi/Lofi.h>
+#include <lofi/Lofi.h>
 
 #ifdef ESP32
 
@@ -9,8 +9,6 @@ extern "C" esp_err_t esp_crt_bundle_attach(void* conf);
 
 #include <losettings/LoSettings.h>
 #include <losettings/ConfigHub.h>
-
-#include <helpers/esp32/LotatoConfig.h>
 
 #include <algorithm>
 #include <cstdarg>
@@ -32,6 +30,8 @@ extern "C" esp_err_t esp_crt_bundle_attach(void* conf);
 
 extern "C" __attribute__((weak)) void lofi_log(const char*) {}
 extern "C" __attribute__((weak)) void lofi_async_busy(bool) {}
+/** Firmware may provide a strong definition (e.g. Lotato) to refresh app caches after LoSettings change. */
+extern "C" __attribute__((weak)) void lofi_on_lo_settings_changed(void) {}
 
 namespace {
 
@@ -517,7 +517,7 @@ void Lofi::registerWifiHandlers() {
 
 static void lofi_cfg_on_change(void*) {
   Lofi::instance().notifyActiveCredentialsMaybeChanged();
-  LotatoConfig::instance().refreshFromLoSettings();
+  lofi_on_lo_settings_changed();
 }
 
 static void register_lofi_config_schema_once() {

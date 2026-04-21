@@ -1,0 +1,37 @@
+{
+  "name": "lo-star",
+  "version": "0.0.1",
+  "description": "Universal Mesh API",
+  "keywords": ["meshcore", "lotato", "cli", "settings", "protobuf", "vfs", "meshtastic"],
+  "authors": [{ "name": "Ben Allfree", "maintainer": true }],
+  "license": "MIT",
+  "homepage": "https://github.com/MeshEnvy/lo-star",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MeshEnvy/lo-star.git"
+  },
+  "frameworks": ["arduino"],
+  "platforms": "*",
+  "build": {
+    "libArchive": false,
+    "srcDir": ".",
+    "srcFilter": [
+      "+<locommand/*.cpp>",
+      "+<lodb/*.cpp>",
+      "+<lofi/*.cpp>",
+      "+<lomessage/*.cpp>",
+      "+<losettings/*.cpp>",
+      "+<losettings/*.pb.c>",
+      "+<lofi/*.pb.c>",
+      "+<lofs/*.cpp>",
+      "+<lofs/backends/*.cpp>"
+    ],
+    "flags": [
+      "-I lodb/include",
+      "-I losettings/include",
+      "-I losettings",
+      "-I lofi",
+      "-I lofs/include"
+    ]
+  }
+}

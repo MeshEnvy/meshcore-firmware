@@ -1,7 +1,7 @@
 #include <losettings/ConfigHub.h>
 
-#include <helpers/locommand/Engine.h>
-#include <helpers/lomessage/Buffer.h>
+#include <locommand/Engine.h>
+#include <lomessage/Buffer.h>
 #include <climits>
 #include <cstdio>
 #include <cstring>
