@@ -526,10 +526,10 @@ bool ingest_try_step() {
   xSemaphoreTake(g_q_mtx, portMAX_DELAY);
   if (ok && g_batch_len == local_len && g_batch_n == local_n && g_batch_store == local_store &&
       memcmp(g_batch_body, local_body, local_len) == 0) {
-    uint32_t posted_unix = (uint32_t)time(nullptr);
+    uint32_t posted_ms = millis();
     if (local_store) {
       for (uint8_t i = 0; i < local_n; i++) {
-        local_store->markPosted(local_slots[i], posted_unix);
+        local_store->markPosted(local_slots[i], posted_ms);
       }
     }
     g_batch_len = 0;

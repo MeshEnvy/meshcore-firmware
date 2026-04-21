@@ -40,9 +40,10 @@ static_assert(sizeof(LotatoNodeRecord) == 84, "LotatoNodeRecord layout changed")
  * If `/lotato-nodes.bin` does not start with the dense magic sentinel, it is removed on boot
  * and replaced with an empty store (no legacy flat format).
  *
- * An in-memory index tracks {pub_key prefix, last_advert, last_posted_unix} for fast dedup,
- * LRU eviction, and ingest scheduling. Last-post times live in the `ingest_ttl` LoDB
- * table on the `/__ram__` ramdisk — RAM-only, wiped on reboot.
+ * An in-memory index tracks {pub_key prefix, last_advert, last_posted_ms} for fast dedup,
+ * LRU eviction, and ingest scheduling. Scheduling throttles off `millis()`, not wall
+ * clock, so it works even before NTP. The `ingest_ttl` LoDB table on the `/__ram__`
+ * ramdisk is kept for introspection only and is wiped on reboot.
  */
 class LotatoNodeStore {
 public:
@@ -65,11 +66,11 @@ public:
   int put(const uint8_t* pub_key, const char* name, uint8_t type,
           uint32_t last_advert, int32_t lat, int32_t lon);
 
-  /** True if this occupied slot should be included in the next ingest batch (TTL-driven only). */
+  /** True if this occupied slot should be included in the next ingest batch (uptime-throttled). */
   bool dueForIngest(int slot, uint32_t now_ms) const;
 
-  /** Record successful POST at wall time @p now_unix (RAM-TTL + RAM index). */
-  void markPosted(int slot, uint32_t now_unix);
+  /** Record successful POST at @p now_ms (`millis()`); also updates RAM-TTL for introspection. */
+  void markPosted(int slot, uint32_t now_ms);
 
   /** Read the full on-disk record for slot. Returns false on I/O error. */
   bool readRecord(int slot, LotatoNodeRecord& out) const;
@@ -95,13 +96,16 @@ public:
   /** Log !id list for occupied slots when debug is on (truncated if very many nodes). */
   void logFlushTargetsDebug() const;
 
+  /** Verbose per-slot dump: id, name, type, last_advert, last_posted_ms, gps. Debug log only. */
+  void dumpAllNodesDebug() const;
+
 private:
   bool visibleMeshHeard(int slot) const;
 
   struct Entry {
-    uint8_t  key[4];           // first 4 bytes of pub_key for fast match
-    uint32_t last_advert;      // cached last_advert for LRU eviction
-    uint32_t last_posted_unix; // 0 = never posted (or flushed)
+    uint8_t  key[4];         // first 4 bytes of pub_key for fast match
+    uint32_t last_advert;    // cached last_advert for LRU eviction
+    uint32_t last_posted_ms; // millis() of last successful post; 0 = never posted (or flushed)
   };
 
   fs::FS* _fs = nullptr;

@@ -1592,6 +1592,7 @@ void MyMesh::lotato_h_resume(locommand::Context& ctx) {
 void MyMesh::lotato_h_contacts(locommand::Context& ctx) {
   auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
   LotatoConfig& cfg = LotatoConfig::instance();
+  lc->self->_node_store.dumpAllNodesDebug();
   ctx.out.appendf("Nodes: %d\nDue: %d\nRefresh: %lus\nGC: %lus\n",
                   lc->self->_node_store.count(), lc->self->_node_store.countDueNodes(),
                   (unsigned long)cfg.ingestRefreshSecs(), (unsigned long)cfg.ingestGcStaleSecs());
