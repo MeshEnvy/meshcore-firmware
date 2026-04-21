@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-// Tagged KV value. `kind` is the type code; `data` holds the raw payload bytes.
-// 1=bool 2=int32 3=uint32 4=float 5=string 6=bytes
-message LoSettingsKv {
-  string key = 1;
-  uint32 kind = 2;
-  bytes data = 3;
-}
