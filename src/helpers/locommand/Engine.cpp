@@ -8,6 +8,29 @@ namespace locommand {
 
 namespace {
 
+void build_usage_from_specs(const ArgSpec* a, int n, char* buf, size_t cap) {
+  if (!buf || cap < 2) return;
+  buf[0] = '\0';
+  size_t pos = 0;
+  for (int i = 0; i < n && a; i++) {
+    if (i > 0 && pos + 1 < cap) buf[pos++] = ' ';
+    char ob = a[i].required ? '<' : '[';
+    char cb = a[i].required ? '>' : ']';
+    const char* nm = a[i].name ? a[i].name : "?";
+    size_t nl = strlen(nm);
+    if (pos + 2 + nl + 1 >= cap) break;
+    buf[pos++] = ob;
+    memcpy(buf + pos, nm, nl);
+    pos += nl;
+    buf[pos++] = cb;
+    buf[pos] = '\0';
+  }
+}
+
+}  // namespace
+
+namespace {
+
 void append_child(Command* parent, Command* child) {
   child->next_sibling = nullptr;
   if (!parent->first_child) {
@@ -95,6 +118,7 @@ void format_one_leaf_line(const char* root_name, const char* prefix, const Comma
 void Context::printHelp() const {
   if (!command || !engine) return;
   format_one_leaf_line(engine->rootName(), path_prefix, command, out);
+  command_append_arg_help(command, engine->rootName(), path_prefix, out);
 }
 
 namespace {
@@ -131,7 +155,7 @@ void build_argv_from_rest(char* rest, const char** argv, int* argc) {
 
 }  // namespace
 
-Engine::Engine(const char* root_name) {
+Engine::Engine(const char* root_name) : _root_brief(nullptr) {
   memset(&_root, 0, sizeof(_root));
   _root.name = root_name;
 }
@@ -194,6 +218,58 @@ Command* Engine::add(const char* path, Handler handler, const char* usage_suffix
   return leaf;
 }
 
+Command* Engine::addWithArgs(const char* path, Handler handler, const ArgSpec* specs, int n_specs,
+                             const char* hint, const char* brief, const char* details) {
+  if (!path || !path[0] || !handler || !specs || n_specs <= 0) return nullptr;
+
+  char work[128];
+  strncpy(work, path, sizeof(work) - 1);
+  work[sizeof(work) - 1] = '\0';
+
+  const char* segs[16];
+  int nseg = 0;
+  char* save = nullptr;
+  for (char* t = strtok_r(work, ".", &save); t && nseg < 16; t = strtok_r(nullptr, ".", &save)) {
+    segs[nseg++] = t;
+  }
+  if (nseg == 0) return nullptr;
+
+  Command* cur = &_root;
+  for (int i = 0; i < nseg - 1; ++i) {
+    Command* ch = find_child(cur, segs[i]);
+    if (!ch) {
+      ch = command_new(segs[i]);
+      if (!ch) return nullptr;
+      ch->handler = nullptr;
+      ch->first_child = nullptr;
+      append_child(cur, ch);
+    } else {
+      if (ch->handler != nullptr || ch->first_child == nullptr) {
+        return nullptr;
+      }
+    }
+    cur = ch;
+  }
+
+  const char* leaf_name = segs[nseg - 1];
+  Command* existing = find_child(cur, leaf_name);
+  if (existing) return nullptr;
+
+  Command* leaf = command_new(leaf_name);
+  if (!leaf) return nullptr;
+  leaf->handler = handler;
+  leaf->hint = hint;
+  leaf->brief = brief;
+  leaf->first_child = nullptr;
+  leaf->arg_specs = specs;
+  leaf->n_arg_specs = n_specs;
+  leaf->details = details;
+  build_usage_from_specs(specs, n_specs, leaf->usage_storage, sizeof(leaf->usage_storage));
+  leaf->usage_suffix = leaf->usage_storage;
+  append_child(cur, leaf);
+  return leaf;
+}
+
 bool Engine::matchesRoot(const char* cmd) const {
   if (!cmd || !_root.name) return false;
   size_t rn = strlen(_root.name);
@@ -242,6 +318,7 @@ void Engine::formatHelp(lomessage::Buffer& out, const char* sub_path) const {
       }
     }
     format_one_leaf_line(_root.name, prefix[0] ? prefix : nullptr, node, out);
+    command_append_arg_help(node, _root.name, prefix[0] ? prefix : nullptr, out);
     return;
   }
 

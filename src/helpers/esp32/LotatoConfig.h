@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <cstdint>
 
 /**
  * Lotato ingest + WiFi STA settings (ESP32).
@@ -10,14 +11,22 @@ class LotatoConfig {
 public:
   static LotatoConfig& instance();
 
-  /** Seed compile-time defaults into LoSettings if missing; then refresh caches from LoSettings. */
+  /** Seed compile-time defaults into LoSettings if missing; register ConfigHub schema; refresh caches. */
   void load();
 
   /** Re-read LoSettings into RAM caches (after Lofi updates active WiFi, etc.). */
   void refreshFromLoSettings();
 
+  /** Register `lotato.*` keys into `losettings::ConfigHub` (idempotent). */
+  void registerConfigSchema();
+
   bool isIngestReady() const;
   bool debugEnabled() const { return _loaded ? _debug : false; }
+  bool ingestPaused() const { return _loaded ? _ingest_paused : false; }
+
+  uint32_t ingestVisibilitySecs() const { return _ingest_visibility_secs; }
+  uint32_t ingestRefreshSecs() const { return _ingest_refresh_secs; }
+  uint32_t ingestGcStaleSecs() const { return _ingest_gc_stale_secs; }
 
   const char* ssid() const { return _ssid; }
   const char* password() const { return _pwd; }
@@ -37,7 +46,13 @@ public:
   void toggleDebug();
 
 private:
-  LotatoConfig() : _loaded(false), _debug(false) {
+  LotatoConfig()
+      : _loaded(false),
+        _debug(false),
+        _ingest_paused(false),
+        _ingest_visibility_secs(259200u),
+        _ingest_refresh_secs(900u),
+        _ingest_gc_stale_secs(259200u) {
     _ssid[0] = _pwd[0] = _url[0] = _token[0] = '\0';
   }
 
@@ -45,6 +60,10 @@ private:
 
   bool _loaded;
   bool _debug;
+  bool _ingest_paused;
+  uint32_t _ingest_visibility_secs;
+  uint32_t _ingest_refresh_secs;
+  uint32_t _ingest_gc_stale_secs;
   char _ssid[33];
   char _pwd[65];
   char _url[257];

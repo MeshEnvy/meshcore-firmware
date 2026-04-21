@@ -14,6 +14,8 @@ void lotato_register_wifi_event_logging();
 void lotato_register_sta_known_wifi_failover();
 /** Proxy to `lofi::Lofi::staFailoverSuppress` (scan vs connect gate). */
 void lotato_sta_failover_suppress(bool suppress);
+/** Drop pending ingest batch after LoSettings-backed ingest config changes. */
+void lotato_ingest_restart_after_config();
 
 class LotatoIngestor {
 public:

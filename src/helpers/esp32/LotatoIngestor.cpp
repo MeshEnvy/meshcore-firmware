@@ -174,16 +174,7 @@ portMUX_TYPE g_worker_init = portMUX_INITIALIZER_UNLOCKED;
 void notify_worker();
 void ensure_worker();
 
-static bool g_paused_cache = false;
-static bool g_paused_loaded = false;
-
-static bool ingest_paused() {
-  if (!g_paused_loaded) {
-    g_paused_cache = losettings::LoSettings("lotato").getBool("ingest.paused", false);
-    g_paused_loaded = true;
-  }
-  return g_paused_cache;
-}
+static bool ingest_paused() { return LotatoConfig::instance().ingestPaused(); }
 
 uint8_t lotato_ingest_queue_depth() {
   if (!g_q_mtx) return g_batch_n;
@@ -535,10 +526,10 @@ bool ingest_try_step() {
   xSemaphoreTake(g_q_mtx, portMAX_DELAY);
   if (ok && g_batch_len == local_len && g_batch_n == local_n && g_batch_store == local_store &&
       memcmp(g_batch_body, local_body, local_len) == 0) {
-    uint32_t posted_ms = millis();
+    uint32_t posted_unix = (uint32_t)time(nullptr);
     if (local_store) {
       for (uint8_t i = 0; i < local_n; i++) {
-        local_store->markPosted(local_slots[i], posted_ms);
+        local_store->markPosted(local_slots[i], posted_unix);
       }
     }
     g_batch_len = 0;
@@ -595,6 +586,8 @@ void ensure_worker() {
 
 } // namespace
 
+void lotato_ingest_restart_after_config() { lotato_ingest_clear_queue(); }
+
 namespace {
 
 void dbg_serial_write_full_body(const char* body) {
@@ -641,6 +634,13 @@ void LotatoIngestor::service(LotatoNodeStore* node_store, const uint8_t* self_pu
   ensure_worker();
   if (!g_q_mtx || !g_worker) return;
 
+  static uint32_t s_last_gc_ms = 0;
+  uint32_t tms = millis();
+  if (node_store && (tms - s_last_gc_ms >= 60000u || s_last_gc_ms == 0)) {
+    s_last_gc_ms = tms;
+    node_store->gcSweepStale();
+  }
+
   xSemaphoreTake(g_q_mtx, portMAX_DELAY);
   if (node_store && self_pub_key && g_batch_len == 0) {
     try_build_batch_from_store(*node_store, self_pub_key);
@@ -652,9 +652,8 @@ void LotatoIngestor::service(LotatoNodeStore* node_store, const uint8_t* self_pu
 }
 
 void LotatoIngestor::setPaused(bool paused) {
-  g_paused_cache = paused;
-  g_paused_loaded = true;
   losettings::LoSettings("lotato").setBool("ingest.paused", paused);
+  LotatoConfig::instance().refreshFromLoSettings();
 }
 bool LotatoIngestor::isPaused() const { return ingest_paused(); }
 int LotatoIngestor::lastHttpCode() const { return g_last_http_code; }

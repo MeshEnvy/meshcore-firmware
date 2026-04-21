@@ -6,11 +6,16 @@
 #ifdef ESP32
 #include <WiFi.h>
 #include <cctype>
+#include <helpers/esp32/LotatoCliCtx.h>
 #include <helpers/esp32/LotatoDebug.h>
+#include <helpers/esp32/LotatoIngestTtl.h>
 #include <helpers/esp32/LotatoNodeStore.h>
 #include <helpers/esp32/LotatoSerialCli.h>
+#include <helpers/locommand/Command.h>
+#include <helpers/locommand/Router.h>
 #include <helpers/lofi/Lofi.h>
 #include <helpers/lomessage/Buffer.h>
+#include <losettings/ConfigHub.h>
 #endif
 
 #ifndef LOTATO_DBG_LN
@@ -35,12 +40,9 @@ static uint8_t s_on_peer_mesh_cli_temp[5 + MyMesh::kCliReplyCap];
 
 #ifdef ESP32
 
-static char s_on_peer_mesh_cli_snap[MyMesh::kCliReplyCap];
+MyMesh* g_mesh_for_scan = nullptr;
 
-struct LotatoCliCtx {
-  MyMesh* self;
-  uint32_t sender_ts;
-};
+static char s_on_peer_mesh_cli_snap[MyMesh::kCliReplyCap];
 
 /** True while a long-running async CLI op holds the session; mesh commands are rejected while set. */
 static bool s_async_cli_busy = false;
@@ -58,7 +60,6 @@ void my_mesh_set_async_cli_busy(bool busy) { s_async_cli_busy = busy; }
 extern "C" void lofi_async_busy(bool busy) { s_async_cli_busy = busy; }
 
 namespace {
-MyMesh* g_mesh_for_scan = nullptr;
 bool s_scan_from_serial = false;
 bool s_connect_from_serial = false;
 
@@ -1052,24 +1053,31 @@ void MyMesh::begin(FILESYSTEM *fs) {
   _cli.loadPrefs(_fs);
   acl.load(_fs, self_id);
 #ifdef ESP32
+  LotatoConfig::instance().load();
+  lofi::Lofi::instance().begin();
+  lotato_ingest_ttl_store().begin();
   _node_store.begin(_fs);
   g_mesh_for_scan = this;
-  lofi::Lofi::instance().begin();
   lofi::Lofi::instance().setScanCompleteCallback(scan_complete_cb, nullptr);
   lofi::Lofi::instance().setConnectCompleteCallback(connect_complete_cb, nullptr);
-  _lotato_cli.add("status", &MyMesh::lotato_h_status, nullptr, nullptr, "show lotato/ingest status");
-  _lotato_cli.add("pause", &MyMesh::lotato_h_pause, nullptr, nullptr, "pause ingestion");
-  _lotato_cli.add("resume", &MyMesh::lotato_h_resume, nullptr, nullptr, "resume ingestion");
-  _lotato_cli.add("contacts", &MyMesh::lotato_h_contacts, nullptr, nullptr, "show node store info");
-  _lotato_cli.add("flush", &MyMesh::lotato_h_flush, nullptr, nullptr, "re-post all known nodes");
-  _lotato_cli.add("endpoint", &MyMesh::lotato_h_endpoint, "<url>", nullptr, "set ingest endpoint URL");
-  _lotato_cli.add("token", &MyMesh::lotato_h_token, "<val>", nullptr, "set API token");
-  _lotato_cli.add("wifi.status", &MyMesh::lotato_h_wifi_status, nullptr, nullptr, "show WiFi connection info");
-  _lotato_cli.add("wifi.scan", &MyMesh::lotato_h_wifi_scan, nullptr, nullptr,
-                  "scan for nearby WiFi networks");
-  _lotato_cli.add("wifi.connect", &MyMesh::lotato_h_wifi_connect, "<n|ssid> [pwd]", nullptr,
-                  "connect to a WiFi network");
-  _lotato_cli.add("debug", &MyMesh::lotato_h_debug, "<on|off|toggle>", nullptr, "toggle debug logging");
+
+  losettings::ConfigHub::instance().bindConfigCli(_cli_config);
+  _cli_config.setRootBrief("LoSettings keys (ls/get/set/unset)");
+
+  lofi::bindWifiCli(_cli_wifi);
+  _cli_wifi.setRootBrief("WiFi STA scan/connect");
+
+  _cli_lotato.add("status", &MyMesh::lotato_h_status, nullptr, nullptr, "show lotato/ingest status");
+  _cli_lotato.add("pause", &MyMesh::lotato_h_pause, nullptr, nullptr, "pause ingest (shortcut for config)");
+  _cli_lotato.add("resume", &MyMesh::lotato_h_resume, nullptr, nullptr, "resume ingest (shortcut for config)");
+  _cli_lotato.add("contacts", &MyMesh::lotato_h_contacts, nullptr, nullptr, "node store visibility summary");
+  _cli_lotato.add("flush", &MyMesh::lotato_h_flush, nullptr, nullptr, "clear last-post for visible nodes");
+  _cli_lotato.setRootBrief("ingest status / flush / contacts");
+
+  _cli_router.clear();
+  _cli_router.add(&_cli_lotato);
+  _cli_router.add(&_cli_wifi);
+  _cli_router.add(&_cli_config);
 #endif
   // TODO: key_store.begin();
   region_map.load(_fs);
@@ -1276,7 +1284,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     // Allow `lotato …` through so e.g. `lotato flush` still gets a normal reply.
     const char *cmd_scan = command;
     while (*cmd_scan == ' ') cmd_scan++;
-    if (!this->_lotato_cli.matchesRoot(cmd_scan))
+    if (!this->_cli_router.matchesAnyRoot(cmd_scan) && !this->_cli_router.matchesGlobalHelp(cmd_scan))
 #endif
     {
       if (StrHelper::isBlank(command)) {  // empty/blank line, signal to terminate 'load' operation
@@ -1466,12 +1474,13 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       strcpy(reply, "OK - Discover sent");
     }
 #ifdef ESP32
-  } else if (_lotato_cli.matchesRoot(command)) {
+  } else if (_cli_router.matchesAnyRoot(command) || _cli_router.matchesGlobalHelp(command)) {
     LotatoCliCtx lctx{this, sender_timestamp};
     lomessage::Buffer buf(MyMesh::kCliReplyCap * 4);
-    _lotato_cli.dispatch(command + strlen(_lotato_cli.rootName()), buf, &lctx);
-    lotato_dbg_lotato_dispatch_stats(buf.length(), buf.truncated() ? 1 : 0);
-    deliverLotatoReply(sender_timestamp, buf.c_str(), reply);
+    if (_cli_router.dispatch(command, buf, &lctx)) {
+      lotato_dbg_lotato_dispatch_stats(buf.length(), buf.truncated() ? 1 : 0);
+      deliverLotatoReply(sender_timestamp, buf.c_str(), reply);
+    }
 #endif
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
@@ -1510,15 +1519,16 @@ void MyMesh::lotato_h_status(locommand::Context& ctx) {
   const char* token_str = cfg.apiToken()[0] ? "set" : "(none)";
   const char* url_str = cfg.ingestOrigin()[0] ? cfg.ingestOrigin() : "(none)";
   const char* dbg_str = cfg.debugEnabled() ? "on" : "off";
+  const int due = self->_node_store.countDueNodes();
   if (wl == WL_CONNECTED) {
-    ctx.out.appendf("WiFi: %s\nSSID: %s\nIP: %s\nNodes: %d\nQueue: %u\nPaused: %s\nLast API Response: %s\nURL: %s\nToken: %s\nDebug: %s",
+    ctx.out.appendf("WiFi: %s\nSSID: %s\nIP: %s\nNodes: %d\nDue: %d\nPaused: %s\nLast API Response: %s\nURL: %s\nToken: %s\nDebug: %s",
                     wl_str, WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(),
-                    self->_node_store.count(), (unsigned)self->_ingestor.pendingQueueDepth(),
+                    self->_node_store.count(), due,
                     self->_ingestor.isPaused() ? "yes" : "no", code_str, url_str, token_str, dbg_str);
   } else {
-    ctx.out.appendf("WiFi: %s\nSaved: %s\nNodes: %d\nQueue: %u\nPaused: %s\nURL: %s\nToken: %s\nDebug: %s",
+    ctx.out.appendf("WiFi: %s\nSaved: %s\nNodes: %d\nDue: %d\nPaused: %s\nURL: %s\nToken: %s\nDebug: %s",
                     wl_str, cfg.ssid()[0] ? cfg.ssid() : "(none)",
-                    self->_node_store.count(), (unsigned)self->_ingestor.pendingQueueDepth(),
+                    self->_node_store.count(), due,
                     self->_ingestor.isPaused() ? "yes" : "no", url_str, token_str, dbg_str);
   }
 }
@@ -1537,69 +1547,20 @@ void MyMesh::lotato_h_resume(locommand::Context& ctx) {
 
 void MyMesh::lotato_h_contacts(locommand::Context& ctx) {
   auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
-  ctx.out.appendf("Nodes: %d/%d\nRepost: %lus\nFile: %s",
-                  lc->self->_node_store.count(), LotatoNodeStore::MAX,
-                  (unsigned long)(LOTATO_NODE_REPOST_MS / 1000),
-                  LotatoNodeStore::PATH);
+  LotatoConfig& cfg = LotatoConfig::instance();
+  ctx.out.appendf("Nodes: %d\nVisible: %d\nDue: %d\nRefresh: %lus\nVisibility: %lus\nGC: %lus\n",
+                  lc->self->_node_store.count(), lc->self->_node_store.countVisibleNodes(),
+                  lc->self->_node_store.countDueNodes(), (unsigned long)cfg.ingestRefreshSecs(),
+                  (unsigned long)cfg.ingestVisibilitySecs(), (unsigned long)cfg.ingestGcStaleSecs());
 }
 
 void MyMesh::lotato_h_flush(locommand::Context& ctx) {
   auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
-  lc->self->_node_store.resetPostTimers();
+  lc->self->_node_store.flushIngestTtlVisible();
   lc->self->_node_store.logFlushTargetsDebug();
-  LOTATO_DBG_LN("lotato CLI: flush — reset post timers for %d nodes", lc->self->_node_store.count());
-  ctx.out.appendf("OK - will re-post %d nodes", lc->self->_node_store.count());
-}
-
-void MyMesh::lotato_h_endpoint(locommand::Context& ctx) {
-  auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
-  LotatoConfig& cfg = LotatoConfig::instance();
-  const char* url = ctx.args_raw;
-  while (url && *url == ' ') url++;
-  if (!url || *url == '\0') {
-    ctx.printHelp();
-    return;
-  }
-  cfg.setIngestOrigin(url);
-  lc->self->_ingestor.restartAfterConfigChange();
-  LOTATO_DBG_LN("lotato CLI: endpoint set url=%s", url);
-  ctx.out.appendf("OK - endpoint: %s", url);
-}
-
-void MyMesh::lotato_h_token(locommand::Context& ctx) {
-  auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
-  LotatoConfig& cfg = LotatoConfig::instance();
-  const char* tok = ctx.args_raw;
-  while (tok && *tok == ' ') tok++;
-  if (!tok || *tok == '\0') {
-    ctx.printHelp();
-    return;
-  }
-  cfg.setApiToken(tok);
-  lc->self->_ingestor.restartAfterConfigChange();
-  LOTATO_DBG_LN("lotato CLI: token set (len=%u)", (unsigned)strlen(tok));
-  ctx.out.append("OK - token saved");
-}
-
-void MyMesh::lotato_h_debug(locommand::Context& ctx) {
-  LotatoConfig& cfg = LotatoConfig::instance();
-  if (ctx.argc < 1) {
-    ctx.printHelp();
-    return;
-  }
-  const char* action = ctx.argv[0];
-  if (strcmp(action, "on") == 0) {
-    cfg.setDebug(true);
-  } else if (strcmp(action, "off") == 0) {
-    cfg.setDebug(false);
-  } else if (strcmp(action, "toggle") == 0) {
-    cfg.toggleDebug();
-  } else {
-    ctx.out.appendf("Err - unknown debug action '%s'\n", action);
-    ctx.printHelp();
-    return;
-  }
-  ctx.out.appendf("OK - debug %s", cfg.debugEnabled() ? "on" : "off");
+  const int due = lc->self->_node_store.countDueNodes();
+  LOTATO_DBG_LN("lotato CLI: flush — visible TTL cleared, due=%d", due);
+  ctx.out.appendf("OK - due nodes: %d", due);
 }
 
 void MyMesh::lotato_h_wifi_status(locommand::Context& ctx) {
@@ -1609,7 +1570,7 @@ void MyMesh::lotato_h_wifi_status(locommand::Context& ctx) {
     ctx.out.appendf("WiFi: connected\nSSID: %s\nIP: %s", WiFi.SSID().c_str(),
                     WiFi.localIP().toString().c_str());
   } else {
-    ctx.out.appendf("WiFi: not connected\nSaved: %s\nUse: lotato wifi scan",
+    ctx.out.appendf("WiFi: not connected\nSaved: %s\nUse: wifi scan",
                     cfg.ssid()[0] ? cfg.ssid() : "(none)");
   }
 }
@@ -1642,7 +1603,7 @@ void MyMesh::lotato_h_wifi_connect(locommand::Context& ctx) {
     int idx = atoi(tok1) - 1;
     int32_t rssi;
     if (idx < 0 || !lf.scanSnapshotEntry(idx, ssid_to_use, &rssi)) {
-      ctx.out.appendf("Err - index out of range (1..%d)\nRun: lotato wifi scan first",
+      ctx.out.appendf("Err - index out of range (1..%d)\nRun: wifi scan first",
                       lf.scanSnapshotCount());
       return;
     }
@@ -1666,6 +1627,19 @@ void MyMesh::lotato_h_wifi_connect(locommand::Context& ctx) {
   ctx.out.appendf("Connecting to %s...", ssid_to_use);
 }
 
+void MyMesh::lotato_h_wifi_forget(locommand::Context& ctx) {
+  LotatoConfig& cfg = LotatoConfig::instance();
+  if (ctx.argc < 1) {
+    ctx.printHelp();
+    return;
+  }
+  if (!cfg.forgetKnownWifi(ctx.argv[0])) {
+    ctx.out.append("Err - SSID not in known list\n");
+    return;
+  }
+  ctx.out.append("OK\n");
+}
+
 void MyMesh::deliverLotatoReply(uint32_t sender_ts, const char* text, char* reply) {
   reply[0] = '\0';
   if (!text || !text[0]) return;
@@ -1681,6 +1655,26 @@ void MyMesh::deliverLotatoReply(uint32_t sender_ts, const char* text, char* repl
   }
   lotato_serial_print_mesh_cli_reply(text);
 }
+
+namespace lofi {
+
+static const locommand::ArgSpec k_wifi_connect_args[] = {
+    {"n_or_ssid", "string", nullptr, true, "Scan index (1-based) or SSID"},
+    {"password", "secret", nullptr, false, "PSK if not already saved"},
+};
+
+static const locommand::ArgSpec k_wifi_forget_args[] = {
+    {"ssid", "string", nullptr, true, "Network SSID to remove from known list"},
+};
+
+void bindWifiCli(locommand::Engine& eng) {
+  eng.add("status", &MyMesh::lotato_h_wifi_status, nullptr, nullptr, "STA / saved SSID snapshot");
+  eng.add("scan", &MyMesh::lotato_h_wifi_scan, nullptr, nullptr, "scan for APs (async reply)");
+  eng.addWithArgs("connect", &MyMesh::lotato_h_wifi_connect, k_wifi_connect_args, 2, nullptr, "connect by index or SSID");
+  eng.addWithArgs("forget", &MyMesh::lotato_h_wifi_forget, k_wifi_forget_args, 1, nullptr, "remove SSID from known list");
+}
+
+}  // namespace lofi
 
 #endif
 

@@ -38,6 +38,7 @@
 
 #ifdef ESP32
 #include <helpers/locommand/Engine.h>
+#include <helpers/locommand/Router.h>
 #include <helpers/esp32/LotatoConfig.h>
 #include <helpers/esp32/LotatoIngestor.h>
 #include <helpers/esp32/LotatoNodeStore.h>
@@ -137,20 +138,11 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks, private lomessage::
 
 #ifdef ESP32
   LotatoIngestor _ingestor;
-  LotatoNodeStore    _node_store;
-  locommand::Engine _lotato_cli{"lotato"};
-
-  static void lotato_h_status(locommand::Context& ctx);
-  static void lotato_h_pause(locommand::Context& ctx);
-  static void lotato_h_resume(locommand::Context& ctx);
-  static void lotato_h_contacts(locommand::Context& ctx);
-  static void lotato_h_flush(locommand::Context& ctx);
-  static void lotato_h_endpoint(locommand::Context& ctx);
-  static void lotato_h_token(locommand::Context& ctx);
-  static void lotato_h_debug(locommand::Context& ctx);
-  static void lotato_h_wifi_status(locommand::Context& ctx);
-  static void lotato_h_wifi_scan(locommand::Context& ctx);
-  static void lotato_h_wifi_connect(locommand::Context& ctx);
+  LotatoNodeStore _node_store;
+  locommand::Engine _cli_lotato{"lotato"};
+  locommand::Engine _cli_wifi{"wifi"};
+  locommand::Engine _cli_config{"config"};
+  locommand::Router _cli_router;
 
   struct {
     bool valid;
@@ -224,6 +216,18 @@ protected:
   void onControlDataRecv(mesh::Packet* packet) override;
 
 public:
+#ifdef ESP32
+  static void lotato_h_status(locommand::Context& ctx);
+  static void lotato_h_pause(locommand::Context& ctx);
+  static void lotato_h_resume(locommand::Context& ctx);
+  static void lotato_h_contacts(locommand::Context& ctx);
+  static void lotato_h_flush(locommand::Context& ctx);
+  static void lotato_h_wifi_status(locommand::Context& ctx);
+  static void lotato_h_wifi_scan(locommand::Context& ctx);
+  static void lotato_h_wifi_connect(locommand::Context& ctx);
+  static void lotato_h_wifi_forget(locommand::Context& ctx);
+#endif
+
   /** Serial + mesh admin TXT_MSG reply; must match main.cpp `reply[]` and `temp[5 + …]` in onPeerDataRecv. */
   static constexpr size_t kCliReplyCap = 320;
   /** Max text bytes per TXT_MSG chunk; sized for createDatagram's MAX_PACKET_PAYLOAD limit. */

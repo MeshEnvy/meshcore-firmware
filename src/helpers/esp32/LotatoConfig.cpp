@@ -5,8 +5,22 @@
 #include <cstring>
 
 #include <helpers/esp32/LotatoDebug.h>
+#include <helpers/esp32/LotatoIngestor.h>
 #include <helpers/lofi/Lofi.h>
+#include <losettings/ConfigHub.h>
 #include <losettings/LoSettings.h>
+
+namespace {
+
+void lotato_on_cfg_changed(void*) {
+  LotatoConfig::instance().refreshFromLoSettings();
+  lotato_ingest_restart_after_config();
+}
+
+constexpr uint32_t kVisMax = 30u * 86400u;
+constexpr uint32_t kGcMax  = 60u * 86400u;
+
+}  // namespace
 
 LotatoConfig& LotatoConfig::instance() {
   static LotatoConfig inst;
@@ -37,13 +51,120 @@ void LotatoConfig::refreshFromLoSettings() {
   losettings::LoSettings wf("lofi");
   lt.getString("ingest.url", _url, sizeof(_url), "");
   lt.getString("ingest.token", _token, sizeof(_token), "");
-  _debug = lt.getBool("debug", false);
+  _debug              = lt.getBool("debug", false);
+  _ingest_paused      = lt.getBool("ingest.paused", false);
+  _ingest_visibility_secs = lt.getUInt("ingest.visibility_secs", 259200u);
+  _ingest_refresh_secs    = lt.getUInt("ingest.refresh_secs", 900u);
+  _ingest_gc_stale_secs   = lt.getUInt("ingest.gc_stale_secs", 259200u);
   wf.getString("active.ssid", _ssid, sizeof(_ssid), "");
   wf.getString("active.psk", _pwd, sizeof(_pwd), "");
 }
 
+void LotatoConfig::registerConfigSchema() {
+  static bool registered = false;
+  if (registered) return;
+  registered = true;
+
+  static const losettings::ConfigEntry kLotato[] = {
+      {"ingest.url",
+       losettings::ConfigValueKind::String,
+       false,
+       0,
+       0,
+       "",
+       "Potato Mesh ingest origin URL (max 256 chars)",
+       false,
+       false,
+       0,
+       0,
+       lotato_on_cfg_changed,
+       nullptr},
+      {"ingest.token",
+       losettings::ConfigValueKind::String,
+       false,
+       0,
+       0,
+       "",
+       "Potato Mesh API bearer token (max 128 chars)",
+       true,
+       false,
+       0,
+       0,
+       lotato_on_cfg_changed,
+       nullptr},
+      {"ingest.paused",
+       losettings::ConfigValueKind::Bool,
+       false,
+       0,
+       0,
+       nullptr,
+       "When true, stops POSTing node batches to ingest",
+       false,
+       false,
+       0,
+       0,
+       lotato_on_cfg_changed,
+       nullptr},
+      {"debug",
+       losettings::ConfigValueKind::Bool,
+       false,
+       0,
+       0,
+       nullptr,
+       "Lotato Serial debug logging",
+       false,
+       false,
+       0,
+       0,
+       lotato_on_cfg_changed,
+       nullptr},
+      {"ingest.visibility_secs",
+       losettings::ConfigValueKind::UInt32,
+       false,
+       0,
+       259200u,
+       nullptr,
+       "Mesh-heard visibility window for ingest (seconds)",
+       false,
+       true,
+       300u,
+       kVisMax,
+       lotato_on_cfg_changed,
+       nullptr},
+      {"ingest.refresh_secs",
+       losettings::ConfigValueKind::UInt32,
+       false,
+       0,
+       900u,
+       nullptr,
+       "Minimum seconds between successful ingest POSTs per visible node",
+       false,
+       true,
+       60u,
+       86400u,
+       lotato_on_cfg_changed,
+       nullptr},
+      {"ingest.gc_stale_secs",
+       losettings::ConfigValueKind::UInt32,
+       false,
+       0,
+       259200u,
+       nullptr,
+       "Remove store slots not mesh-heard for this long (>= visibility_secs)",
+       false,
+       true,
+       300u,
+       kGcMax,
+       lotato_on_cfg_changed,
+       nullptr},
+  };
+  static const losettings::ConfigRegistry kReg("lotato", kLotato, (int)(sizeof(kLotato) / sizeof(kLotato[0])));
+  losettings::ConfigHub::instance().registerModule(kReg);
+}
+
 void LotatoConfig::load() {
   seedBuildFlagsIntoLoSettingsIfNeeded();
+  registerConfigSchema();
   refreshFromLoSettings();
   _loaded = true;
 }

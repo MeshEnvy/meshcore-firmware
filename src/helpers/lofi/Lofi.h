@@ -8,6 +8,10 @@
 
 #include "lofi.pb.h"
 
+namespace locommand {
+class Engine;
+}
+
 namespace lofi {
 
 struct HttpResult {
@@ -72,6 +76,9 @@ public:
   /** Drop plain-HTTP keep-alive session (call on URL/token/WiFi change). */
   void resetHttpTransport();
 
+  /** After `config set lofi.active.*`, reload caches and reconnect STA if needed. */
+  void notifyActiveCredentialsMaybeChanged();
+
 private:
   Lofi();
   void ensureTables();
@@ -92,6 +99,9 @@ private:
   void (*_connect_cb)(void*, bool, const char*) = nullptr;
   void* _connect_cb_ctx = nullptr;
 };
+
+/** Register `wifi status|scan|connect|forget` on a root `wifi` engine (implemented in app). */
+void bindWifiCli(locommand::Engine& eng);
 
 }  // namespace lofi
 

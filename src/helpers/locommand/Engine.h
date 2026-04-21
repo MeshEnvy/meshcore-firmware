@@ -14,10 +14,18 @@ public:
   Engine(const Engine&) = delete;
   Engine& operator=(const Engine&) = delete;
 
+  /** One-line summary for Router global help (optional). */
+  void setRootBrief(const char* brief) { _root_brief = brief; }
+  const char* rootBrief() const { return _root_brief; }
+
   /** Register a dotted path under the root (e.g. "wifi.scan"). Creates group segments as needed.
    *  Enforces group-or-leaf invariant. Returns the new leaf or nullptr on conflict / OOM. */
   Command* add(const char* path, Handler handler, const char* usage_suffix = nullptr,
                const char* hint = nullptr, const char* brief = nullptr);
+
+  /** Same as add but builds usage from @p specs and enables structured argument help. */
+  Command* addWithArgs(const char* path, Handler handler, const ArgSpec* specs, int n_specs,
+                       const char* hint = nullptr, const char* brief = nullptr, const char* details = nullptr);
 
   /** True if @p cmd starts with @ref rootName followed by '\0', whitespace, or '?'. */
   bool matchesRoot(const char* cmd) const;
@@ -33,6 +41,7 @@ public:
 
 private:
   Command _root;
+  const char* _root_brief = nullptr;
 };
 
 }  // namespace locommand

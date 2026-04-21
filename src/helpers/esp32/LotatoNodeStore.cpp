@@ -3,8 +3,12 @@
 #ifdef ESP32
 
 #include <LittleFS.h>
+#include <helpers/esp32/LotatoConfig.h>
 #include <helpers/esp32/LotatoDebug.h>
+#include <helpers/esp32/LotatoIngestTtl.h>
+#include <cstdint>
 #include <cstring>
+#include <time.h>
 
 namespace {
 
@@ -16,7 +20,7 @@ static inline bool bm_get(const uint8_t* bm, int s) {
 }
 static inline void bm_set(uint8_t* bm, int s) { bm[s >> 3] |= (1u << (s & 7)); }
 
-} // namespace
+}  // namespace
 
 void LotatoNodeStore::begin(fs::FS* fs) {
   _fs = fs;
@@ -24,13 +28,6 @@ void LotatoNodeStore::begin(fs::FS* fs) {
   _count = 0;
   memset(_index, 0, sizeof(_index));
   loadIndex();
-}
-
-void LotatoNodeStore::resetPostTimers() {
-  if (!_idx_mtx) return;
-  xSemaphoreTake(_idx_mtx, portMAX_DELAY);
-  for (int i = 0; i < MAX; i++) _index[i].last_posted_ms = 0;
-  xSemaphoreGive(_idx_mtx);
 }
 
 static bool write_empty_dense_file(fs::FS* fs) {
@@ -91,8 +88,8 @@ void LotatoNodeStore::loadIndex() {
       }
       if (rec.magic == LOTATO_NODE_MAGIC) {
         memcpy(_index[s].key, rec.pub_key, 4);
-        _index[s].last_advert    = rec.last_advert;
-        _index[s].last_posted_ms = 0;
+        _index[s].last_advert        = rec.last_advert;
+        _index[s].last_posted_unix   = lotato_ingest_ttl_store().lastPostedUnix(rec.pub_key);
         _count++;
       }
     }
@@ -113,9 +110,6 @@ int LotatoNodeStore::findSlot(const uint8_t* pub_key) const {
   for (int i = 0; i < MAX; i++) {
     if (_index[i].last_advert != 0 &&
         memcmp(_index[i].key, pub_key, 4) == 0) {
-      // Confirm full key match via disk read would be ideal, but false positives
-      // (same 4-byte prefix, different full key) are extremely rare and the worst
-      // outcome is a harmless overwrite. Accept the 4-byte match for speed.
       return i;
     }
   }
@@ -130,16 +124,22 @@ int LotatoNodeStore::findEmptySlot() const {
 }
 
 int LotatoNodeStore::evictLRU() {
-  int oldest = 0;
-  uint32_t oldest_advert = _index[0].last_advert;
-  for (int i = 1; i < MAX; i++) {
-    if (_index[i].last_advert < oldest_advert) {
+  int oldest = -1;
+  uint32_t oldest_advert = UINT32_MAX;
+  for (int i = 0; i < MAX; i++) {
+    if (_index[i].last_advert == 0) continue;
+    if (oldest < 0 || _index[i].last_advert < oldest_advert) {
       oldest_advert = _index[i].last_advert;
       oldest = i;
     }
   }
-  _index[oldest].last_advert    = 0;
-  _index[oldest].last_posted_ms = 0;
+  if (oldest < 0) return 0;
+  LotatoNodeRecord ev{};
+  if (readRecord(oldest, ev) && ev.magic == LOTATO_NODE_MAGIC) {
+    lotato_ingest_ttl_store().clear(ev.pub_key);
+  }
+  _index[oldest].last_advert      = 0;
+  _index[oldest].last_posted_unix = 0;
   memset(_index[oldest].key, 0, 4);
   _count--;
   return oldest;
@@ -154,7 +154,7 @@ bool LotatoNodeStore::writeRecord(int slot, const LotatoNodeRecord& rec) {
   memset(new_bm, 0, sizeof(new_bm));
   int out_recs = 0;
   for (int s = 0; s < MAX; s++) {
-    if (s == slot || _index[s].last_advert != 0) {
+    if ((s == slot && rec.magic == LOTATO_NODE_MAGIC) || _index[s].last_advert != 0) {
       bm_set(new_bm, s);
       out_recs++;
     }
@@ -209,11 +209,12 @@ bool LotatoNodeStore::writeRecord(int slot, const LotatoNodeRecord& rec) {
       have_old = (n == (int)RECORD_SIZE && old_r.magic == LOTATO_NODE_MAGIC);
     }
 
-    const bool want_new = (s == slot) || (_index[s].last_advert != 0);
+    const bool want_new =
+        (s == slot && rec.magic == LOTATO_NODE_MAGIC) || (_index[s].last_advert != 0);
     if (!want_new) continue;
 
     size_t w;
-    if (s == slot) {
+    if (s == slot && rec.magic == LOTATO_NODE_MAGIC) {
       w = out.write((const uint8_t*)&rec, RECORD_SIZE);
     } else {
       if (!have_old) {
@@ -311,7 +312,10 @@ int LotatoNodeStore::put(const uint8_t* pub_key, const char* name, uint8_t type,
   bool is_new = (_index[slot].last_advert == 0);
   memcpy(_index[slot].key, pub_key, 4);
   _index[slot].last_advert = last_advert;
-  if (is_new) _count++;
+  if (is_new) {
+    _count++;
+    _index[slot].last_posted_unix = lotato_ingest_ttl_store().lastPostedUnix(pub_key);
+  }
   if (_idx_mtx) xSemaphoreGive(_idx_mtx);
 
   return slot;
@@ -334,7 +338,7 @@ void LotatoNodeStore::logFlushTargetsDebug() const {
     nid[0] = '!';
     static const char* hx = "0123456789abcdef";
     for (int b = 0; b < 4; b++) {
-      nid[1 + b * 2] = hx[rec.pub_key[b] >> 4];
+      nid[1 + b * 2]     = hx[rec.pub_key[b] >> 4];
       nid[1 + b * 2 + 1] = hx[rec.pub_key[b] & 0x0f];
     }
     nid[9] = '\0';
@@ -356,23 +360,107 @@ void LotatoNodeStore::logFlushTargetsDebug() const {
   }
 }
 
-bool LotatoNodeStore::dueForIngest(int slot, uint32_t now_ms) const {
+bool LotatoNodeStore::visibleMeshHeard(int slot) const {
   if (slot < 0 || slot >= MAX || !_idx_mtx) return false;
   xSemaphoreTake(_idx_mtx, portMAX_DELAY);
-  bool empty = (_index[slot].last_advert == 0);
-  uint32_t lp = _index[slot].last_posted_ms;
+  uint32_t la = _index[slot].last_advert;
   xSemaphoreGive(_idx_mtx);
-  if (empty) return false;
-  if (lp == 0) return true;
-  return (int32_t)(now_ms - lp) >= (int32_t)LOTATO_NODE_REPOST_MS;
+  if (la == 0) return false;
+  time_t now = time(nullptr);
+  if (now < (time_t)1700000000) return true;
+  uint32_t vis = LotatoConfig::instance().ingestVisibilitySecs();
+  return (uint64_t)now - (uint64_t)la <= (uint64_t)vis;
 }
 
-void LotatoNodeStore::markPosted(int slot, uint32_t now_ms) {
+bool LotatoNodeStore::dueForIngest(int slot, uint32_t now_ms) const {
+  (void)now_ms;
+  if (slot < 0 || slot >= MAX || !_idx_mtx) return false;
+  if (!visibleMeshHeard(slot)) return false;
+  xSemaphoreTake(_idx_mtx, portMAX_DELAY);
+  uint32_t lp = _index[slot].last_posted_unix;
+  xSemaphoreGive(_idx_mtx);
+  if (lp == 0) return true;
+  time_t now = time(nullptr);
+  if (now < (time_t)1700000000) return true;
+  uint32_t ref = LotatoConfig::instance().ingestRefreshSecs();
+  return (uint64_t)now - (uint64_t)lp >= (uint64_t)ref;
+}
+
+void LotatoNodeStore::markPosted(int slot, uint32_t now_unix) {
   if (slot < 0 || slot >= MAX) return;
+  LotatoNodeRecord rec{};
+  if (!readRecord(slot, rec)) return;
+  lotato_ingest_ttl_store().setLastPostedUnix(rec.pub_key, now_unix);
   if (!_idx_mtx) return;
   xSemaphoreTake(_idx_mtx, portMAX_DELAY);
-  _index[slot].last_posted_ms = now_ms;
+  if (_index[slot].last_advert != 0) _index[slot].last_posted_unix = now_unix;
   xSemaphoreGive(_idx_mtx);
+}
+
+void LotatoNodeStore::flushIngestTtlVisible() {
+  for (int s = 0; s < MAX; s++) {
+    if (!visibleMeshHeard(s)) continue;
+    LotatoNodeRecord r{};
+    if (!readRecord(s, r)) continue;
+    lotato_ingest_ttl_store().clear(r.pub_key);
+    if (_idx_mtx) xSemaphoreTake(_idx_mtx, portMAX_DELAY);
+    if (_index[s].last_advert != 0) _index[s].last_posted_unix = 0;
+    if (_idx_mtx) xSemaphoreGive(_idx_mtx);
+  }
+}
+
+void LotatoNodeStore::gcSweepStale() {
+  time_t now = time(nullptr);
+  if (now < (time_t)1700000000) return;
+  uint32_t gc = LotatoConfig::instance().ingestGcStaleSecs();
+  int victims[64];
+  int nv = 0;
+  for (int s = 0; s < MAX && nv < 64; s++) {
+    if (_idx_mtx) xSemaphoreTake(_idx_mtx, portMAX_DELAY);
+    uint32_t la = _index[s].last_advert;
+    if (_idx_mtx) xSemaphoreGive(_idx_mtx);
+    if (la == 0) continue;
+    if ((uint64_t)now > (uint64_t)la + (uint64_t)gc) victims[nv++] = s;
+  }
+  for (int i = 0; i < nv; i++) {
+    (void)removeSlot(victims[i]);
+  }
+}
+
+bool LotatoNodeStore::removeSlot(int slot) {
+  if (!_fs || slot < 0 || slot >= MAX) return false;
+  LotatoNodeRecord old{};
+  if (!readRecord(slot, old) || old.magic != LOTATO_NODE_MAGIC) return false;
+  if (_idx_mtx) xSemaphoreTake(_idx_mtx, portMAX_DELAY);
+  if (_index[slot].last_advert == 0) {
+    if (_idx_mtx) xSemaphoreGive(_idx_mtx);
+    return true;
+  }
+  memset(_index[slot].key, 0, 4);
+  _index[slot].last_advert      = 0;
+  _index[slot].last_posted_unix = 0;
+  _count--;
+  if (_idx_mtx) xSemaphoreGive(_idx_mtx);
+  lotato_ingest_ttl_store().clear(old.pub_key);
+  LotatoNodeRecord z{};
+  z.magic = 0;
+  return writeRecord(slot, z);
+}
+
+int LotatoNodeStore::countVisibleNodes() const {
+  int n = 0;
+  for (int s = 0; s < MAX; s++) {
+    if (visibleMeshHeard(s)) n++;
+  }
+  return n;
+}
+
+int LotatoNodeStore::countDueNodes() const {
+  int n = 0;
+  for (int s = 0; s < MAX; s++) {
+    if (dueForIngest(s, 0)) n++;
+  }
+  return n;
 }
 
 bool LotatoNodeStore::readRecord(int slot, LotatoNodeRecord& out) const {

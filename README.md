@@ -27,31 +27,35 @@ Test remote admin access now to be sure.
 **Essential Setup**
 Log in via remote access and access the CLI tool. Lotato implements some extra CLI commands to help you get set up:
 
-* `lotato wifi connect <ssid> <pwd>` to connect to your WiFi network
-* `lotato endpoint <url>` to set the Potato Mesh ingestor URL (example: https://monitor.meshenvy.org)
-* `lotato token <val>` to set the Potato Mesh API key (see Potato Mesh docs)
+* `wifi connect <ssid> <pwd>` to connect to your WiFi network
+* `config set lotato.ingest.url <url>` for the Potato Mesh ingestor URL (example: `https://monitor.meshenvy.org`)
+* `config set lotato.ingest.token <val>` for the Potato Mesh API key (see Potato Mesh docs)
 
 After that, you should begin to see MeshCore nodes appearing on your Potato Mesh network!
 
 ## Full Command Reference
 
+Three CLI roots are dispatched first (`lotato`, `wifi`, `config`); bare `help` / `?` lists them. Legacy MeshCore CLI still handles other lines.
+
 | Command | Description |
 |---|---|
-| `lotato` | Show command help (same as `lotato help`) |
-| `lotato status` | Show WiFi, IP, node count, ingest queue, HTTP status, endpoint, token, and Lotato debug (on/off) |
-| `lotato pause` | Pause ingest (stops POSTing to Potato Mesh) |
-| `lotato resume` | Resume ingest |
-| `lotato contacts` | Show node store stats (count, max, repost interval, file path) |
-| `lotato flush` | Mark all known nodes for immediate re-post on next ingest sweep |
-| `lotato wifi` | Show WiFi subcommand help |
-| `lotato wifi status` | Show current WiFi connection status |
-| `lotato wifi scan` | Scan for nearby WiFi networks (async — returns results when the scan completes) |
-| `lotato wifi connect <n> [pwd]` | Connect to a network by scan result index |
-| `lotato wifi connect <ssid> [pwd]` | Connect to a network by SSID |
-| `lotato endpoint <url>` | Set the Potato Mesh ingest endpoint URL |
-| `lotato token <val>` | Set the API bearer token |
-| `lotato debug <on\|off\|toggle>` | Enable, disable, or toggle Lotato `Serial` debug logging (stored in NVS; default off until set) |
-| `lotato help` | Show command help |
+| `lotato` | Show `lotato` subcommand help (same as `lotato help`) |
+| `lotato status` | WiFi, IP, node count, **Due** (visible + refresh-due), paused, last HTTP code, URL/token state, debug |
+| `lotato pause` | Pause ingest (shortcut for `config set lotato.ingest.paused on`) |
+| `lotato resume` | Resume ingest (shortcut for `config set lotato.ingest.paused off`) |
+| `lotato contacts` | Nodes, visible, due, refresh/visibility/GC intervals from config |
+| `lotato flush` | Clear persisted last-post time for **visible** slots only; reply shows new due count |
+| `wifi status` | Current WiFi / saved SSID snapshot |
+| `wifi scan` | Scan for nearby APs (async — full list when scan completes) |
+| `wifi connect <n\|ssid> [pwd]` | Connect by scan index (1-based) or raw SSID |
+| `wifi forget <ssid>` | Remove an SSID from the known list |
+| `config ls` | List registered keys with effective values (secrets redacted) |
+| `config get <ns.key>` | Print one value (e.g. `lotato.ingest.url`) |
+| `config set <ns.key> <value>` | Set a value (validators + ranges apply) |
+| `config unset <ns.key>` | Remove saved value (revert to default) |
+| `help` / `?` | Router lists each root (name + brief); use `help <root>` or `<root> help` for that root’s commands |
+| `help lotato` | Same as `lotato help` |
+| `lotato help` | Flat `lotato` command list |
 
 ## Changelog (Lotato)
 
@@ -59,12 +63,14 @@ Lotato releases use annotated git tags of the form `lotato-v<lotato>-repeater-v<
 
 ### Unreleased (`lotato` branch, not yet tagged)
 
+- **Composable CLI:** `locommand::Router` with roots `lotato`, `wifi`, and `config`. `lotato endpoint`, `lotato token`, `lotato debug`, and `lotato wifi.*` are removed — use `config set …` and the `wifi` root instead. `locommand::ArgSpec` improves leaf help.
+- **ConfigHub / `config` CLI:** typed `lotato.*` and `lofi.*` keys in LoSettings with `config ls|get|set|unset`.
+- **Ingest:** visibility (`lotato.ingest.visibility_secs`), refresh interval (`ingest.refresh_secs`), GC (`ingest.gc_stale_secs`); LoDB `ingest_ttl` persists last-post unix per node; `lotato status` shows **Due**; throttled GC removes stale slots.
 - Rename MeshForge-facing naming and unify **Lotato** branding in CLI, configuration, and source (follow-up to the Potato Mesh ingestor naming used in earlier tags).
-- **Debug logging:** removed the compile-time `LOTATO_DEBUG` switch; Lotato debug instrumentation is always in the build and is controlled only at runtime. Use `lotato debug on`, `lotato debug off`, or `lotato debug toggle`; the setting persists in NVS (`lotato` / `dbg`). Fresh devices default to debug **off** until you turn it on. `lotato status` includes a `Debug: on|off` line.
+- **Debug logging:** no compile-time `LOTATO_DEBUG`; use `config set lotato.debug on|off` (LoSettings). `lotato status` shows `Debug: on|off`.
 - **CLI:** bare `lotato` prints the same help as `lotato help` (use `lotato status` for the WiFi / ingest snapshot).
-- **`locommand`:** added nested CLI helper at `src/helpers/locommand/` (`Engine`, strict group-or-leaf command tree, flat help, `Context::printHelp()` for per-leaf usage). Depends on `lomessage::Buffer` for replies. The Lotato CLI is registered on `MyMesh` via `locommand::Engine`. **Breaking:** `lotato wifi <ssid> [pwd]` is now `lotato wifi connect <ssid|n> [pwd]`; bare `lotato wifi` prints WiFi subcommand help (use `lotato wifi status` for the old one-line snapshot); bare `lotato debug` now prints its usage line (use `lotato debug toggle` instead of bare `lotato debug` to toggle).
-- **`lomessage`:** added transport-agnostic helper library at `src/helpers/lomessage/` — `Buffer` (append / appendf, capped growth), `Split.h` (`next_chunk_len` / `next_chunk` with newline-aware chunk policy and optional line-boundary absorption), and `Queue` (FIFO of outbound text jobs with pluggable `Sink`). `MyMesh` now owns a single `lomessage::Queue` and implements `lomessage::Sink::sendChunk` to build the `TXT_MSG` datagram; all split / queue / schedule / drop logic lives in the library. No radio, network, or `Serial` dependencies inside `lomessage`.
-- **Long Lotato replies:** replies longer than the mesh/serial snapshot buffer are delivered via one mesh FIFO job (chunked over the air as before) or drip-printed on USB serial; `lotato wifi scan` returns a single full WiFi list (no `Pg x/y` pages or `[pg]` in help); optional trailing scan arguments are ignored for compatibility.
+- **`locommand` + `lomessage`:** `Engine` / `Router` / `ArgSpec`; `Buffer` + `Queue` for chunked replies. **Breaking:** WiFi commands are `wifi …` (not `lotato wifi …`); scan is `wifi scan`.
+- **Long Lotato replies:** oversized replies go through the mesh FIFO or drip on USB serial; `wifi scan` returns one full list.
 
 ### [0.1.2] — 2026-04-11 (`lotato-v0.1.2-repeater-v1.14.1`)
 

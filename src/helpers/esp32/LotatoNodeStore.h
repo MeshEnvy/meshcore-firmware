@@ -11,10 +11,6 @@
 #ifndef LOTATO_NODE_STORE_MAX
 #define LOTATO_NODE_STORE_MAX 4000
 #endif
-/** How often each node is re-posted to Lotato ingest to keep lastHeard fresh (ms). */
-#ifndef LOTATO_NODE_REPOST_MS
-#define LOTATO_NODE_REPOST_MS (15UL * 60UL * 1000UL)
-#endif
 
 /**
  * On-disk record per node. Fixed size: 84 bytes.
@@ -44,8 +40,8 @@ static_assert(sizeof(LotatoNodeRecord) == 84, "LotatoNodeRecord layout changed")
  * If `/lotato-nodes.bin` does not start with the dense magic sentinel, it is removed on boot
  * and replaced with an empty store (no legacy flat format).
  *
- * An in-memory index tracks {pub_key prefix, last_advert, last_posted_ms} for fast dedup
- * and LRU eviction. Ingest batches due nodes into one HTTP POST from the ingest worker.
+ * An in-memory index tracks {pub_key prefix, last_advert, last_posted_unix} for fast dedup,
+ * LRU eviction, and ingest scheduling. Last-post times persist in LoDB (`ingest_ttl`).
  */
 class LotatoNodeStore {
 public:
@@ -68,11 +64,11 @@ public:
   int put(const uint8_t* pub_key, const char* name, uint8_t type,
           uint32_t last_advert, int32_t lat, int32_t lon);
 
-  /** True if this occupied slot should be included in the next ingest batch (refresh TTL elapsed). */
+  /** True if this occupied slot should be included in the next ingest batch (visible + refresh due). */
   bool dueForIngest(int slot, uint32_t now_ms) const;
 
-  /** Record that slot was successfully posted at now_ms (in-memory refresh deadline only). */
-  void markPosted(int slot, uint32_t now_ms);
+  /** Record successful POST at wall time @p now_unix (LoDB + RAM index). */
+  void markPosted(int slot, uint32_t now_unix);
 
   /** Read the full on-disk record for slot. Returns false on I/O error. */
   bool readRecord(int slot, LotatoNodeRecord& out) const;
@@ -80,17 +76,31 @@ public:
   /** Total number of occupied slots. */
   int count() const { return _count; }
 
-  /** Reset all post timers so every node is due on the next ingest batch. */
-  void resetPostTimers();
+  /** Clear persisted last-post time for mesh-visible slots only (makes them due again). */
+  void flushIngestTtlVisible();
+
+  /** Remove stale slots not mesh-heard for `lotato.ingest.gc_stale_secs` (no-op if wall clock invalid). */
+  void gcSweepStale();
+
+  /** Remove one occupied slot from SPIFFS + index + ingest TTL. */
+  bool removeSlot(int slot);
+
+  /** Count occupied slots that pass the mesh-heard visibility window. */
+  int countVisibleNodes() const;
+
+  /** Count occupied slots that are visible and due for ingest. */
+  int countDueNodes() const;
 
   /** Log !id list for occupied slots when debug is on (truncated if very many nodes). */
   void logFlushTargetsDebug() const;
 
 private:
+  bool visibleMeshHeard(int slot) const;
+
   struct Entry {
-    uint8_t  key[4];          // first 4 bytes of pub_key for fast match
-    uint32_t last_advert;     // cached last_advert for LRU eviction
-    uint32_t last_posted_ms;  // millis() when last posted (0 = never this session)
+    uint8_t  key[4];           // first 4 bytes of pub_key for fast match
+    uint32_t last_advert;      // cached last_advert for LRU eviction
+    uint32_t last_posted_unix; // 0 = never posted (or flushed)
   };
 
   fs::FS* _fs = nullptr;

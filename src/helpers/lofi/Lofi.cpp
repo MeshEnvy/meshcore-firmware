@@ -8,6 +8,9 @@
 extern "C" esp_err_t esp_crt_bundle_attach(void* conf);
 
 #include <losettings/LoSettings.h>
+#include <losettings/ConfigHub.h>
+
+#include <helpers/esp32/LotatoConfig.h>
 
 #include <algorithm>
 #include <cstdarg>
@@ -297,6 +300,11 @@ void Lofi::reloadActiveCache() {
   st.getString("active.psk", s_active_psk, sizeof(s_active_psk), "");
 }
 
+void Lofi::notifyActiveCredentialsMaybeChanged() {
+  reloadActiveCache();
+  resumeStaSavedCredentials();
+}
+
 void Lofi::saveWifiConnect(const char* ssid, const char* psk) {
   ensureTables();
   {
@@ -507,7 +515,49 @@ void Lofi::registerWifiHandlers() {
   });
 }
 
+static void lofi_cfg_on_change(void*) {
+  Lofi::instance().notifyActiveCredentialsMaybeChanged();
+  LotatoConfig::instance().refreshFromLoSettings();
+}
+
+static void register_lofi_config_schema_once() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  static const losettings::ConfigEntry kLofiCfg[] = {
+      {"active.ssid",
+       losettings::ConfigValueKind::String,
+       false,
+       0,
+       0,
+       "",
+       "Preferred STA SSID (<=32 chars)",
+       false,
+       false,
+       0,
+       0,
+       lofi_cfg_on_change,
+       nullptr},
+      {"active.psk",
+       losettings::ConfigValueKind::String,
+       false,
+       0,
+       0,
+       "",
+       "STA PSK (<=64 chars)",
+       true,
+       false,
+       0,
+       0,
+       lofi_cfg_on_change,
+       nullptr},
+  };
+  static const losettings::ConfigRegistry kLofiReg("lofi", kLofiCfg, (int)(sizeof(kLofiCfg) / sizeof(kLofiCfg[0])));
+  losettings::ConfigHub::instance().registerModule(kLofiReg);
+}
+
 void Lofi::begin() {
+  register_lofi_config_schema_once();
   ensureTables();
   reloadKnownCache();
   reloadActiveCache();
