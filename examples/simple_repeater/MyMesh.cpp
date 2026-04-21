@@ -17,7 +17,25 @@
 #define LOTATO_DBG_LN(...) ((void)0)
 #endif
 
+namespace {
+/** `Mesh::onRecvPacket` decrypts into `uint8_t[MAX_PACKET_PAYLOAD]`; `data[len]` is only safe if len < MAX. */
+inline void null_terminate_mesh_data(uint8_t* data, size_t len) {
+  if (!data) return;
+  if (len < (size_t)MAX_PACKET_PAYLOAD) {
+    data[len] = 0;
+  } else if ((size_t)MAX_PACKET_PAYLOAD > 0) {
+    data[MAX_PACKET_PAYLOAD - 1] = 0;
+  }
+}
+}  // namespace
+
+/** Admin TXT_MSG path: `Mesh::onRecvPacket` already has `data[MAX_PACKET_PAYLOAD]` on the stack — keep reply
+ *  scratch out of that frame to avoid blowing the loop stack (manifests as random Guru / flash-cache faults). */
+static uint8_t s_on_peer_mesh_cli_temp[5 + MyMesh::kCliReplyCap];
+
 #ifdef ESP32
+
+static char s_on_peer_mesh_cli_snap[MyMesh::kCliReplyCap];
 
 struct LotatoCliCtx {
   MyMesh* self;
@@ -633,7 +651,7 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
     uint32_t timestamp;
     memcpy(&timestamp, data, 4);
 
-    data[len] = 0;  // ensure null terminator
+    null_terminate_mesh_data(data, len);
     uint8_t reply_len;
 
     reply_path_len = -1;
@@ -782,7 +800,10 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       client->last_activity = getRTCClock()->getCurrentTime();
 
       // len can be > original length, but 'text' will be padded with zeroes
-      data[len] = 0; // need to make a C string again, with null terminator
+      null_terminate_mesh_data(data, len);
+#ifdef ESP32
+      lotato_dbg_mesh_txt_rx(sender_timestamp, data[4], flags, len, is_retry ? 1 : 0, (const char*)&data[5]);
+#endif
 
       if (flags == TXT_TYPE_PLAIN) { // for legacy CLI, send Acks
         uint32_t ack_hash; // calc truncated hash of the message timestamp + text + sender pub_key, to prove
@@ -800,9 +821,8 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
         }
       }
 
-      uint8_t temp[5 + MyMesh::kCliReplyCap];
       char *command = (char *)&data[5];
-      char *reply = (char *)&temp[5];
+      char *reply = (char *)&s_on_peer_mesh_cli_temp[5];
       if (is_retry) {
         *reply = 0;
       } else {
@@ -823,20 +843,28 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
           _lotato_txt_route.out_path_len     = client->out_path_len;
           memcpy(_lotato_txt_route.out_path, client->out_path, sizeof(_lotato_txt_route.out_path));
           _lotato_txt_route.path_hash_size   = packet->getPathHashSize();
-          char mesh_cli_snap[MyMesh::kCliReplyCap];
-          strncpy(mesh_cli_snap, command, sizeof(mesh_cli_snap) - 1);
-          mesh_cli_snap[sizeof(mesh_cli_snap) - 1] = '\0';
+          strncpy(s_on_peer_mesh_cli_snap, command, sizeof(s_on_peer_mesh_cli_snap) - 1);
+          s_on_peer_mesh_cli_snap[sizeof(s_on_peer_mesh_cli_snap) - 1] = '\0';
           handleCommand(sender_timestamp, command, reply);
           // if an async op started it set s_async_cli_busy; leave snapshot valid for completion push
           if (!s_async_cli_busy) s_scan_reply_target.valid = false;
           _lotato_txt_route.valid = false;
-          lotato_dbg_trace_cli_exchange("mesh", mesh_cli_snap, reply);
+          lotato_dbg_trace_cli_exchange("mesh", s_on_peer_mesh_cli_snap, reply);
         }
 #else
         handleCommand(sender_timestamp, command, reply);
 #endif
       }
+#ifdef ESP32
+      {
+        int will_q = (!is_retry && reply[0] != '\0') ? 1 : 0;
+        lotato_dbg_mesh_after_handle(reply, will_q);
+      }
+#endif
       if (strlen(reply) > 0) {
+#ifdef ESP32
+        lotato_dbg_mesh_enqueue_short(reply);
+#endif
         enqueueTxtCliReply(i, client->out_path_len, client->out_path,
                            packet->getPathHashSize(), sender_timestamp, reply);
       }
@@ -1442,6 +1470,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     LotatoCliCtx lctx{this, sender_timestamp};
     lomessage::Buffer buf(MyMesh::kCliReplyCap * 4);
     _lotato_cli.dispatch(command + strlen(_lotato_cli.rootName()), buf, &lctx);
+    lotato_dbg_lotato_dispatch_stats(buf.length(), buf.truncated() ? 1 : 0);
     deliverLotatoReply(sender_timestamp, buf.c_str(), reply);
 #endif
   } else{
@@ -1691,6 +1720,12 @@ lomessage::SendResult MyMesh::sendChunk(const uint8_t* data, size_t len,
   }
   ClientInfo* client = acl.getClientByIdx(ctx->acl_idx);
 
+  if (len == 0 || len > kMaxTxtChunk) {
+    LOTATO_DBG_LN("cli reply tx: BAD emit_len=%u (max=%u) — abandon job", (unsigned)len,
+                  (unsigned)kMaxTxtChunk);
+    return lomessage::SendResult::Abandon;
+  }
+
   uint8_t temp[5 + kMaxTxtChunk];
   uint32_t ts = getRTCClock()->getCurrentTimeUnique();
   if (ts == ctx->sender_ts) ts++;
@@ -1719,6 +1754,10 @@ lomessage::SendResult MyMesh::sendChunk(const uint8_t* data, size_t len,
     (unsigned)client->id.pub_key[0], (unsigned)client->id.pub_key[1],
     (unsigned)client->id.pub_key[2], (unsigned)client->id.pub_key[3],
     sent ? "ok" : "FAIL");
+#ifdef ESP32
+  lotato_dbg_cli_tx_chunk(ts, (unsigned)chunk_idx, (unsigned)total_chunks, len,
+                          (ctx->out_path_len == OUT_PATH_UNKNOWN) ? "flood" : "direct", ctx->acl_idx, sent);
+#endif
   return sent ? lomessage::SendResult::Sent : lomessage::SendResult::Retry;
 }
 

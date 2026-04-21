@@ -16,6 +16,8 @@ struct Queue::Job {
   unsigned long next_send_at;
   void* user_ctx;
   size_t user_ctx_len;
+  /** 1-based index for the next wire emission (line-absorb can advance offset without emitting). */
+  unsigned emit_index;
 };
 
 Queue::Queue() : _head(nullptr), _tail(nullptr) {}
@@ -51,6 +53,7 @@ bool Queue::send(const char* text, const void* user_ctx, size_t user_ctx_len,
   job->next_send_at = first_send_at_ms;
   job->user_ctx = nullptr;
   job->user_ctx_len = 0;
+  job->emit_index = 0;
 
   if (user_ctx && user_ctx_len > 0) {
     job->user_ctx = malloc(user_ctx_len);
@@ -82,21 +85,23 @@ void Queue::service(unsigned long now_ms, Sink& sink) {
     return;
   }
 
-  size_t total_chunks = (job->total_len + job->max_chunk - 1) / job->max_chunk;
-  if (total_chunks == 0) total_chunks = 1;
-  size_t cur_chunk = (job->offset / job->max_chunk) + 1;
   bool is_final = job->offset + seg.consume_len >= job->total_len;
 
   SendResult r = SendResult::Sent;
   if (seg.emit_len > 0) {
+    unsigned part = job->emit_index + 1;
+    size_t approx_total = (job->total_len + job->max_chunk - 1) / job->max_chunk;
+    if (approx_total == 0) approx_total = 1;
+    if ((size_t)part > approx_total) approx_total = (size_t)part;
     r = sink.sendChunk(reinterpret_cast<const uint8_t*>(job->text + job->offset),
-                       seg.emit_len, cur_chunk, total_chunks, is_final,
+                       seg.emit_len, (size_t)part, approx_total, is_final,
                        job->user_ctx);
   }
 
   switch (r) {
     case SendResult::Sent:
       job->offset += seg.consume_len;
+      if (seg.emit_len > 0) job->emit_index++;
       if (job->offset >= job->total_len) {
         _head = job->next;
         if (!_head) _tail = nullptr;
