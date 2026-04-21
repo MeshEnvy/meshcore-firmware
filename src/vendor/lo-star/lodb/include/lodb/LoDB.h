@@ -22,6 +22,21 @@
 #define LODB_VERSION "1.5.0"
 #endif
 
+#if __has_include(<lolog/LoLog.h>)
+#include <lolog/LoLog.h>
+#ifndef LODB_LOG_DEBUG
+#define LODB_LOG_DEBUG(...) ::lolog::LoLog::debug("lodb", __VA_ARGS__)
+#endif
+#ifndef LODB_LOG_INFO
+#define LODB_LOG_INFO(...) ::lolog::LoLog::info("lodb", __VA_ARGS__)
+#endif
+#ifndef LODB_LOG_WARN
+#define LODB_LOG_WARN(...) ::lolog::LoLog::warn("lodb", __VA_ARGS__)
+#endif
+#ifndef LODB_LOG_ERROR
+#define LODB_LOG_ERROR(...) ::lolog::LoLog::error("lodb", __VA_ARGS__)
+#endif
+#else
 #ifndef LODB_LOG_DEBUG
 #define LODB_LOG_DEBUG(...) ((void)0)
 #endif
@@ -33,6 +48,7 @@
 #endif
 #ifndef LODB_LOG_ERROR
 #define LODB_LOG_ERROR(...) ((void)0)
+#endif
 #endif
 
 typedef uint64_t lodb_uuid_t;

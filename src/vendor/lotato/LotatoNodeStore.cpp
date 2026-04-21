@@ -4,7 +4,7 @@
 
 #include <LittleFS.h>
 #include <LotatoConfig.h>
-#include <LotatoDebug.h>
+#include <lolog/LoLog.h>
 #include <LotatoIngestTtl.h>
 #include <cstdint>
 #include <cstring>
@@ -51,10 +51,10 @@ void LotatoNodeStore::loadIndex() {
   File f = _fs->open(PATH, "r");
   if (!f) {
     if (!write_empty_dense_file(_fs)) {
-      LOTATO_DBG_LN("node store: failed to create %s", PATH);
+      ::lolog::LoLog::debug("lotato", "node store: failed to create %s", PATH);
       return;
     }
-    LOTATO_DBG_LN("node store: created empty dense %s (hdr=%u + bitmap=%u B)", PATH,
+    ::lolog::LoLog::debug("lotato", "node store: created empty dense %s (hdr=%u + bitmap=%u B)", PATH,
                         8u, (unsigned)BITMAP_BYTES);
     return;
   }
@@ -65,7 +65,7 @@ void LotatoNodeStore::loadIndex() {
   if (f.read((uint8_t*)&mag, 4) == 4 && mag == kDenseMagic) {
     uint16_t ver = 0, pad = 0;
     if (f.read((uint8_t*)&ver, 2) != 2 || f.read((uint8_t*)&pad, 2) != 2 || ver != kDenseVersion) {
-      LOTATO_DBG_LN("node store: dense header bad ver=%u — reset", (unsigned)ver);
+      ::lolog::LoLog::debug("lotato", "node store: dense header bad ver=%u — reset", (unsigned)ver);
       f.close();
       _fs->remove(PATH);
       write_empty_dense_file(_fs);
@@ -73,7 +73,7 @@ void LotatoNodeStore::loadIndex() {
     }
     uint8_t bm[BITMAP_BYTES];
     if (f.read(bm, sizeof(bm)) != (int)sizeof(bm)) {
-      LOTATO_DBG_LN("node store: dense bitmap read failed — reset");
+      ::lolog::LoLog::debug("lotato", "node store: dense bitmap read failed — reset");
       f.close();
       _fs->remove(PATH);
       write_empty_dense_file(_fs);
@@ -83,7 +83,7 @@ void LotatoNodeStore::loadIndex() {
     for (int s = 0; s < MAX; s++) {
       if (!bm_get(bm, s)) continue;
       if (f.read((uint8_t*)&rec, RECORD_SIZE) != (int)RECORD_SIZE) {
-        LOTATO_DBG_LN("node store: dense payload truncated at slot=%d — partial load", s);
+        ::lolog::LoLog::debug("lotato", "node store: dense payload truncated at slot=%d — partial load", s);
         break;
       }
       if (rec.magic == LOTATO_NODE_MAGIC) {
@@ -94,15 +94,15 @@ void LotatoNodeStore::loadIndex() {
       }
     }
     f.close();
-    LOTATO_DBG_LN("node store: loaded %d nodes from dense %s (%u bytes)", _count, PATH,
+    ::lolog::LoLog::debug("lotato", "node store: loaded %d nodes from dense %s (%u bytes)", _count, PATH,
                        (unsigned)fsz);
     return;
   }
   f.close();
-  LOTATO_DBG_LN("node store: non-dense or unreadable %s — removing, starting empty", PATH);
+  ::lolog::LoLog::debug("lotato", "node store: non-dense or unreadable %s — removing, starting empty", PATH);
   _fs->remove(PATH);
   if (!write_empty_dense_file(_fs)) {
-    LOTATO_DBG_LN("node store: failed to recreate empty dense after remove");
+    ::lolog::LoLog::debug("lotato", "node store: failed to recreate empty dense after remove");
   }
 }
 
@@ -162,7 +162,7 @@ bool LotatoNodeStore::writeRecord(int slot, const LotatoNodeRecord& rec) {
 
   File in = _fs->open(PATH, "r");
   if (!in) {
-    LOTATO_DBG_LN("node store: missing %s on write", PATH);
+    ::lolog::LoLog::debug("lotato", "node store: missing %s on write", PATH);
     return false;
   }
   uint8_t old_bm[BITMAP_BYTES];
@@ -170,21 +170,21 @@ bool LotatoNodeStore::writeRecord(int slot, const LotatoNodeRecord& rec) {
   in.seek(0);
   uint32_t hm = 0;
   if (in.read((uint8_t*)&hm, 4) != 4 || hm != kDenseMagic) {
-    LOTATO_DBG_LN("node store: write aborted — %s not dense (reboot to clear store)", PATH);
+    ::lolog::LoLog::debug("lotato", "node store: write aborted — %s not dense (reboot to clear store)", PATH);
     in.close();
     return false;
   }
   uint16_t hv = 0, hpad = 0;
   if (in.read((uint8_t*)&hv, 2) != 2 || in.read((uint8_t*)&hpad, 2) != 2 || hv != kDenseVersion ||
       in.read(old_bm, sizeof(old_bm)) != (int)sizeof(old_bm)) {
-    LOTATO_DBG_LN("node store: write aborted — corrupt dense header");
+    ::lolog::LoLog::debug("lotato", "node store: write aborted — corrupt dense header");
     in.close();
     return false;
   }
 
   File out = _fs->open(TMP, "w", true);
   if (!out) {
-    LOTATO_DBG_LN("node store: dense open tmp failed heap=%u", (unsigned)ESP.getFreeHeap());
+    ::lolog::LoLog::debug("lotato", "node store: dense open tmp failed heap=%u", (unsigned)ESP.getFreeHeap());
     in.close();
     return false;
   }
@@ -194,7 +194,7 @@ bool LotatoNodeStore::writeRecord(int slot, const LotatoNodeRecord& rec) {
   uint16_t pad = 0;
   if (out.write((const uint8_t*)&mag, 4) != 4 || out.write((const uint8_t*)&ver, 2) != 2 ||
       out.write((const uint8_t*)&pad, 2) != 2 || out.write(new_bm, sizeof(new_bm)) != (int)sizeof(new_bm)) {
-    LOTATO_DBG_LN("node store: dense write header/bitmap failed heap=%u", (unsigned)ESP.getFreeHeap());
+    ::lolog::LoLog::debug("lotato", "node store: dense write header/bitmap failed heap=%u", (unsigned)ESP.getFreeHeap());
     in.close();
     out.close();
     _fs->remove(TMP);
@@ -218,7 +218,7 @@ bool LotatoNodeStore::writeRecord(int slot, const LotatoNodeRecord& rec) {
       w = out.write((const uint8_t*)&rec, RECORD_SIZE);
     } else {
       if (!have_old) {
-        LOTATO_DBG_LN("node store: dense rewrite missing payload s=%d (slot=%d) heap=%u "
+        ::lolog::LoLog::debug("lotato", "node store: dense rewrite missing payload s=%d (slot=%d) heap=%u "
                             "spiffs_used=%u/%u",
                             s, slot, (unsigned)ESP.getFreeHeap(), (unsigned)LittleFS.usedBytes(),
                             (unsigned)LittleFS.totalBytes());
@@ -230,7 +230,7 @@ bool LotatoNodeStore::writeRecord(int slot, const LotatoNodeRecord& rec) {
       w = out.write((const uint8_t*)&old_r, RECORD_SIZE);
     }
     if (w != RECORD_SIZE) {
-      LOTATO_DBG_LN("node store: dense payload write failed s=%d wrote=%u need=%u out_pos=%u "
+      ::lolog::LoLog::debug("lotato", "node store: dense payload write failed s=%d wrote=%u need=%u out_pos=%u "
                          "spiffs_used=%u/%u heap=%u",
                          s, (unsigned)w, (unsigned)RECORD_SIZE, (unsigned)out.position(),
                          (unsigned)LittleFS.usedBytes(), (unsigned)LittleFS.totalBytes(),
@@ -246,18 +246,18 @@ bool LotatoNodeStore::writeRecord(int slot, const LotatoNodeRecord& rec) {
   in.close();
   out.close();
 
-  LOTATO_DBG_LN("node store write: dense tmp bytes=%u recs=%d heap=%u", (unsigned)out_sz, out_recs,
+  ::lolog::LoLog::debug("lotato", "node store write: dense tmp bytes=%u recs=%d heap=%u", (unsigned)out_sz, out_recs,
                       (unsigned)ESP.getFreeHeap());
 
   _fs->remove(PATH);
   if (!_fs->rename(TMP, PATH)) {
-    LOTATO_DBG_LN("node store: rename tmp->bin failed heap=%u tmp_gone=%d", (unsigned)ESP.getFreeHeap(),
+    ::lolog::LoLog::debug("lotato", "node store: rename tmp->bin failed heap=%u tmp_gone=%d", (unsigned)ESP.getFreeHeap(),
                         _fs->exists(TMP) ? 0 : 1);
     _fs->remove(TMP);
     return false;
   }
 
-  LOTATO_DBG_LN("node store write: ok slot=%d heap=%u", slot, (unsigned)ESP.getFreeHeap());
+  ::lolog::LoLog::debug("lotato", "node store write: ok slot=%d heap=%u", slot, (unsigned)ESP.getFreeHeap());
   return true;
 }
 
@@ -277,7 +277,7 @@ int LotatoNodeStore::put(const uint8_t* pub_key, const char* name, uint8_t type,
     if (slot < 0) {
       slot = evictLRU();
       slot_mode = 2;
-      LOTATO_DBG_LN("node store: store full, evicted LRU slot %d", slot);
+      ::lolog::LoLog::debug("lotato", "node store: store full, evicted LRU slot %d", slot);
     }
   }
   if (_idx_mtx) xSemaphoreGive(_idx_mtx);
@@ -293,7 +293,7 @@ int LotatoNodeStore::put(const uint8_t* pub_key, const char* name, uint8_t type,
   rec.gps_lon     = lon;
   rec.magic       = LOTATO_NODE_MAGIC;
 
-  LOTATO_DBG_LN("node store put: slot=%d mode=%s idx_count=%u last_advert=%lu type=%u heap=%u",
+  ::lolog::LoLog::debug("lotato", "node store put: slot=%d mode=%s idx_count=%u last_advert=%lu type=%u heap=%u",
                       slot, slot_mode == 0 ? "update" : (slot_mode == 1 ? "new" : "evict"),
                       (unsigned)_count, (unsigned long)last_advert, (unsigned)type,
                       (unsigned)ESP.getFreeHeap());
@@ -304,7 +304,7 @@ int LotatoNodeStore::put(const uint8_t* pub_key, const char* name, uint8_t type,
   }
 
   if (!writeRecord(slot, rec)) {
-    LOTATO_DBG_LN("node store: write failed slot=%d", slot);
+    ::lolog::LoLog::debug("lotato", "node store: write failed slot=%d", slot);
     return -1;
   }
 
@@ -322,7 +322,7 @@ int LotatoNodeStore::put(const uint8_t* pub_key, const char* name, uint8_t type,
 }
 
 void LotatoNodeStore::logFlushTargetsDebug() const {
-  if (!lotato_dbg_active()) return;
+  if (!::lolog::LoLog::isVerbose()) return;
   char line[384];
   size_t pos = 0;
   int listed = 0;
@@ -353,9 +353,9 @@ void LotatoNodeStore::logFlushTargetsDebug() const {
   }
 
   if (line[0]) {
-    LOTATO_DBG_LN("lotato CLI: flush — node ids: %s", line);
+    ::lolog::LoLog::debug("lotato", "lotato CLI: flush — node ids: %s", line);
     if (overflow > 0) {
-      LOTATO_DBG_LN("lotato CLI: flush — (%d more ids not listed)", overflow);
+      ::lolog::LoLog::debug("lotato", "lotato CLI: flush — (%d more ids not listed)", overflow);
     }
   }
 }
@@ -375,13 +375,14 @@ bool LotatoNodeStore::visibleMeshHeard(int slot) const {
 bool LotatoNodeStore::dueForIngest(int slot, uint32_t now_ms) const {
   (void)now_ms;
   if (slot < 0 || slot >= MAX || !_idx_mtx) return false;
-  if (!visibleMeshHeard(slot)) return false;
   xSemaphoreTake(_idx_mtx, portMAX_DELAY);
+  uint32_t la = _index[slot].last_advert;
   uint32_t lp = _index[slot].last_posted_unix;
   xSemaphoreGive(_idx_mtx);
-  if (lp == 0) return true;
+  if (la == 0) return false;  // slot empty
+  if (lp == 0) return true;   // never posted (fresh boot or flushed)
   time_t now = time(nullptr);
-  if (now < (time_t)1700000000) return true;
+  if (now < (time_t)1700000000) return true;  // no wall clock yet, post again
   uint32_t ref = LotatoConfig::instance().ingestRefreshSecs();
   return (uint64_t)now - (uint64_t)lp >= (uint64_t)ref;
 }
@@ -397,9 +398,12 @@ void LotatoNodeStore::markPosted(int slot, uint32_t now_unix) {
   xSemaphoreGive(_idx_mtx);
 }
 
-void LotatoNodeStore::flushIngestTtlVisible() {
+void LotatoNodeStore::flushAllTtl() {
   for (int s = 0; s < MAX; s++) {
-    if (!visibleMeshHeard(s)) continue;
+    if (_idx_mtx) xSemaphoreTake(_idx_mtx, portMAX_DELAY);
+    bool occupied = _index[s].last_advert != 0;
+    if (_idx_mtx) xSemaphoreGive(_idx_mtx);
+    if (!occupied) continue;
     LotatoNodeRecord r{};
     if (!readRecord(s, r)) continue;
     lotato_ingest_ttl_store().clear(r.pub_key);

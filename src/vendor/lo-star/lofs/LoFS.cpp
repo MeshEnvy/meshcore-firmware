@@ -2,6 +2,7 @@
 
 #include "backends/ExternalFlashBackend.h"
 #include "backends/InternalFlashBackend.h"
+#include "backends/RamBackend.h"
 #include "backends/SdBackend.h"
 
 #include <cstring>
@@ -46,7 +47,8 @@ bool normalize_virtual(const char* in, char* out, size_t cap) {
     int n = snprintf(out, cap, "/__int__/%s", in);
     return n > 0 && (size_t)n < cap;
   }
-  if (is_mount_prefix(in, "/__int__", 8) || is_mount_prefix(in, "/__ext__", 8) || is_mount_prefix(in, "/__sd__", 7)) {
+  if (is_mount_prefix(in, "/__int__", 8) || is_mount_prefix(in, "/__ext__", 8) ||
+      is_mount_prefix(in, "/__sd__", 7) || is_mount_prefix(in, "/__ram__", 8)) {
     strncpy(out, in, cap - 1);
     out[cap - 1] = '\0';
     return true;
@@ -198,6 +200,7 @@ void LoFS::mountDefaults() {
   auto& inb = lofs::InternalFlashBackend::instance();
   auto& exb = lofs::ExternalFlashBackend::instance();
   auto& sdb = lofs::SdBackend::instance();
+  auto& ram = lofs::RamBackend::instance();
 
   if (inb.available()) mount("/__int__", &inb);
 
@@ -208,6 +211,7 @@ void LoFS::mountDefaults() {
 #endif
 
   if (sdb.available()) mount("/__sd__", &sdb);
+  if (ram.available()) mount("/__ram__", &ram);
 }
 
 static File open_norm(const char* filepath, uint8_t mode) {

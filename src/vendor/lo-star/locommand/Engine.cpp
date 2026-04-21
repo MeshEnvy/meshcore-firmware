@@ -1,5 +1,7 @@
 #include "Engine.h"
 
+#include <lolog/LoLog.h>
+
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -379,6 +381,8 @@ void Engine::dispatch(const char* input_after_root, lomessage::Buffer& out, void
 
     Command* ch = find_child(cur, tok);
     if (!ch) {
+      ::lolog::LoLog::debug("locommand", "unknown token '%.32s' under '%s'", tok,
+                            prefix_buf[0] ? prefix_buf : _root.name);
       format_help_recursive(_root.name, cur, prefix_buf, out);
       return;
     }
@@ -386,6 +390,7 @@ void Engine::dispatch(const char* input_after_root, lomessage::Buffer& out, void
     size_t leaf_prefix_len = prefix_len;
 
     if (prefix_len + strlen(ch->name) + 2 > sizeof(prefix_buf)) {
+      ::lolog::LoLog::debug("locommand", "command path too long at '%s'", prefix_buf);
       out.append("Err - command path too long\n");
       return;
     }
@@ -421,6 +426,7 @@ void Engine::dispatch(const char* input_after_root, lomessage::Buffer& out, void
       continue;
     }
 
+    ::lolog::LoLog::warn("locommand", "invalid command tree at '%s%s'", prefix_buf, ch->name);
     out.append("Err - invalid command tree\n");
     return;
   }

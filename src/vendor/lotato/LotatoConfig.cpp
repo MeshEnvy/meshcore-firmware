@@ -4,7 +4,7 @@
 
 #include <cstring>
 
-#include <LotatoDebug.h>
+#include <lolog/LoLog.h>
 #include <LotatoIngestor.h>
 #include <lofi/Lofi.h>
 #include <losettings/ConfigHub.h>
@@ -51,7 +51,6 @@ void LotatoConfig::refreshFromLoSettings() {
   losettings::LoSettings wf("lofi");
   lt.getString("ingest.url", _url, sizeof(_url), "");
   lt.getString("ingest.token", _token, sizeof(_token), "");
-  _debug              = lt.getBool("debug", false);
   _ingest_paused      = lt.getBool("ingest.paused", false);
   _ingest_visibility_secs = lt.getUInt("ingest.visibility_secs", 259200u);
   _ingest_refresh_secs    = lt.getUInt("ingest.refresh_secs", 900u);
@@ -99,19 +98,6 @@ void LotatoConfig::registerConfigSchema() {
        0,
        nullptr,
        "When true, stops POSTing node batches to ingest",
-       false,
-       false,
-       0,
-       0,
-       lotato_on_cfg_changed,
-       nullptr},
-      {"debug",
-       losettings::ConfigValueKind::Bool,
-       false,
-       0,
-       0,
-       nullptr,
-       "Lotato Serial debug logging",
        false,
        false,
        0,
@@ -196,7 +182,7 @@ bool LotatoConfig::forgetKnownWifi(const char* ssid) {
   bool ok = lofi::Lofi::instance().forgetKnownWifi(ssid);
   if (!ok) return false;
   refreshFromLoSettings();
-  LOTATO_DBG_LN("lotato cfg: forgot wifi ssid=\"%.32s\"", ssid);
+  ::lolog::LoLog::debug("lotato", "lotato cfg: forgot wifi ssid=\"%.32s\"", ssid);
   return true;
 }
 
@@ -219,16 +205,8 @@ void LotatoConfig::setIngestOrigin(const char* u) {
   losettings::LoSettings st("lotato");
   st.setString("ingest.url", buf);
   refreshFromLoSettings();
-  LOTATO_DBG_LN("lotato cfg: ingest origin set (len=%u)", (unsigned)strlen(_url));
+  ::lolog::LoLog::debug("lotato", "lotato cfg: ingest origin set (len=%u)", (unsigned)strlen(_url));
 }
-
-void LotatoConfig::setDebug(bool on) {
-  _debug = on;
-  losettings::LoSettings st("lotato");
-  st.setBool("debug", on);
-}
-
-void LotatoConfig::toggleDebug() { setDebug(!debugEnabled()); }
 
 extern "C" void lofi_on_lo_settings_changed(void) {
   LotatoConfig::instance().refreshFromLoSettings();

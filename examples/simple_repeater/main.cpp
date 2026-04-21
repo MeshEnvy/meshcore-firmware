@@ -7,10 +7,10 @@
 #include <WiFi.h>
 #include <LotatoConfig.h>
 #include <LotatoIngestor.h>
-#include <LotatoDebug.h>
-#include <LotatoSerialCli.h>
 #include <lofi/Lofi.h>
 #endif
+#include <lolog/LoLog.h>
+#include <loserial/LoSerial.h>
 #include <lofs/LoFS.h>
 
 #ifdef DISPLAY_CLASS
@@ -45,6 +45,7 @@ void setup() {
 #endif
   Serial.begin(115200);
   delay(1000);
+  ::loserial::LoSerial::begin(Serial);
 
 #ifdef ESP32
   // VFS logs [E] for every fopen of a missing file; LoDB/LoSettings treat "missing" as normal
@@ -98,6 +99,8 @@ void setup() {
 #endif
 
   LoFS::mountDefaults();
+  ::lolog::LoLog::registerConfigSchema();
+  ::lolog::LoLog::loadFromSettings();
   if (!store.load("_main", the_mesh.self_id)) {
     MESH_DEBUG_PRINTLN("Generating new keypair");
     the_mesh.self_id = radio_new_identity();   // create new random identity
@@ -108,8 +111,9 @@ void setup() {
     store.save("_main", the_mesh.self_id);
   }
 
-  Serial.print("Repeater ID: ");
-  mesh::Utils::printHex(Serial, the_mesh.self_id.pub_key, PUB_KEY_SIZE); Serial.println();
+  ::loserial::LoSerial::printf("Repeater ID: ");
+  mesh::Utils::printHex(::loserial::LoSerial::stream(), the_mesh.self_id.pub_key, PUB_KEY_SIZE);
+  ::loserial::LoSerial::printLine("");
 
   command[0] = 0;
 
@@ -179,22 +183,16 @@ void loop() {
     command[len - 1] = 0;  // replace newline with C string null terminator
     char reply[MyMesh::kCliReplyCap];
     reply[0] = '\0';
-#ifdef ESP32
     char cmd_snap[sizeof(command)];
     strncpy(cmd_snap, command, sizeof(cmd_snap) - 1);
     cmd_snap[sizeof(cmd_snap) - 1] = '\0';
-#endif
     the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
-#ifdef ESP32
-    lotato_dbg_trace_cli_exchange("serial", cmd_snap, reply);
-#endif
+    if (::lolog::LoLog::isVerbose()) {
+      ::lolog::LoLog::debug("lotato.cli", "serial cmd: %.200s", cmd_snap);
+      ::lolog::LoLog::debug("lotato.cli", "serial reply: %.200s", reply);
+    }
     if (reply[0]) {
-#ifdef ESP32
-      lotato_serial_print_mesh_cli_reply(reply);
-#else
-      Serial.print("  -> ");
-      Serial.println(reply);
-#endif
+      ::loserial::LoSerial::printMeshCliReply(reply);
     }
 
     command[0] = 0;  // reset command buffer
@@ -207,7 +205,7 @@ void loop() {
     if (userBtnDownAt == 0) {
       userBtnDownAt = millis();
     } else if ((unsigned long)(millis() - userBtnDownAt) >= USER_BTN_HOLD_OFF_MILLIS) {
-      Serial.println("Powering off...");
+      ::loserial::LoSerial::printLine("Powering off...");
       board.powerOff();  // does not return
     }
   } else {

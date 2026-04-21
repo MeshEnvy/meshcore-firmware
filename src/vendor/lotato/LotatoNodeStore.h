@@ -41,7 +41,8 @@ static_assert(sizeof(LotatoNodeRecord) == 84, "LotatoNodeRecord layout changed")
  * and replaced with an empty store (no legacy flat format).
  *
  * An in-memory index tracks {pub_key prefix, last_advert, last_posted_unix} for fast dedup,
- * LRU eviction, and ingest scheduling. Last-post times persist in LoDB (`ingest_ttl`).
+ * LRU eviction, and ingest scheduling. Last-post times live in the `ingest_ttl` LoDB
+ * table on the `/__ram__` ramdisk — RAM-only, wiped on reboot.
  */
 class LotatoNodeStore {
 public:
@@ -64,10 +65,10 @@ public:
   int put(const uint8_t* pub_key, const char* name, uint8_t type,
           uint32_t last_advert, int32_t lat, int32_t lon);
 
-  /** True if this occupied slot should be included in the next ingest batch (visible + refresh due). */
+  /** True if this occupied slot should be included in the next ingest batch (TTL-driven only). */
   bool dueForIngest(int slot, uint32_t now_ms) const;
 
-  /** Record successful POST at wall time @p now_unix (LoDB + RAM index). */
+  /** Record successful POST at wall time @p now_unix (RAM-TTL + RAM index). */
   void markPosted(int slot, uint32_t now_unix);
 
   /** Read the full on-disk record for slot. Returns false on I/O error. */
@@ -76,8 +77,8 @@ public:
   /** Total number of occupied slots. */
   int count() const { return _count; }
 
-  /** Clear persisted last-post time for mesh-visible slots only (makes them due again). */
-  void flushIngestTtlVisible();
+  /** Clear last-post time for ALL occupied slots, making them due again. */
+  void flushAllTtl();
 
   /** Remove stale slots not mesh-heard for `lotato.ingest.gc_stale_secs` (no-op if wall clock invalid). */
   void gcSweepStale();

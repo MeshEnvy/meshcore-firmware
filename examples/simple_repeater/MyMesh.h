@@ -221,6 +221,7 @@ public:
   static void lotato_h_pause(locommand::Context& ctx);
   static void lotato_h_resume(locommand::Context& ctx);
   static void lotato_h_contacts(locommand::Context& ctx);
+  static void lotato_h_force(locommand::Context& ctx);
   static void lotato_h_flush(locommand::Context& ctx);
   static void lotato_h_wifi_status(locommand::Context& ctx);
   static void lotato_h_wifi_scan(locommand::Context& ctx);

@@ -67,7 +67,7 @@ Lotato releases use annotated git tags of the form `lotato-v<lotato>-repeater-v<
 - **ConfigHub / `config` CLI:** typed `lotato.*` and `lofi.*` keys in LoSettings with `config ls|get|set|unset`.
 - **Ingest:** visibility (`lotato.ingest.visibility_secs`), refresh interval (`ingest.refresh_secs`), GC (`ingest.gc_stale_secs`); LoDB `ingest_ttl` persists last-post unix per node; `lotato status` shows **Due**; throttled GC removes stale slots.
 - Rename MeshForge-facing naming and unify **Lotato** branding in CLI, configuration, and source (follow-up to the Potato Mesh ingestor naming used in earlier tags).
-- **Debug logging:** no compile-time `LOTATO_DEBUG`; use `config set lotato.debug on|off` (LoSettings). `lotato status` shows `Debug: on|off`.
+- **Debug logging:** no compile-time `LOTATO_DEBUG`; use `config set lolog.verbose on|off` (LoSettings, via the new `lolog` + `loserial` libraries that back all lo* logging across ESP32 and nRF52). `lotato status` shows `Debug: on|off` from `LoLog::isVerbose()`.
 - **CLI:** bare `lotato` prints the same help as `lotato help` (use `lotato status` for the WiFi / ingest snapshot).
 - **`locommand` + `lomessage`:** `Engine` / `Router` / `ArgSpec`; `Buffer` + `Queue` for chunked replies. **Breaking:** WiFi commands are `wifi …` (not `lotato wifi …`); scan is `wifi scan`.
 - **Long Lotato replies:** oversized replies go through the mesh FIFO or drip on USB serial; `wifi scan` returns one full list.

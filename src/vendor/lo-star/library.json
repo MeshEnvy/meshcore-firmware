@@ -19,7 +19,9 @@
       "+<locommand/*.cpp>",
       "+<lodb/*.cpp>",
       "+<lofi/*.cpp>",
+      "+<lolog/*.cpp>",
       "+<lomessage/*.cpp>",
+      "+<loserial/*.cpp>",
       "+<losettings/*.cpp>",
       "+<losettings/*.pb.c>",
       "+<lofi/*.pb.c>",
@@ -28,6 +30,8 @@
     ],
     "flags": [
       "-I lodb/include",
+      "-I lolog",
+      "-I loserial",
       "-I losettings/include",
       "-I losettings",
       "-I lofi",

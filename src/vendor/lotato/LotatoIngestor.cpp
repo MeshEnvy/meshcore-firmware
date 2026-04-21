@@ -5,7 +5,7 @@
 #include <MeshCore.h>
 #include <helpers/AdvertDataHelpers.h>
 #include <LotatoConfig.h>
-#include <LotatoDebug.h>
+#include <lolog/LoLog.h>
 #include <LotatoNodeStore.h>
 #include <lofi/Lofi.h>
 #include <losettings/LoSettings.h>
@@ -75,14 +75,14 @@ static bool ingest_copy_url_hostname(const char* url, char* host_out, size_t cap
 }
 
 static void log_ingest_dns_for_host(const char* full_url) {
-  if (!lotato_dbg_active()) return;
+  if (!::lolog::LoLog::isVerbose()) return;
   char host[96];
   if (!ingest_copy_url_hostname(full_url, host, sizeof(host))) return;
   IPAddress ip;
   if (WiFi.hostByName(host, ip)) {
-    LOTATO_DBG_LN("lotato ingest: DNS ok host=%.64s -> %s", host, ip.toString().c_str());
+    ::lolog::LoLog::debug("lotato", "lotato ingest: DNS ok host=%.64s -> %s", host, ip.toString().c_str());
   } else {
-    LOTATO_DBG_LN("lotato ingest: DNS failed host=%.64s", host);
+    ::lolog::LoLog::debug("lotato", "lotato ingest: DNS failed host=%.64s", host);
   }
 }
 
@@ -101,7 +101,7 @@ static int g_last_http_code = 0;
 static bool lotato_post(const char* api_path, const char* post_label, const char* body, uint16_t n) {
   char full_url[256];
   if (!build_ingest_post_url_for_path(full_url, sizeof(full_url), api_path)) {
-    LOTATO_DBG_LN("post %s: url build failed", post_label);
+    ::lolog::LoLog::debug("lotato", "post %s: url build failed", post_label);
     g_last_http_code = 0;
     return false;
   }
@@ -113,10 +113,10 @@ static bool lotato_post(const char* api_path, const char* post_label, const char
                                            ngrok_val);
   g_last_http_code = r.status;
   if (r.status >= 200 && r.status < 300) {
-    LOTATO_DBG_LN("post %s: HTTP %d ok", post_label, r.status);
+    ::lolog::LoLog::debug("lotato", "post %s: HTTP %d ok", post_label, r.status);
     return true;
   }
-  LOTATO_DBG_LN("post %s: HTTP %d err=%d", post_label, r.status, r.err);
+  ::lolog::LoLog::debug("lotato", "post %s: HTTP %d err=%d", post_label, r.status, r.err);
   return false;
 }
 
@@ -131,7 +131,7 @@ void lotato_register_sta_dns_override() {
 }
 
 void lotato_register_wifi_event_logging() {
-  // Lofi already logs STA events via weak `lofi_log`; a strong override routes them through LOTATO_DBG.
+  // Lofi already logs STA events via weak `lofi_log`; the strong override below routes them through LoLog.
 }
 
 void lotato_register_sta_known_wifi_failover() {
@@ -140,7 +140,7 @@ void lotato_register_sta_known_wifi_failover() {
 
 void lotato_sta_failover_suppress(bool suppress) { lofi::Lofi::instance().staFailoverSuppress(suppress); }
 
-extern "C" void lofi_log(const char* msg) { LOTATO_DBG_LN("%s", msg); }
+extern "C" void lofi_log(const char* msg) { ::lolog::LoLog::debug("lofi", "%s", msg); }
 
 namespace {
 
@@ -192,7 +192,7 @@ void lotato_ingest_clear_queue() {
     g_batch_n = 0;
     g_batch_store = nullptr;
     g_batch_next_retry_ms = g_batch_fail_backoff_ms = 0;
-    LOTATO_DBG_LN("ingest batch cleared");
+    ::lolog::LoLog::debug("lotato", "ingest batch cleared");
     return;
   }
   xSemaphoreTake(g_q_mtx, portMAX_DELAY);
@@ -201,7 +201,7 @@ void lotato_ingest_clear_queue() {
   g_batch_store = nullptr;
   g_batch_next_retry_ms = g_batch_fail_backoff_ms = 0;
   xSemaphoreGive(g_q_mtx);
-  LOTATO_DBG_LN("ingest batch cleared");
+  ::lolog::LoLog::debug("lotato", "ingest batch cleared");
   notify_worker();
 }
 
@@ -317,7 +317,7 @@ static void maybe_post_ingestor_heartbeat(const uint8_t self_pub[PUB_KEY_SIZE]) 
   char body[320];
   uint16_t blen = 0;
   if (!build_ingestor_heartbeat_body(self_pub, body, sizeof(body), &blen)) {
-    LOTATO_DBG_LN("lotato ingest: ingestor heartbeat JSON build failed");
+    ::lolog::LoLog::debug("lotato", "lotato ingest: ingestor heartbeat JSON build failed");
     return;
   }
 
@@ -325,9 +325,9 @@ static void maybe_post_ingestor_heartbeat(const uint8_t self_pub[PUB_KEY_SIZE]) 
 
   if (ok) {
     g_ingestor_heartbeat_ok_ms = millis();
-    LOTATO_DBG_LN("lotato ingest: ingestor registered (meshcore)");
+    ::lolog::LoLog::debug("lotato", "lotato ingest: ingestor registered (meshcore)");
   } else {
-    LOTATO_DBG_LN("lotato ingest: ingestor POST failed (nodes will retry; protocol may default)");
+    ::lolog::LoLog::debug("lotato", "lotato ingest: ingestor POST failed (nodes will retry; protocol may default)");
   }
 }
 
@@ -468,8 +468,8 @@ static void try_build_batch_from_store(LotatoNodeStore& store, const uint8_t sel
   for (uint8_t i = 0; i < n; i++) memcpy(g_batch_node_ids[i], batch_ids[i], 12);
   memcpy(g_batch_self_pk, self_pk, PUB_KEY_SIZE);
   g_batch_store = &store;
-  if (lotato_dbg_active()) {
-    LOTATO_DBG_LN("lotato ingest: built batch %u nodes %u bytes", (unsigned)n, (unsigned)merged_len);
+  if (::lolog::LoLog::isVerbose()) {
+    ::lolog::LoLog::debug("lotato", "lotato ingest: built batch %u nodes %u bytes", (unsigned)n, (unsigned)merged_len);
   }
 }
 
@@ -489,12 +489,12 @@ bool ingest_try_step() {
     return false;
   }
   if (WiFi.status() != WL_CONNECTED) {
-    if (lotato_dbg_active()) {
+    if (::lolog::LoLog::isVerbose()) {
       uint32_t t = millis();
       if (g_last_wifi_down_log_ms == 0 ||
           (int32_t)(t - g_last_wifi_down_log_ms) >= (int32_t)LOTATO_WIFI_DOWN_LOG_INTERVAL_MS) {
         g_last_wifi_down_log_ms = t;
-        LOTATO_DBG_LN("ingest: waiting on WiFi (status=%d)", (int)WiFi.status());
+        ::lolog::LoLog::debug("lotato", "ingest: waiting on WiFi (status=%d)", (int)WiFi.status());
       }
     }
     xSemaphoreGive(g_q_mtx);
@@ -571,7 +571,7 @@ void ensure_worker() {
   TaskHandle_t created = nullptr;
   if (xTaskCreate(ingest_worker_entry, "lotato-ingest", LOTATO_INGEST_WORKER_STACK,
                    nullptr, 1, &created) != pdPASS) {
-    LOTATO_DBG_LN("ingest worker xTaskCreate failed");
+    ::lolog::LoLog::debug("lotato", "ingest worker xTaskCreate failed");
     return;
   }
   portENTER_CRITICAL(&g_worker_init);
@@ -587,41 +587,6 @@ void ensure_worker() {
 } // namespace
 
 void lotato_ingest_restart_after_config() { lotato_ingest_clear_queue(); }
-
-namespace {
-
-void dbg_serial_write_full_body(const char* body) {
-  if (!body || !body[0]) return;
-  constexpr size_t kChunk = 48;
-  size_t n = 0;
-  for (const char* p = body; *p != '\0'; ++p) {
-    Serial.write(static_cast<uint8_t>(*p));
-    if (++n % kChunk == 0) yield();
-  }
-}
-
-} // namespace
-
-void lotato_dbg_trace_cli_exchange(const char* route_tag, const char* cmd_snapshot, const char* reply) {
-  if (!lotato_dbg_active()) return;
-  const char* tag = route_tag ? route_tag : "?";
-  const char* cmd = cmd_snapshot ? cmd_snapshot : "";
-  const char* rp = reply ? reply : "";
-  Serial.print("Lotato: CLI ");
-  Serial.print(tag);
-  Serial.print(": cmd len=");
-  Serial.print((unsigned)strlen(cmd));
-  Serial.print("\r\n");
-  dbg_serial_write_full_body(cmd);
-  Serial.print("\r\n");
-  Serial.print("Lotato: CLI ");
-  Serial.print(tag);
-  Serial.print(": reply len=");
-  Serial.print((unsigned)strlen(rp));
-  Serial.print("\r\n");
-  dbg_serial_write_full_body(rp);
-  Serial.print("\r\n");
-}
 
 // --- Public LotatoIngestor methods ---
 

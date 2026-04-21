@@ -7,19 +7,15 @@
 #include <WiFi.h>
 #include <cctype>
 #include <LotatoCliCtx.h>
-#include <LotatoDebug.h>
+#include <lolog/LoLog.h>
 #include <LotatoIngestTtl.h>
 #include <LotatoNodeStore.h>
-#include <LotatoSerialCli.h>
+#include <loserial/LoSerial.h>
 #include <locommand/Command.h>
 #include <locommand/Router.h>
 #include <lofi/Lofi.h>
 #include <lomessage/Buffer.h>
 #include <losettings/ConfigHub.h>
-#endif
-
-#ifndef LOTATO_DBG_LN
-#define LOTATO_DBG_LN(...) ((void)0)
 #endif
 
 namespace {
@@ -72,7 +68,7 @@ void scan_complete_cb(void*, const char* text) {
   }
   if (s_scan_from_serial) {
     s_scan_from_serial = false;
-    lotato_serial_print_mesh_cli_reply(text);
+    ::loserial::LoSerial::printMeshCliReply(text);
   }
 }
 
@@ -91,7 +87,7 @@ void connect_complete_cb(void*, bool ok, const char* detail) {
   }
   if (s_connect_from_serial) {
     s_connect_from_serial = false;
-    lotato_serial_print_mesh_cli_reply(msg);
+    ::loserial::LoSerial::printMeshCliReply(msg);
   }
 }
 }  // namespace
@@ -544,10 +540,9 @@ const char *MyMesh::getLogDateTime() {
 
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 #if MESH_PACKET_LOGGING
-  Serial.print(getLogDateTime());
-  Serial.print(" RAW: ");
-  mesh::Utils::printHex(Serial, raw, len);
-  Serial.println();
+  ::loserial::LoSerial::printf("%s RAW: ", getLogDateTime());
+  mesh::Utils::printHex(::loserial::LoSerial::stream(), raw, len);
+  ::loserial::LoSerial::printLine("");
 #endif
 }
 
@@ -740,11 +735,11 @@ void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32
       id_hex[_i*2+1] = hexd[id.pub_key[_i] & 0xf];
     }
     id_hex[8] = '\0';
-    LOTATO_DBG_LN("advert: !%s name=\"%.32s\" type=%u hops=%u ts=%lu gps=%s",
+    ::lolog::LoLog::debug("lotato", "advert: !%s name=\"%.32s\" type=%u hops=%u ts=%lu gps=%s",
                         id_hex, name, (unsigned)atype, (unsigned)packet->path_len,
                         (unsigned long)timestamp, parser.hasLatLon() ? "yes" : "no");
     int slot = _node_store.put(id.pub_key, name, atype, timestamp, lat, lon);
-    LOTATO_DBG_LN("advert: !%s stored slot=%d (total=%d)", id_hex, slot, _node_store.count());
+    ::lolog::LoLog::debug("lotato", "advert: !%s stored slot=%d (total=%d)", id_hex, slot, _node_store.count());
   }
 #endif
 }
@@ -803,7 +798,19 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       // len can be > original length, but 'text' will be padded with zeroes
       null_terminate_mesh_data(data, len);
 #ifdef ESP32
-      lotato_dbg_mesh_txt_rx(sender_timestamp, data[4], flags, len, is_retry ? 1 : 0, (const char*)&data[5]);
+      if (::lolog::LoLog::isVerbose()) {
+        const char* cmd_preview = (const char*)&data[5];
+        size_t cmd_len = strlen(cmd_preview);
+        ::lolog::LoLog::debug("lotato",
+                              "mesh txt rx: ts=%lu raw_b4=0x%02x txt_flags=%u decrypt_len=%zu is_retry=%d",
+                              (unsigned long)sender_timestamp, (unsigned)data[4], (unsigned)flags, len,
+                              is_retry ? 1 : 0);
+        if (cmd_len) {
+          unsigned show = cmd_len > 200u ? 200u : (unsigned)cmd_len;
+          ::lolog::LoLog::debug("lotato", "mesh txt cmd len=%u preview: \"%.*s\"%s", (unsigned)cmd_len,
+                                (int)show, cmd_preview, cmd_len > 200u ? "..." : "");
+        }
+      }
 #endif
 
       if (flags == TXT_TYPE_PLAIN) { // for legacy CLI, send Acks
@@ -831,7 +838,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
         if (s_async_cli_busy) {
           strncpy(reply, "Err - busy (operation in progress)", MyMesh::kCliReplyCap - 1);
           reply[MyMesh::kCliReplyCap - 1] = '\0';
-          LOTATO_DBG_LN("cli reply: reject (busy) cmd=%.60s", command);
+          ::lolog::LoLog::debug("lotato", "cli reply: reject (busy) cmd=%.60s", command);
         } else {
           // preset routing snapshot so async ops (e.g. wifi list) can push results later
           s_scan_reply_target.valid          = true;
@@ -850,21 +857,35 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
           // if an async op started it set s_async_cli_busy; leave snapshot valid for completion push
           if (!s_async_cli_busy) s_scan_reply_target.valid = false;
           _lotato_txt_route.valid = false;
-          lotato_dbg_trace_cli_exchange("mesh", s_on_peer_mesh_cli_snap, reply);
+          if (::lolog::LoLog::isVerbose()) {
+            ::lolog::LoLog::debug("lotato.cli", "mesh cmd: %.200s", s_on_peer_mesh_cli_snap);
+            ::lolog::LoLog::debug("lotato.cli", "mesh reply: %.200s", reply);
+          }
         }
 #else
         handleCommand(sender_timestamp, command, reply);
 #endif
       }
 #ifdef ESP32
-      {
+      if (::lolog::LoLog::isVerbose()) {
         int will_q = (!is_retry && reply[0] != '\0') ? 1 : 0;
-        lotato_dbg_mesh_after_handle(reply, will_q);
+        size_t rn = strlen(reply);
+        ::lolog::LoLog::debug("lotato", "mesh after handle: reply_len=%zu will_enqueue=%d", rn, will_q);
+        if (rn) {
+          unsigned show = rn > 200u ? 200u : (unsigned)rn;
+          ::lolog::LoLog::debug("lotato", "mesh reply preview: \"%.*s\"%s", (int)show, reply,
+                                rn > 200u ? "..." : "");
+        }
       }
 #endif
       if (strlen(reply) > 0) {
 #ifdef ESP32
-        lotato_dbg_mesh_enqueue_short(reply);
+        if (::lolog::LoLog::isVerbose()) {
+          size_t rn = strlen(reply);
+          unsigned show = rn > 200u ? 200u : (unsigned)rn;
+          ::lolog::LoLog::debug("lotato", "mesh enqueue len=%u preview: \"%.*s\"%s", (unsigned)rn,
+                                (int)show, reply, rn > 200u ? "..." : "");
+        }
 #endif
         enqueueTxtCliReply(i, client->out_path_len, client->out_path,
                            packet->getPathHashSize(), sender_timestamp, reply);
@@ -1070,15 +1091,19 @@ void MyMesh::begin(FILESYSTEM *fs) {
   _cli_lotato.add("status", &MyMesh::lotato_h_status, nullptr, nullptr, "show lotato/ingest status");
   _cli_lotato.add("pause", &MyMesh::lotato_h_pause, nullptr, nullptr, "pause ingest (shortcut for config)");
   _cli_lotato.add("resume", &MyMesh::lotato_h_resume, nullptr, nullptr, "resume ingest (shortcut for config)");
-  _cli_lotato.add("contacts", &MyMesh::lotato_h_contacts, nullptr, nullptr, "node store visibility summary");
-  _cli_lotato.add("flush", &MyMesh::lotato_h_flush, nullptr, nullptr, "clear last-post for visible nodes");
-  _cli_lotato.setRootBrief("ingest status / flush / contacts");
+  _cli_lotato.add("contacts", &MyMesh::lotato_h_contacts, nullptr, nullptr, "node store summary");
+  _cli_lotato.add("force", &MyMesh::lotato_h_force, nullptr, nullptr, "clear TTL for all nodes (re-ingest all)");
+  _cli_lotato.add("flush", &MyMesh::lotato_h_flush, nullptr, nullptr, "alias of force");
+  _cli_lotato.setRootBrief("ingest status / force / contacts");
 
   _cli_router.clear();
   _cli_router.add(&_cli_lotato);
   _cli_router.add(&_cli_wifi);
   _cli_router.add(&_cli_config);
-  lotato_dbg_task_stack("begin");
+  {
+    UBaseType_t words = uxTaskGetStackHighWaterMark(nullptr);
+    ::lolog::LoLog::info("lotato.stack", "begin: free_bytes=%u", (unsigned)(words * sizeof(StackType_t)));
+  }
 #endif
   // TODO: key_store.begin();
   region_map.load(_fs);
@@ -1165,11 +1190,18 @@ void MyMesh::dumpLogFile() {
   File f = _fs->open(PACKET_LOG_FILE);
 #endif
   if (f) {
+    char buf[64];
+    size_t n = 0;
     while (f.available()) {
       int c = f.read();
       if (c < 0) break;
-      Serial.print((char)c);
+      buf[n++] = (char)c;
+      if (n == sizeof(buf)) {
+        ::loserial::LoSerial::writeChunked(buf, n);
+        n = 0;
+      }
     }
+    if (n) ::loserial::LoSerial::writeChunked(buf, n);
     f.close();
   }
 }
@@ -1354,14 +1386,14 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       }
     }
   } else if (sender_timestamp == 0 && strcmp(command, "get acl") == 0) {
-    Serial.println("ACL:");
+    ::loserial::LoSerial::printLine("ACL:");
     for (int i = 0; i < acl.getNumClients(); i++) {
       auto c = acl.getClientByIdx(i);
       if (c->permissions == 0) continue;  // skip deleted (or guest) entries
 
-      Serial.printf("%02X ", c->permissions);
-      mesh::Utils::printHex(Serial, c->id.pub_key, PUB_KEY_SIZE);
-      Serial.printf("\n");
+      ::loserial::LoSerial::printf("%02X ", c->permissions);
+      mesh::Utils::printHex(::loserial::LoSerial::stream(), c->id.pub_key, PUB_KEY_SIZE);
+      ::loserial::LoSerial::printLine("");
     }
     reply[0] = 0;
   } else if (memcmp(command, "region", 6) == 0) {
@@ -1476,14 +1508,23 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     }
 #ifdef ESP32
   } else if (_cli_router.matchesAnyRoot(command) || _cli_router.matchesGlobalHelp(command)) {
-    lotato_dbg_task_stack("cli pre");
+    {
+      UBaseType_t words = uxTaskGetStackHighWaterMark(nullptr);
+      ::lolog::LoLog::info("lotato.stack", "cli pre: free_bytes=%u",
+                           (unsigned)(words * sizeof(StackType_t)));
+    }
     LotatoCliCtx lctx{this, sender_timestamp};
     lomessage::Buffer buf(MyMesh::kCliReplyCap * 4);
     if (_cli_router.dispatch(command, buf, &lctx)) {
-      lotato_dbg_lotato_dispatch_stats(buf.length(), buf.truncated() ? 1 : 0);
+      ::lolog::LoLog::debug("lotato", "lotato dispatch: out_len=%u truncated=%d",
+                            (unsigned)buf.length(), buf.truncated() ? 1 : 0);
       deliverLotatoReply(sender_timestamp, buf.c_str(), reply);
     }
-    lotato_dbg_task_stack("cli post");
+    {
+      UBaseType_t words = uxTaskGetStackHighWaterMark(nullptr);
+      ::lolog::LoLog::info("lotato.stack", "cli post: free_bytes=%u",
+                           (unsigned)(words * sizeof(StackType_t)));
+    }
 #endif
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
@@ -1521,7 +1562,7 @@ void MyMesh::lotato_h_status(locommand::Context& ctx) {
   else snprintf(code_str, sizeof(code_str), "%d", code);
   const char* token_str = cfg.apiToken()[0] ? "set" : "(none)";
   const char* url_str = cfg.ingestOrigin()[0] ? cfg.ingestOrigin() : "(none)";
-  const char* dbg_str = cfg.debugEnabled() ? "on" : "off";
+  const char* dbg_str = ::lolog::LoLog::isVerbose() ? "on" : "off";
   const int due = self->_node_store.countDueNodes();
   if (wl == WL_CONNECTED) {
     ctx.out.appendf("WiFi: %s\nSSID: %s\nIP: %s\nNodes: %d\nDue: %d\nPaused: %s\nLast API Response: %s\nURL: %s\nToken: %s\nDebug: %s",
@@ -1551,20 +1592,21 @@ void MyMesh::lotato_h_resume(locommand::Context& ctx) {
 void MyMesh::lotato_h_contacts(locommand::Context& ctx) {
   auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
   LotatoConfig& cfg = LotatoConfig::instance();
-  ctx.out.appendf("Nodes: %d\nVisible: %d\nDue: %d\nRefresh: %lus\nVisibility: %lus\nGC: %lus\n",
-                  lc->self->_node_store.count(), lc->self->_node_store.countVisibleNodes(),
-                  lc->self->_node_store.countDueNodes(), (unsigned long)cfg.ingestRefreshSecs(),
-                  (unsigned long)cfg.ingestVisibilitySecs(), (unsigned long)cfg.ingestGcStaleSecs());
+  ctx.out.appendf("Nodes: %d\nDue: %d\nRefresh: %lus\nGC: %lus\n",
+                  lc->self->_node_store.count(), lc->self->_node_store.countDueNodes(),
+                  (unsigned long)cfg.ingestRefreshSecs(), (unsigned long)cfg.ingestGcStaleSecs());
 }
 
-void MyMesh::lotato_h_flush(locommand::Context& ctx) {
+void MyMesh::lotato_h_force(locommand::Context& ctx) {
   auto* lc = static_cast<LotatoCliCtx*>(ctx.app_ctx);
-  lc->self->_node_store.flushIngestTtlVisible();
+  lc->self->_node_store.flushAllTtl();
   lc->self->_node_store.logFlushTargetsDebug();
   const int due = lc->self->_node_store.countDueNodes();
-  LOTATO_DBG_LN("lotato CLI: flush — visible TTL cleared, due=%d", due);
+  ::lolog::LoLog::debug("lotato", "lotato CLI: force — TTL cleared for all nodes, due=%d", due);
   ctx.out.appendf("OK - due nodes: %d", due);
 }
+
+void MyMesh::lotato_h_flush(locommand::Context& ctx) { lotato_h_force(ctx); }
 
 void MyMesh::lotato_h_wifi_status(locommand::Context& ctx) {
   LotatoConfig& cfg = LotatoConfig::instance();
@@ -1626,7 +1668,7 @@ void MyMesh::lotato_h_wifi_connect(locommand::Context& ctx) {
   lc->self->_ingestor.restartAfterConfigChange();
   s_connect_from_serial = (lc->sender_ts == 0);
   lf.beginConnect(ssid_to_use, pwd_to_use);
-  LOTATO_DBG_LN("lotato CLI: wifi connecting ssid=%s modem_sleep=off", ssid_to_use);
+  ::lolog::LoLog::debug("lotato", "lotato CLI: wifi connecting ssid=%s modem_sleep=off", ssid_to_use);
   ctx.out.appendf("Connecting to %s...", ssid_to_use);
 }
 
@@ -1656,7 +1698,7 @@ void MyMesh::deliverLotatoReply(uint32_t sender_ts, const char* text, char* repl
                         _lotato_txt_route.path_hash_size, sender_ts, text);
     return;
   }
-  lotato_serial_print_mesh_cli_reply(text);
+  ::loserial::LoSerial::printMeshCliReply(text);
 }
 
 namespace lofi {
@@ -1700,9 +1742,9 @@ bool MyMesh::enqueueTxtCliReply(int acl_idx, uint8_t out_path_len, const uint8_t
 
   bool ok = _reply_queue.send(text, &ctx, sizeof(ctx), opts, millis());
   if (ok) {
-    LOTATO_DBG_LN("cli reply q: enqueue len=%u acl=%d", (unsigned)strlen(text), acl_idx);
+    ::lolog::LoLog::debug("lotato", "cli reply q: enqueue len=%u acl=%d", (unsigned)strlen(text), acl_idx);
   } else {
-    LOTATO_DBG_LN("cli reply q: enqueue FAILED (empty or OOM) acl=%d", acl_idx);
+    ::lolog::LoLog::debug("lotato", "cli reply q: enqueue FAILED (empty or OOM) acl=%d", acl_idx);
   }
   return ok;
 }
@@ -1712,13 +1754,13 @@ lomessage::SendResult MyMesh::sendChunk(const uint8_t* data, size_t len,
                                         bool /*is_final*/, void* user_ctx) {
   auto* ctx = static_cast<CliReplyRoute*>(user_ctx);
   if (!ctx || ctx->acl_idx < 0 || ctx->acl_idx >= acl.getNumClients()) {
-    LOTATO_DBG_LN("cli reply q: drop stale acl=%d", ctx ? ctx->acl_idx : -1);
+    ::lolog::LoLog::debug("lotato", "cli reply q: drop stale acl=%d", ctx ? ctx->acl_idx : -1);
     return lomessage::SendResult::Abandon;
   }
   ClientInfo* client = acl.getClientByIdx(ctx->acl_idx);
 
   if (len == 0 || len > kMaxTxtChunk) {
-    LOTATO_DBG_LN("cli reply tx: BAD emit_len=%u (max=%u) — abandon job", (unsigned)len,
+    ::lolog::LoLog::debug("lotato", "cli reply tx: BAD emit_len=%u (max=%u) — abandon job", (unsigned)len,
                   (unsigned)kMaxTxtChunk);
     return lomessage::SendResult::Abandon;
   }
@@ -1744,17 +1786,13 @@ lomessage::SendResult MyMesh::sendChunk(const uint8_t* data, size_t len,
     sent = true;
   }
 
-  LOTATO_DBG_LN("cli reply tx: chunk %u/%u bytes=%u %s acl=%d peer=%02x%02x%02x%02x %s",
+  ::lolog::LoLog::debug("lotato", "cli reply tx: chunk %u/%u bytes=%u %s acl=%d peer=%02x%02x%02x%02x %s",
     (unsigned)chunk_idx, (unsigned)total_chunks, (unsigned)len,
     (ctx->out_path_len == OUT_PATH_UNKNOWN) ? "flood" : "direct",
     ctx->acl_idx,
     (unsigned)client->id.pub_key[0], (unsigned)client->id.pub_key[1],
     (unsigned)client->id.pub_key[2], (unsigned)client->id.pub_key[3],
     sent ? "ok" : "FAIL");
-#ifdef ESP32
-  lotato_dbg_cli_tx_chunk(ts, (unsigned)chunk_idx, (unsigned)total_chunks, len,
-                          (ctx->out_path_len == OUT_PATH_UNKNOWN) ? "flood" : "direct", ctx->acl_idx, sent);
-#endif
   return sent ? lomessage::SendResult::Sent : lomessage::SendResult::Retry;
 }
 

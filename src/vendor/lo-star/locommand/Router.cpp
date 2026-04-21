@@ -2,6 +2,8 @@
 
 #include "Engine.h"
 
+#include <lolog/LoLog.h>
+
 #include <cctype>
 #include <cstring>
 
@@ -121,6 +123,7 @@ bool Router::dispatch(const char* command, lomessage::Buffer& out, void* app_ctx
         return true;
       }
     }
+    ::lolog::LoLog::debug("locommand", "unknown help root '%.32s'", root_tok);
     out.appendf("Unknown CLI root: %s\n", root_tok);
     formatGlobalHelp(out);
     return true;

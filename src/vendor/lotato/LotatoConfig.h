@@ -21,7 +21,6 @@ public:
   void registerConfigSchema();
 
   bool isIngestReady() const;
-  bool debugEnabled() const { return _loaded ? _debug : false; }
   bool ingestPaused() const { return _loaded ? _ingest_paused : false; }
 
   uint32_t ingestVisibilitySecs() const { return _ingest_visibility_secs; }
@@ -42,13 +41,10 @@ public:
   bool forgetKnownWifi(const char* ssid);
   void setApiToken(const char* t);
   void setIngestOrigin(const char* u);
-  void setDebug(bool on);
-  void toggleDebug();
 
 private:
   LotatoConfig()
       : _loaded(false),
-        _debug(false),
         _ingest_paused(false),
         _ingest_visibility_secs(259200u),
         _ingest_refresh_secs(900u),
@@ -59,7 +55,6 @@ private:
   void seedBuildFlagsIntoLoSettingsIfNeeded();
 
   bool _loaded;
-  bool _debug;
   bool _ingest_paused;
   uint32_t _ingest_visibility_secs;
   uint32_t _ingest_refresh_secs;
