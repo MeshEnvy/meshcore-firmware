@@ -10,7 +10,7 @@ class LotatoConfig {
 public:
   static LotatoConfig& instance();
 
-  /** Load / migrate legacy NVS once; then refresh caches from LoSettings. */
+  /** Seed compile-time defaults into LoSettings if missing; then refresh caches from LoSettings. */
   void load();
 
   /** Re-read LoSettings into RAM caches (after Lofi updates active WiFi, etc.). */
@@ -42,7 +42,6 @@ private:
   }
 
   void seedBuildFlagsIntoLoSettingsIfNeeded();
-  void migrateLegacyNvsToLoIfNeeded();
 
   bool _loaded;
   bool _debug;

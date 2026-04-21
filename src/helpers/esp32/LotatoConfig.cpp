@@ -2,20 +2,11 @@
 
 #ifdef ESP32
 
-#include <Preferences.h>
 #include <cstring>
 
 #include <helpers/esp32/LotatoDebug.h>
 #include <helpers/lofi/Lofi.h>
-#include <lofi.pb.h>
-#include <lodb/LoDB.h>
 #include <losettings/LoSettings.h>
-
-namespace {
-
-constexpr char kNs[] = "lotato";
-
-}  // namespace
 
 LotatoConfig& LotatoConfig::instance() {
   static LotatoConfig inst;
@@ -41,75 +32,6 @@ void LotatoConfig::seedBuildFlagsIntoLoSettingsIfNeeded() {
 #endif
 }
 
-void LotatoConfig::migrateLegacyNvsToLoIfNeeded() {
-  losettings::LoSettings st("lotato");
-  if (st.has("migrated.v1")) return;
-
-  Preferences prefs;
-  if (!prefs.begin(kNs, true)) {
-    (void)st.setBool("migrated.v1", true);
-    return;
-  }
-
-  String url = prefs.getString("url", "");
-  String token = prefs.getString("token", "");
-  bool dbg = prefs.getBool("dbg", false);
-  String ssid = prefs.getString("ssid", "");
-  String pwd = prefs.getString("pwd", "");
-
-  if (url.length()) st.setString("ingest.url", url.c_str());
-  if (token.length()) st.setString("ingest.token", token.c_str());
-  st.setBool("debug", dbg);
-
-  {
-    losettings::LoSettings wf("lofi");
-    if (ssid.length()) {
-      wf.setString("active.ssid", ssid.c_str());
-      wf.setString("active.psk", pwd.c_str());
-    }
-  }
-
-  uint8_t kn = prefs.getUChar("kn", 0);
-  if (kn > 8) kn = 8;
-  LoDb db("lofi");
-  (void)db.registerTable("known_wifi", &KnownWifi_msg, sizeof(KnownWifi));
-  for (uint8_t i = 0; i < kn; i++) {
-    char ks[8], kp[8];
-    snprintf(ks, sizeof(ks), "ks%u", (unsigned)i);
-    snprintf(kp, sizeof(kp), "kp%u", (unsigned)i);
-    String s = prefs.getString(ks, "");
-    if (s.length() == 0) continue;
-    String p = prefs.getString(kp, "");
-    KnownWifi row = KnownWifi_init_zero;
-    strncpy(row.ssid, s.c_str(), sizeof(row.ssid) - 1);
-    strncpy(row.psk, p.c_str(), sizeof(row.psk) - 1);
-    row.last_connected = (uint32_t)(millis() / 1000);
-    row.connect_count = 1;
-    lodb_uuid_t id = lodb_new_uuid(row.ssid, 0);
-    (void)db.insert("known_wifi", id, &row);
-  }
-  if (kn == 0 && ssid.length()) {
-    KnownWifi row = KnownWifi_init_zero;
-    strncpy(row.ssid, ssid.c_str(), sizeof(row.ssid) - 1);
-    strncpy(row.psk, pwd.c_str(), sizeof(row.psk) - 1);
-    row.last_connected = (uint32_t)(millis() / 1000);
-    row.connect_count = 1;
-    lodb_uuid_t id = lodb_new_uuid(row.ssid, 0);
-    (void)db.insert("known_wifi", id, &row);
-  }
-
-  prefs.end();
-  {
-    Preferences pw;
-    if (pw.begin(kNs, false)) {
-      pw.clear();
-      pw.end();
-    }
-  }
-  (void)st.setBool("migrated.v1", true);
-  LOTATO_DBG_LN("lotato cfg: migrated legacy NVS -> LoSettings/LoDB");
-}
-
 void LotatoConfig::refreshFromLoSettings() {
   losettings::LoSettings lt("lotato");
   losettings::LoSettings wf("lofi");
@@ -122,7 +44,6 @@ void LotatoConfig::refreshFromLoSettings() {
 
 void LotatoConfig::load() {
   seedBuildFlagsIntoLoSettingsIfNeeded();
-  migrateLegacyNvsToLoIfNeeded();
   refreshFromLoSettings();
   _loaded = true;
 }
