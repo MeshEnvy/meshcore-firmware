@@ -19,7 +19,7 @@
 #endif
 
 #ifndef ADVERT_NAME
-  #define  ADVERT_NAME   "Lotato sensor"
+  #define  ADVERT_NAME   "sensor"
 #endif
 #ifndef ADVERT_LAT
   #define  ADVERT_LAT  0.0
