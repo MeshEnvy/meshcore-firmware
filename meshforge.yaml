@@ -1,8 +1,0 @@
-# MeshForge repo profile — https://meshforge.org
-# Narrows the tag and target pickers when this repo is opened in MeshForge.
-meshforge:
-  tags:
-    include: "^lotato-.*"
-  targets:
-    include: "_repeater$"
-    require_capabilities: [wifi]
