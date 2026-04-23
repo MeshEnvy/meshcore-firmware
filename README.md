@@ -1,37 +1,35 @@
+<!-- LOTATO:ROOT_README:START -->
+<!-- Auto-generated from /README.md by scripts/readme.py -->
+
 # lotato
 
-> The firmware-only [Potato Mesh](https://github.com/l5yth/potato-mesh) MeshCore ingestor. No sidecar needed.
+Lotato is the firmware-only [Potato Mesh](https://github.com/l5yth/potato-mesh) ingestor for MeshCore*.
 
-## Introduction
+> * Meshtastic coming soon!
 
-Lotato is a pure MeshCore ingestor for Potato Mesh. It does not require an RPi sidecar, or a Python environment, or anything else. It runs directly on the firmware and has no external hardware dependencies.
+It runs directly on a WiFi-capable device and posts mesh data to a Potato Mesh instance without a sidecar.
 
-## Requirements
+## Quick start
 
-* A MeshCore router node with WiFi capability. (Heltec V3 and V4 are very inexpensive popular WiFi-capable devices).
-* A MeshCore companion node to remote admin into the Lotato repeater and configure it.
+**MeshCore**
 
-## Getting Started
+1. Flash the latest Lotato firmware: <https://meshforge.org/MeshEnvy/MeshCore-lotato>
+2. Run initial repeater setup at <https://config.meshcore.dev> and set an admin password.
+3. From remote admin CLI, configure WiFi and ingest:
 
-**Flash Lotato**
-Use https://meshforge.org/MeshEnvy/MeshCore-lotato to flash the latest version of Lotato to your chosen device. 
+```text
+wifi scan
+wifi connect <n|ssid> [pwd]
+lotato endpoint <https://your-potato-mesh-instance>
+lotato auth <api-token>
+lotato status
+```
 
-**Find a home for your Lotato repeater**
-This device will be your Potato Mesh ingestor. It will likely sit on your desk, plugged into the wall via USB, and patiently ingest MeshCore traffic day and night.
+4. Validate settings (shortcut + config alias):
 
-**Configure Repeater Settings**
-For one-time repeater setup, you need a USB connection to your computer. Use https://config.meshcore.io/ to configure your repeater for the first time.  Choose a name, radio presets, and most importantly, **choose an admin password**. All future Lotato config is done via remote admin.
-
-Test remote admin access now to be sure. 
-
-**Essential Setup**
-Log in via remote access and access the CLI tool. Lotato implements some extra CLI commands to help you get set up:
-
-* `wifi connect <ssid> <pwd>` to connect to your WiFi network
-* `config set lotato.ingest.url <url>` for the Potato Mesh ingestor URL (example: `https://monitor.meshenvy.org`)
-* `config set lotato.ingest.token <val>` for the Potato Mesh API key (see Potato Mesh docs)
-
-After that, you should begin to see MeshCore nodes appearing on your Potato Mesh network!
+```text
+lotato status
+```
 
 ## Full Command Reference
 
@@ -43,8 +41,9 @@ Three CLI roots are dispatched first (`lotato`, `wifi`, `config`); bare `help` /
 | `lotato status` | WiFi, IP, node count, **Due** (visible + refresh-due), paused, last HTTP code, URL/token state, debug |
 | `lotato pause` | Pause ingest (shortcut for `config set lotato.ingest.paused on`) |
 | `lotato resume` | Resume ingest (shortcut for `config set lotato.ingest.paused off`) |
-| `lotato contacts` | Nodes, visible, due, refresh/visibility/GC intervals from config |
-| `lotato flush` | Clear persisted last-post time for **visible** slots only; reply shows new due count |
+| `lotato ingest [n]` | Show recent ingest POST attempts (newest first) |
+| `lotato endpoint <url>` | Set ingest URL (same as `config set lotato.ingest.url <url>`) |
+| `lotato auth <token>` | Set API token (same as `config set lotato.ingest.token <token>`) |
 | `wifi status` | Current WiFi / saved SSID snapshot |
 | `wifi scan` | Scan for nearby APs (async — full list when scan completes) |
 | `wifi connect <n\|ssid> [pwd]` | Connect by scan index (1-based) or raw SSID |
@@ -63,7 +62,7 @@ Lotato releases use annotated git tags of the form `lotato-v<lotato>-repeater-v<
 
 ### Unreleased (`lotato` branch, not yet tagged)
 
-- **Composable CLI:** `locommand::Router` with roots `lotato`, `wifi`, and `config`. `lotato endpoint`, `lotato token`, `lotato debug`, and `lotato wifi.*` are removed — use `config set …` and the `wifi` root instead. `locommand::ArgSpec` improves leaf help.
+- **Composable CLI:** `locommand::Router` with roots `lotato`, `wifi`, and `config`. Endpoint/token setup is via `lotato endpoint` and `lotato auth` (plus `config` aliases), and WiFi commands are on the `wifi` root. `locommand::ArgSpec` improves leaf help.
 - **ConfigHub / `config` CLI:** typed `lotato.*` and `lofi.*` keys in LoSettings with `config ls|get|set|unset`.
 - **Ingest:** visibility (`lotato.ingest.visibility_secs`) and GC (`ingest.gc_stale_secs`) controls; LoDB `ingest_ttl` persists last-post unix per node; `lotato status` shows **Due**.
 - Rename MeshForge-facing naming and unify **Lotato** branding in CLI, configuration, and source (follow-up to the Potato Mesh ingestor naming used in earlier tags).
@@ -91,8 +90,7 @@ First tagged Lotato release, based on MeshCore **repeater v1.14.1**.
 - ESP32 CLI improvements: chunked serial replies to reduce blocking, larger reply buffer, WiFi failover with rotation across known networks, and related serial output handling.
 - Asynchronous handling for certain CLI command responses.
 - HTTPS / TLS certificate handling fixes for outbound ingest.
-
--------
+<!-- LOTATO:ROOT_README:END -->
 
 ## About MeshCore
 
