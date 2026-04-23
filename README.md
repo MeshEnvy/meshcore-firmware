@@ -62,6 +62,10 @@ Lotato releases use annotated git tags of the form `lotato-v<lotato>-repeater-v<
 
 ### Unreleased (`lotato` branch, not yet tagged)
 
+- _No changes yet._
+
+### [0.2.0-rc.1] — 2026-04-22 (`lotato-v0.2.0-rc.1-repeater-v1.14.1`)
+
 - **Composable CLI:** `locommand::Router` with roots `lotato`, `wifi`, and `config`. Endpoint/token setup is via `lotato endpoint` and `lotato auth` (plus `config` aliases), and WiFi commands are on the `wifi` root. `locommand::ArgSpec` improves leaf help.
 - **ConfigHub / `config` CLI:** typed `lotato.*` and `lofi.*` keys in LoSettings with `config ls|get|set|unset`.
 - **Ingest:** visibility (`lotato.ingest.visibility_secs`) and GC (`ingest.gc_stale_secs`) controls; LoDB `ingest_ttl` persists last-post unix per node; `lotato status` shows **Due**.
