@@ -2,7 +2,7 @@
 #include <algorithm>
 
 #if defined(LOTATO_PLATFORM_MESHCORE)
-#include <Lotato.h>
+#include "lostar_adapter.h"
 #endif
 
 /* ------------------------------ Config -------------------------------- */
@@ -647,7 +647,7 @@ void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32
   }
 
 #if defined(LOTATO_PLATFORM_MESHCORE)
-  Lotato::delegate().onAdvertRecv(packet, id, timestamp, app_data, app_data_len);
+  lostar_mc_on_advert(packet, id, timestamp, app_data, app_data_len);
 #endif
 }
 
@@ -722,13 +722,13 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       }
 
 #if defined(LOTATO_PLATFORM_MESHCORE)
-      // Lotato intercepts only commands it owns (`lotato …` / `wifi …` / `config …`). Every other
-      // command — including all of upstream's admin CLI — flows through the upstream reply path
-      // below, verbatim, so we stay drift-free if upstream changes its framing/timing.
-      if (!Lotato::delegate().handleAdminTxtCliIfMine(sender_timestamp, client->id.pub_key, secret,
-                                                      client->out_path, client->out_path_len,
-                                                      packet->getPathHashSize(), (char*)&data[5],
-                                                      is_retry))
+      // Lotato intercepts only commands it owns (`lotato …` / `wifi …` / `config …` / `user …` /
+      // `/?`). Every other command — including all of upstream's admin CLI — flows through the
+      // upstream reply path below verbatim, so we stay drift-free if upstream changes its
+      // framing/timing.
+      if (!lostar_mc_on_admin_txt(sender_timestamp, client->id.pub_key, secret, client->out_path,
+                                   client->out_path_len, packet->getPathHashSize(),
+                                   (char*)&data[5], is_retry))
 #endif
       {
       uint8_t temp[166];
@@ -944,7 +944,7 @@ void MyMesh::begin(FILESYSTEM *fs) {
   _cli.loadPrefs(_fs);
   acl.load(_fs, self_id);
 #if defined(LOTATO_PLATFORM_MESHCORE)
-  Lotato::init(_fs, self_id.pub_key, this);
+  lostar_mc_install(this, _fs, self_id.pub_key);
 #endif
   // TODO: key_store.begin();
   region_map.load(_fs);
@@ -1286,7 +1286,7 @@ void MyMesh::loop() {
   mesh::Mesh::loop();
 
 #if defined(LOTATO_PLATFORM_MESHCORE)
-  Lotato::delegate().service();
+  lostar_mc_tick();
 #endif
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
@@ -1333,7 +1333,7 @@ bool MyMesh::hasPendingWork() const {
   if (bridge.isRunning()) return true;  // bridge needs WiFi radio, can't sleep
 #endif
 #if defined(LOTATO_PLATFORM_MESHCORE)
-  if (Lotato::delegate().isBusy()) return true;  // ingest in flight, CLI chunks queued, or WiFi up
+  if (lostar_mc_is_busy()) return true;  // ingest in flight, CLI chunks queued, or WiFi up
 #endif
   return _mgr->getOutboundTotal() > 0;
 }
