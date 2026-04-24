@@ -1,7 +1,7 @@
 #include "MyMesh.h"
 #include <algorithm>
 
-#ifdef LOTATO_ENABLED
+#if defined(LOTATO_PLATFORM_MESHCORE)
 #include <Lotato.h>
 #endif
 
@@ -646,7 +646,7 @@ void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32
     }
   }
 
-#ifdef LOTATO_ENABLED
+#if defined(LOTATO_PLATFORM_MESHCORE)
   Lotato::delegate().onAdvertRecv(packet, id, timestamp, app_data, app_data_len);
 #endif
 }
@@ -721,7 +721,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
         }
       }
 
-#ifdef LOTATO_ENABLED
+#if defined(LOTATO_PLATFORM_MESHCORE)
       // Lotato intercepts only commands it owns (`lotato …` / `wifi …` / `config …`). Every other
       // command — including all of upstream's admin CLI — flows through the upstream reply path
       // below, verbatim, so we stay drift-free if upstream changes its framing/timing.
@@ -943,7 +943,7 @@ void MyMesh::begin(FILESYSTEM *fs) {
   // load persisted prefs
   _cli.loadPrefs(_fs);
   acl.load(_fs, self_id);
-#ifdef LOTATO_ENABLED
+#if defined(LOTATO_PLATFORM_MESHCORE)
   Lotato::init(_fs, self_id.pub_key, this);
 #endif
   // TODO: key_store.begin();
@@ -1285,7 +1285,7 @@ void MyMesh::loop() {
 
   mesh::Mesh::loop();
 
-#ifdef LOTATO_ENABLED
+#if defined(LOTATO_PLATFORM_MESHCORE)
   Lotato::delegate().service();
 #endif
 
@@ -1332,7 +1332,7 @@ bool MyMesh::hasPendingWork() const {
 #if defined(WITH_BRIDGE)
   if (bridge.isRunning()) return true;  // bridge needs WiFi radio, can't sleep
 #endif
-#ifdef LOTATO_ENABLED
+#if defined(LOTATO_PLATFORM_MESHCORE)
   if (Lotato::delegate().isBusy()) return true;  // ingest in flight, CLI chunks queued, or WiFi up
 #endif
   return _mgr->getOutboundTotal() > 0;
