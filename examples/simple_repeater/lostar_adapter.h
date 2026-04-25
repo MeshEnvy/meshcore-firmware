@@ -4,8 +4,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <lofs/FsBackend.h>
-
 // Forward-declare meshcore-native types so this header stays clean; the .cpp is the only TU in
 // the fork that sees both meshcore and lostar vocabularies in the same source file.
 namespace mesh {
@@ -14,6 +12,10 @@ class Packet;
 class Identity;
 }  // namespace mesh
 
+namespace fs {
+class FS;
+}
+
 /**
  * Fork-local lostar adapter for the meshcore simple_repeater application. This is the ONLY TU
  * in the meshcore fork that sees both `mesh::Packet` / `mesh::Identity` and `lostar_*` POD types
@@ -21,9 +23,9 @@ class Identity;
  *
  * Boot ordering:
  *
- *   1. `lostar_mc_install(mesh, fs, self_pub_key)` from `MyMesh::begin(...)`:
- *        installs `lostar_host_ops` (send_text_dm, self_nodenum, self_pubkey), runs
- *        `lotato::init()` / `louser::init()` / `lofi::init()`. Meshcore admins are ACL-pre-
+ *   1. `lostar_mc_install(mesh, internal_fs, self_pub_key)` from `MyMesh::begin(...)`:
+ *        binds `internal_fs` to an internal `ArduinoFsVolume`, installs `lostar_host_ops`,
+ *        runs `lotato::init()` / `louser::init()` / `lofi::init()`. Meshcore admins are ACL-pre-
  *        authenticated on the upstream side, so no extra guards are applied on top.
  *   2. Per-event hooks (called from the fork's normal places in `MyMesh.cpp`):
  *        - `lostar_mc_on_advert(packet, id, timestamp, app_data, app_data_len)` from
@@ -34,7 +36,7 @@ class Identity;
  *        - `lostar_mc_is_busy()` wraps `lostar_is_busy()` for `MyMesh::hasPendingWork()`;
  *          provided for symmetry so the call site can stay within the adapter vocabulary.
  */
-void lostar_mc_install(mesh::Mesh *mesh, lofs::FSys *fs, const uint8_t self_pub_key[32]);
+void lostar_mc_install(mesh::Mesh *mesh, fs::FS *internal_fs, const uint8_t self_pub_key[32]);
 
 /** Fan an incoming meshcore advert into the lostar advert observers. */
 void lostar_mc_on_advert(const mesh::Packet *packet, const mesh::Identity &id, uint32_t timestamp,

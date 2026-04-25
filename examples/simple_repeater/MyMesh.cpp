@@ -944,7 +944,7 @@ void MyMesh::begin(FILESYSTEM *fs) {
   _cli.loadPrefs(_fs);
   acl.load(_fs, self_id);
 #if defined(LOTATO_PLATFORM_MESHCORE)
-  lostar_mc_install(this, _fs, self_id.pub_key);
+  lostar_mc_install(this, static_cast<fs::FS *>(_fs), self_id.pub_key);
 #endif
   // TODO: key_store.begin();
   region_map.load(_fs);

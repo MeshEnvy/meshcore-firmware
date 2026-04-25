@@ -6,10 +6,12 @@
 #include <cstdio>
 #include <cstring>
 
+#include <FS.h>
 #include <Identity.h>
 #include <Mesh.h>
 #include <MeshCore.h>
 #include <Packet.h>
+#include <lofs/adapters/ArduinoFsVolume.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <helpers/AdvertDataHelpers.h>
@@ -31,6 +33,7 @@
 #include <louser/LoUser.h>
 
 namespace {
+
 
 /** Admin TXT_MSG single-packet reply scratch size — matches upstream `main.cpp reply[160]`. */
 constexpr size_t kCliReplyCap = 160;
@@ -106,6 +109,7 @@ uint8_t                g_self_pub_key[32] = {};
 lomessage::Queue       g_reply_queue;
 MeshcoreReplySink      g_reply_sink;
 bool                   g_installed = false;
+static lofs::ArduinoFsVolume s_mc_internal_vol(nullptr);
 
 /* ── Caller identity / advert helpers ─────────────────────────────────────────────────── */
 
@@ -223,7 +227,7 @@ void apply_mc_cli_policy() {
 
 /* ── public entry points ────────────────────────────────────────────────────────────── */
 
-void lostar_mc_install(mesh::Mesh *mesh, lofs::FSys *fs, const uint8_t self_pub_key[32]) {
+void lostar_mc_install(mesh::Mesh *mesh, fs::FS *internal_fs, const uint8_t self_pub_key[32]) {
   if (g_installed) return;
   g_installed = true;
 
@@ -238,7 +242,12 @@ void lostar_mc_install(mesh::Mesh *mesh, lofs::FSys *fs, const uint8_t self_pub_
   ops.ctx          = nullptr;
   lostar_install_host(&ops);
 
-  lotato::init(LOSTAR_PROTOCOL_MESHCORE, fs);
+  lofs::FsVolume *internal_vol = nullptr;
+  if (internal_fs) {
+    s_mc_internal_vol.bindFs(internal_fs);
+    internal_vol = &s_mc_internal_vol;
+  }
+  lotato::init(LOSTAR_PROTOCOL_MESHCORE, internal_vol);
   louser::init();
   lofi::init();
   apply_mc_cli_policy();
