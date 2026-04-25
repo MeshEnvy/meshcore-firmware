@@ -17,6 +17,7 @@
 #include <helpers/TxtDataHelpers.h>  // TXT_TYPE_CLI_DATA
 
 // lo-star / lotato / lostar API — all POD-only, no fork-native types.
+#include <locommand/Engine.h>
 #include <Lotato.h>
 #include <lofi/Lofi.h>
 #include <lolog/LoLog.h>
@@ -26,7 +27,7 @@
 #include <lostar/Router.h>
 #include <lostar/Types.h>
 #include <lomessage/Queue.h>
-#include <louser/Engine.h>
+#include <louser/Guard.h>
 #include <louser/LoUser.h>
 
 namespace {
@@ -211,6 +212,13 @@ lomessage::SendResult MeshcoreReplySink::sendChunk(const uint8_t *data, size_t l
 
 bool mc_reply_queue_busy(void * /*ctx*/) { return !g_reply_queue.empty(); }
 
+void apply_mc_cli_policy() {
+  auto &rt = lostar::router();
+  if (auto *eng = rt.engineByName("lotato")) eng->setRootGuard(&louser::require_admin);
+  if (auto *eng = rt.engineByName("config")) eng->setRootGuard(&louser::require_admin);
+  if (auto *eng = rt.engineByName("wifi")) eng->setRootGuard(&louser::require_admin);
+}
+
 }  // namespace
 
 /* ── public entry points ────────────────────────────────────────────────────────────── */
@@ -233,6 +241,7 @@ void lostar_mc_install(mesh::Mesh *mesh, lofs::FSys *fs, const uint8_t self_pub_
   lotato::init(LOSTAR_PROTOCOL_MESHCORE, fs);
   louser::init();
   lofi::init();
+  apply_mc_cli_policy();
 
   lostar_register_busy_hint(&mc_reply_queue_busy, nullptr);
 
@@ -286,14 +295,18 @@ bool lostar_mc_on_admin_txt(uint32_t sender_ts, const uint8_t pub_key[32],
   if (!g_installed) return false;
   if (is_retry) return false;
 
+  char cmd_buf[256];
+  std::strncpy(cmd_buf, command, sizeof(cmd_buf) - 1);
+  cmd_buf[sizeof(cmd_buf) - 1] = '\0';
+
   auto &rt = lostar::router();
-  if (!rt.matchesAnyRoot(command) && !rt.matchesGlobalHelp(command)) return false;
+  if (!rt.matchesAnyRoot(cmd_buf) && !rt.matchesGlobalHelp(cmd_buf)) return false;
 
   if (::lolog::LoLog::isVerbose()) {
-    const size_t cmd_len = std::strlen(command);
+    const size_t cmd_len = std::strlen(cmd_buf);
     const unsigned show  = cmd_len > 200u ? 200u : (unsigned)cmd_len;
     ::lolog::LoLog::debug("lostar.mc", "admin txt cmd len=%u preview: \"%.*s\"%s",
-                          (unsigned)cmd_len, (int)show, command,
+                          (unsigned)cmd_len, (int)show, cmd_buf,
                           cmd_len > 200u ? "..." : "");
   }
 
@@ -330,8 +343,8 @@ bool lostar_mc_on_admin_txt(uint32_t sender_ts, const uint8_t pub_key[32],
   dm.from            = nodenum_from_pub_key(pub_key);
   dm.to              = mc_self_nodenum(nullptr);
   dm.rx_time         = sender_ts;
-  dm.payload         = reinterpret_cast<const uint8_t *>(command);
-  dm.payload_len     = (uint32_t)std::strlen(command);
+  dm.payload         = reinterpret_cast<const uint8_t *>(cmd_buf);
+  dm.payload_len     = (uint32_t)std::strlen(cmd_buf);
   dm.from_pubkey_len = 32;
   std::memcpy(dm.from_pubkey, pub_key, 32);
 
