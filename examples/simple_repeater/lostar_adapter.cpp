@@ -31,6 +31,8 @@
 #include <lomessage/Queue.h>
 #include <louser/Guard.h>
 #include <louser/LoUser.h>
+#include <louser/Auth.h>
+#include <lostar/AuthProvider.h>
 
 namespace {
 
@@ -216,6 +218,38 @@ lomessage::SendResult MeshcoreReplySink::sendChunk(const uint8_t *data, size_t l
 
 bool mc_reply_queue_busy(void * /*ctx*/) { return !g_reply_queue.empty(); }
 
+static bool g_in_mesh_admin_txt = false;
+
+class MeshCoreAuthProvider : public lostar::AuthProvider {
+public:
+  bool isUser(const lostar::NodeRef& caller) override {
+    if (g_in_mesh_admin_txt) return true;
+    return louser::Auth::instance().sessions().whoami(caller) != 0;
+  }
+  bool isAdmin(const lostar::NodeRef& caller) override {
+    if (g_in_mesh_admin_txt) return true;
+    return louser::Auth::instance().isAdmin(caller);
+  }
+  bool getCurrentUser(const lostar::NodeRef& caller, char* name_out, size_t name_cap) override {
+    if (g_in_mesh_admin_txt) {
+      if (name_out && name_cap > 0) {
+        snprintf(name_out, name_cap, "MeshCore Admin");
+      }
+      return true;
+    }
+    louser::User u;
+    if (louser::Auth::instance().currentUser(caller, u)) {
+      if (name_out && name_cap > 0) {
+        snprintf(name_out, name_cap, "%s", u.username);
+      }
+      return true;
+    }
+    return false;
+  }
+};
+
+static MeshCoreAuthProvider s_mc_auth;
+
 void apply_mc_cli_policy() {
   auto &rt = lostar::router();
   if (auto *eng = rt.engineByName("lotato")) eng->setRootGuard(&louser::require_admin);
@@ -249,6 +283,7 @@ void lostar_mc_install(mesh::Mesh *mesh, fs::FS *internal_fs, const uint8_t self
   }
   lotato::init(LOSTAR_PROTOCOL_MESHCORE, internal_vol);
   louser::init();
+  lostar::setAuthProvider(&s_mc_auth);
   lofi::init();
   apply_mc_cli_policy();
 
@@ -357,7 +392,9 @@ bool lostar_mc_on_admin_txt(uint32_t sender_ts, const uint8_t pub_key[32],
   dm.from_pubkey_len = 32;
   std::memcpy(dm.from_pubkey, pub_key, 32);
 
+  g_in_mesh_admin_txt = true;
   const bool consumed = lostar_ingress_text_dm(&dm);
+  g_in_mesh_admin_txt = false;
 
   lostar_ingress_attach_deferrer(nullptr);
   lostar_ingress_set_host_token(nullptr);
