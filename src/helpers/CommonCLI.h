@@ -65,7 +65,7 @@ struct NodePrefs { // persisted to file
   uint8_t path_hash_mode;   // which path mode to use when sending
   uint8_t loop_detect;
   uint8_t cad_enabled;      // hardware Channel Activity Detection before TX (boolean)
-  uint8_t hop_retry;              // extra direct-path TX if next hop not overheard (0=off). Default 2
+  uint8_t hop_retry;              // extra direct-path TX if next hop hop ACK missing (0=off). Default 2
   uint16_t hop_retry_ms;          // listen TTL before retry (ms). Default 1500
 };
 
