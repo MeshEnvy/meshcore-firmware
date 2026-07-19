@@ -1,0 +1,10 @@
+upstream_tag: companion-v1.16.0
+vk496_ref: feature/ota-lora
+vk496_sha: 1f42c1a6
+overlay_commits:
+  - dcf051f8  # ota ls: start listing at entry N
+  - 97470f41  # next-hop retry for direct-path relays
+  - 18be8ace  # hard hop ack for next-hop retry
+  - beadfa6b  # distro version helpers
+  - f0e6b538  # default firmware version v0.1.0
+last_freshen: 2026-07-19
