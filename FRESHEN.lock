@@ -1,4 +1,10 @@
-upstream_tag: companion-v1.16.0
+# EnvyOS fleet release manifest.
+# Policy: companion tag + vk496/feature/ota-lora + overlay_commits = earns VERSION / v0.1.x / motas/.
+# Not companion tag alone; not meshcore/dev. See .cursor/skills/envyos-freshen/SKILL.md.
+
+mode: release
+companion_tag: companion-v1.16.0
+companion_sha: 07a3ca9e
 vk496_ref: feature/ota-lora
 vk496_sha: 1f42c1a6
 overlay_commits:
