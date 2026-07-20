@@ -125,6 +125,9 @@ public:
   virtual bool setRxBoostedGain(bool enable) {
     return false; // CommonCLI reports unsupported if not overridden by wrapper
   };
+
+  virtual void setHopAckIgnore(uint8_t count) { }
+  virtual uint8_t getHopAckIgnore() { return 0; }
 };
 
 class CommonCLI {
