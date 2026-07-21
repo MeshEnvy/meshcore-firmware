@@ -2,6 +2,7 @@
 
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
+#include <helpers/ui/GemPlayer.h>
 
 #define CMD_APP_START                 1
 #define CMD_SEND_TXT_MSG              2
@@ -469,7 +470,7 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   bool should_display = txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN;
   if (should_display && _ui) {
     _ui->newMsg(path_len, from.name, text, offline_queue_len);
-    if (!_serial->isConnected()) {
+    if (!_serial->isConnected() && meshgems_dm_payload(text) == NULL) {
       _ui->notify(UIEventType::contactMessage);
     }
   }
@@ -524,6 +525,10 @@ void MyMesh::sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pk
 
 void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                            const char *text) {
+  const char *payload = meshgems_dm_payload(text);
+  if (payload) {
+    GemPlayer_tryPlay(payload, _prefs.buzzer_quiet != 0);
+  }
   markConnectionActive(from); // in case this is from a server, and we have a connection
   queueMessage(from, TXT_TYPE_PLAIN, pkt, sender_timestamp, NULL, 0, text);
 }
@@ -544,6 +549,18 @@ void MyMesh::onSignedMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uin
 
 void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint32_t timestamp,
                                   const char *text) {
+  const char *payload = meshgems_find_payload(text);
+  bool is_meshtunes = false;
+  if (payload) {
+    ChannelDetails details;
+    const char *name = getChannel(findChannelIdx(channel), details) ? details.name : "";
+    if (*name == '#') name++;  // accept "#meshtunes" and "meshtunes"
+    if (strcasecmp(name, "meshtunes") == 0) {
+      is_meshtunes = true;
+      GemPlayer_queueAdd(payload);
+    }
+  }
+
   int i = 0;
   if (app_target_ver >= 3) {
     out_frame[i++] = RESP_CODE_CHANNEL_MSG_RECV_V3;
@@ -575,7 +592,9 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
     _serial->writeFrame(frame, 1);
   } else {
 #ifdef DISPLAY_CLASS
-    if (_ui) _ui->notify(UIEventType::channelMessage);
+    if (_ui && !(is_meshtunes && payload)) {
+      _ui->notify(UIEventType::channelMessage);
+    }
 #endif
   }
 #ifdef DISPLAY_CLASS
@@ -2222,6 +2241,7 @@ void MyMesh::checkSerialInterface() {
 
 void MyMesh::loop() {
   BaseChatMesh::loop();
+  GemPlayer_loop(_prefs.buzzer_quiet != 0);
 
   if (_cli_rescue) {
     checkCLIRescueCmd();

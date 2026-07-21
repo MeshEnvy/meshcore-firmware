@@ -1,6 +1,7 @@
 #include "UITask.h"
 #include <Arduino.h>
 #include <helpers/TxtDataHelpers.h>
+#include <helpers/ui/GemPlayer.h>
 #include "../MyMesh.h"
 
 #define AUTO_OFF_MILLIS     15000   // 15 seconds
@@ -372,6 +373,7 @@ void UITask::handleButtonAnyPress() {
 
 void UITask::handleButtonShortPress() {
   MESH_DEBUG_PRINTLN("UITask: short press triggered");
+  if (GemPlayer_skip()) return;  // while a gem is playing, short press skips it
   if (_display != NULL) {
     // Only clear message preview if display was already on before button press
     if (_displayWasOn) {
@@ -390,8 +392,15 @@ void UITask::handleButtonShortPress() {
 }
 
 void UITask::handleButtonDoublePress() {
-  MESH_DEBUG_PRINTLN("UITask: double press triggered, sending advert");
-  // ADVERT
+  MESH_DEBUG_PRINTLN("UITask: double press triggered");
+#ifdef PIN_BUZZER
+  if (GemPlayer_togglePlaylist()) {
+    sprintf(_alert, GemPlayer_playlistIsPaused() ? "Meshtunes: OFF" : "Meshtunes: ON");
+    _need_refresh = true;
+    return;
+  }
+#endif
+  // ADVERT (when playlist is empty)
   #ifdef PIN_BUZZER
       notify(UIEventType::ack);
   #endif

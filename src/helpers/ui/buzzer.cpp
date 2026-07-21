@@ -1,6 +1,7 @@
 #include "Arduino.h"
 #ifdef PIN_BUZZER
 #include "buzzer.h"
+#include "GemPlayer.h"
 
 void genericBuzzer::begin() {
 //    Serial.print("DBG: Setting up buzzer on pin ");
@@ -16,6 +17,8 @@ void genericBuzzer::begin() {
 }
 
 void genericBuzzer::play(const char *melody) {
+    GemPlayer_stop();
+
     if (isPlaying())   // interrupt existing
     {
         rtttl::stop();
