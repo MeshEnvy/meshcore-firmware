@@ -106,6 +106,12 @@ void setup() {
 
   the_mesh.begin(fs);
 
+#if defined(LOG_TAIL_ON_BOOT)
+  the_mesh.setLoggingOn(true);
+  the_mesh.setTailOn(true);
+  Serial.println("log tail on (boot default)");
+#endif
+
 #ifdef DISPLAY_CLASS
   ui_task.begin(the_mesh.getNodePrefs(), FIRMWARE_BUILD_DATE, FIRMWARE_VERSION);
 #endif

@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include "AdminDebug.h"
 #include "CommonCLI.h"
 #include "TxtDataHelpers.h"
 #include "AdvertDataHelpers.h"
@@ -209,8 +210,11 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {  // Legacy 
 }
 
 bool CommonCLI::savePrefs(FILESYSTEM* fs) {
+  unsigned long t0 = millis();
+  ADMIN_DBG_MS("savePrefs: begin");
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   fs->remove("/prefs.json");
+  ADMIN_DBG_MS("savePrefs: remove dt=%lu", millis() - t0);
   File file = fs->open("/prefs.json", FILE_O_WRITE);
 #elif defined(RP2040_PLATFORM)
   File file = fs->open("/prefs.json", "w");
@@ -220,8 +224,10 @@ bool CommonCLI::savePrefs(FILESYSTEM* fs) {
   if (file) {
     bool success = _prefs->saveSerial(file);
     file.close();
+    ADMIN_DBG_MS("savePrefs: end ok=%d dt=%lu", (int)success, millis() - t0);
     return success;
   }
+  ADMIN_DBG_MS("savePrefs: open failed dt=%lu", millis() - t0);
   return false;
 }
 
@@ -260,9 +266,11 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       // send zerohop advert
       _callbacks->sendSelfAdvertisement(1500, false);  // longer delay, give CLI response time to be sent first
       strcpy(reply, "OK - zerohop advert sent");
-    } else if (memcmp(command, "advert", 6) == 0) {
+     } else if (memcmp(command, "advert", 6) == 0) {
       // send flood advert
+      ADMIN_DBG_MS("advert: src=%s", sender_timestamp ? "remote" : "serial");
       _callbacks->sendSelfAdvertisement(1500, true);  // longer delay, give CLI response time to be sent first
+      ADMIN_DBG_MS("advert: sendSelfAdvertisement returned");
       strcpy(reply, "OK - Advert sent");
     } else if (memcmp(command, "clock sync", 10) == 0) {
       uint32_t curr = getRTCClock()->getCurrentTime();
@@ -622,8 +630,10 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     }
   } else if (memcmp(config, "name ", 5) == 0) {
     if (isValidName(&config[5])) {
+      ADMIN_DBG_MS("set name: src=%s val=%.32s", sender_timestamp ? "remote" : "serial", &config[5]);
       StrHelper::strncpy(_prefs->node_name, &config[5], sizeof(_prefs->node_name));
       savePrefs();
+      ADMIN_DBG_MS("set name: savePrefs returned");
       strcpy(reply, "OK");
     } else {
       strcpy(reply, "Error, bad chars");
