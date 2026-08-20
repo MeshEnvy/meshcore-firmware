@@ -1185,6 +1185,18 @@ bool MyMesh::formatFileSystem() {
 #endif
 }
 
+bool MyMesh::remountFileSystem() {
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+  return InternalFS.begin();
+#elif defined(RP2040_PLATFORM)
+  return LittleFS.begin();
+#elif defined(ESP32)
+  return SPIFFS.begin(true);
+#else
+  return true;
+#endif
+}
+
 void MyMesh::sendSelfAdvertisement(int delay_millis, bool flood) {
   ADMIN_DBG_MS("sendSelfAdvert flood=%d delay=%d", (int)flood, delay_millis);
   mesh::Packet *pkt = createSelfAdvert();

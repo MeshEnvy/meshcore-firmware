@@ -11,6 +11,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions match
 - Bench debug twins of each shipped repeater/superseeder (`<slug>-debug`): log tail, OTA, and admin serial on boot; separate MOTA target id.
 - `doctor fs check|fix|format|dump|stat|ls|probe` and `doctor gc` for wedged InternalFS; `LFS_ERR_NOSPC` surfaces as `ERR no space left on device (try: doctor gc)`.
 - Atomic prefs save (`saveConfigJsonAtomic` / `writeFileAtomic`): prefs, ACL, regions, companion contacts/channels/blobs.
+- Fail-fast when InternalFS is critically full (avoids multi-second LittleFS alloc retries before NOSPC).
+- Docs: `docs/envyos_cli_extensions.md` (doctor, gc, prefs errors, debug twins).
 
 ### Changed
 
