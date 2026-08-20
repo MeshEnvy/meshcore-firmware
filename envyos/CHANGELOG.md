@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions match
 
 ## [Unreleased]
 
+### Changed
+
+- Build identity (`FIRMWARE_VERSION`, build date, MOTA target id) codegen into `FirmwareIdentity.generated.cpp` so release stamps no longer invalidate every translation unit via global `-D` flags.
+
 ### Added
 
 - Bench debug twins of each shipped target (`<slug>-debug`): log tail, OTA, and admin serial on boot; separate MOTA target id.
