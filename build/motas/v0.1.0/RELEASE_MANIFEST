@@ -1,0 +1,6 @@
+# EnvyOS distro release manifest (backfilled at asset upload)
+distro=v0.1.0
+firmware=v0.1.0
+bootloader=v0.1.0
+motatool=v0.1.0
+published=2026-07-26
