@@ -217,6 +217,20 @@ Use field slugs for production; debug twins for bench, OTA, and FS troubleshooti
 
 ---
 
+## Companion gap (deferred v0.3.0)
+
+Companions use the same **28 KB InternalFS** on nRF52840 but **do not expose `doctor` commands** (no `CommonCLI` on that path). WisMesh Tag BLE builds also omit `EXTRAFS=1`, so contacts/channels/blobs share InternalFS with prefs/identity. A full partition wedges clients the same way as repeaters (failed saves, lost data on reboot).
+
+**Deferred to v0.3.0** (see ota repo `docs/planned/v0.3.0.md`):
+
+- Enable `EXTRAFS=1` on WisMesh companion (match RAK4631: contacts on secondary volume).
+- Expose `doctor fs check` / `doctor gc` on companion (USB serial debug at minimum).
+- Align with multi-volume FS CLI naming work.
+
+v0.2.0 ships atomic saves and boot fsck on companion only.
+
+---
+
 ## Upstream notes
 
 See MeshEnvy `docs/upstream-prs.md` in the ota repo for PR tracking. Sensible upstream targets:
