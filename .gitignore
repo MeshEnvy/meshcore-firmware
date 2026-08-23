@@ -20,3 +20,4 @@ platformio.local.ini
 build/
 
 __pycache__/
+build/
