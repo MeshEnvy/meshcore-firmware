@@ -47,7 +47,7 @@ When an item merges to `envyos/main`, set status `merged_main`. When it ships in
 
 | ID | Branch on `origin` | PR base | Notes |
 |----|-------------------|---------|-------|
-| EC-000 | `feature/defer-remote-cli` | meshcore-dev `dev` | Reset from post-v1.17 main |
+| EC-000 | `feature/defer-remote-cli-upstream` | meshcore-dev `dev` | Pushed 2026-08-25; open cross-fork PR |
 | EC-002 | `feature/nrf52-watchdog` | meshcore-dev `dev` | Pushed; rebase onto meshcore/dev for cross-fork PR |
 | EC-004 | `feature/doctor` | meshcore-dev `dev` | Pushed; rebase onto meshcore/dev for cross-fork PR |
 | EC-003 | `feature/endf-restamp` | vk496 `feature/ota-lora` | Pushed; vk496 remote not configured locally |
