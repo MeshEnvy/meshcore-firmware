@@ -30,6 +30,7 @@ Enterprise index: `ops/initiatives/envyos-backlog.md` (summary rows only).
 | EC-008 | Bench `-debug` target twins | `feature/debug-targets` | P2 | S | EC-001 | `-debug` twin builds and boots with log tail | backlog |
 | EC-009 | Release tooling + changelog docs | `chore/release-tooling` | P2 | S | EC-001 | Build scripts + changelog present | backlog |
 | EC-011 | Repeater `stealth_mode` — minimize discovery-plane leaks | `feature/stealth-mode` | P2 | M | EC-001 | Stealth slim: no self-advert/anon/discover/OTA beacon; still relays | backlog |
+| EC-012 | OTA release provenance — signed distro motas + fleet allowlist | `feature/ota-provenance` | P2 | M | EC-001 | Release mota verifies + applies with allowlisted signer; rejects unknown signer | backlog |
 
 ### Source commits (from `envyos/dev-pre-split` monolith)
 
@@ -72,3 +73,4 @@ EC-001 includes freshen overlay: SenseCAP slim OTA env, NOR/SD seeder allow CLI.
 | 2026-08-25 | Opened backlog; split `envyos/dev-pre-split` monolith into feature branches. **`envyos/main` stays on v1.16 + 0.1.3 hotfix** until items are pulled deliberately. |
 | 2026-08-25 | Reverted mistaken merge of EC-001–EC-009 to `envyos/main`. Feature branches only. |
 | 2026-08-25 | EC-011: repeater `stealth_mode` — gate self-adverts, anon owner/region/clock, node discover, OTA beacons; path hash on relay remains. |
+| 2026-08-25 | EC-012: OTA release provenance — sign published motas, fleet `ota key` allowlist, apply trust separate from discovery (EC-011). |
