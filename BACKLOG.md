@@ -29,6 +29,7 @@ Enterprise index: `ops/initiatives/envyos-backlog.md` (summary rows only).
 | EC-007 | Firmware identity codegen | `feature/firmware-identity-codegen` | P2 | S | EC-001 | Release rebuild only touches generated identity | backlog |
 | EC-008 | Bench `-debug` target twins | `feature/debug-targets` | P2 | S | EC-001 | `-debug` twin builds and boots with log tail | backlog |
 | EC-009 | Release tooling + changelog docs | `chore/release-tooling` | P2 | S | EC-001 | Build scripts + changelog present | backlog |
+| EC-013 | Battery + temp telemetry history ring + CLI dump | `feature/telemetry-history` | P2 | M | EC-001 | `battery history` compact line; set/get interval; survives reboot (FS) | backlog |
 
 ### Source commits (from `envyos/dev-pre-split` monolith)
 
@@ -70,3 +71,4 @@ EC-001 includes freshen overlay: SenseCAP slim OTA env, NOR/SD seeder allow CLI.
 |------|------|
 | 2026-08-25 | Opened backlog; split `envyos/dev-pre-split` monolith into feature branches. **`envyos/main` stays on v1.16 + 0.1.3 hotfix** until items are pulled deliberately. |
 | 2026-08-25 | Reverted mistaken merge of EC-001–EC-009 to `envyos/main`. Feature branches only. |
+| 2026-08-28 | EC-013: battery + temp telemetry history ring — compact ASCII CLI dump; see `packages-meta/meshcore/BACKLOG.md` § EC-013. |
