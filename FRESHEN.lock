@@ -1,62 +1,17 @@
 # EnvyOS fleet release manifest.
-# Policy: companion tag + cherry-picked OTA commits + overlay = earns VERSION / v0.1.x / motas/.
-# Not companion tag alone; not meshcore/dev; not merge vk496/feature/ota-lora wholesale.
-# See .cursor/skills/envyos-freshen/SKILL.md.
+# Policy v2: companion tag merged onto envyos overlay. No vk496 OTA replay.
+# See .cursor/skills/envyos-freshen/SKILL.md and docs/integration-policy.md.
 
-mode: release
-companion_tag: companion-v1.17.0
-companion_sha: 727fc051
-ota_commits:
-  - 07b20f04  # ota: .mota container format, merkle, EndF
-  - 6b4f2355  # ota: detools decoder
-  - 5da78304  # ota: LoRa transfer protocol
-  - 9b61169c  # ota: platform apply + flash staging
-  - 9beaf684  # ota: MotaSource serial
-  - 543c9011  # ota: CLI + CommonCLI integration
-  - 4680d105  # ota: build/board enablement
-  - 2092500d  # ota: motatool C++ (later extracted)
-  - e3dd6b41  # ota: native unit tests
-  - 54c8b586  # ota: protocol spec + user guide
-  - 280b9b15  # ota: WiFi seeder/console
-  - 4cb118b4  # ota: post-boot beacon + ota ls
-  - 0a1cf2b2  # ota: nRF52 OTAFIX variants
-  - 9ff1c883  # ota: advert interval config
-  - 259802b7  # ota: hop limit config
-  - bd2ecb80  # ota: seeder storage protocol
-  - 10fa4344  # ota: ota pull folder
-  - 28e3df02  # ota: folder pull pause/resume
-  - 49820b57  # docs: pull mota off mesh
-  - 4a601486  # ota: nRF52 flash-layout safety net
-  - 89532147  # ota: want_mask + warm-start capture
-  - b159737e  # ota: ota stats
-  - 0319a81d  # ota: FIRMWARE_VERSION in EndF
-  - cbdc629f  # docs: warm-start workflow
-  - ee6e5487  # variants: Heltec T096 OTA
-  - 87241323  # ota: extract motatool repo
-  - 71841856  # ota: fix ls tag
-overlay_commits:
-  - dcf051f8  # ota ls: start at entry N
-  - 97470f41  # next-hop retry
-  - 18be8ace  # hard hop ack
-  - f0e6b538  # default firmware version v0.1.0
-  - beadfa6b  # distro version helpers
-  - fc013f42  # log tail serial
-  - 7dedbdd6  # hop.ignore test mode
-  - 1f7e70a9  # echo-primary hop retry
-  - 7fd0f6b7  # log tail on enables logging
-  - 59790f36  # zero-hop echo cancel
-  - 5116d0ba  # role-aware OTA staging ceiling
-  - beeef280  # slim repeater role
-  - 31621a3e  # BLE_DFU_DISABLED
-  - 705724b2  # wismesh-tag buzzer/LEDs
-  - 376a9d3f  # boot fsck for corrupt lfs
-  - 2e7d5a61  # payload log labels
-  - 899ba168  # SD superseeder
-  - 0e70236c  # hop retry default off
-  - 481c9aa6  # sensecap slim repeater OTA env
-  - 502b2e9e  # NOR/SD superseeder allow CLI
-last_freshen: 2026-08-09
+policy_version: 2
+mode: integrate
+meshcore_tag: companion-v1.17.1
+meshcore_sha: d9296435
+integrate_branch: envyos/integrate/companion-v1.17.1
+integrate_sha: e530a434
+envyos_main_sha: pending  # envyos/main stays v1.16 / 0.1.3 until EC-001 is pulled
+last_integrate: 2026-08-29
 notes: >-
-  envyos/main merged onto companion-v1.17.0 (JSON ConfigSerializer base).
-  OTA prefs adapted to OtaPrefs nested serializer; hop retry uses v1.17 wasSeen/markSeen.
-  Cherry-pick script retained for vk496 OTA stack replay; overlay applied via merge for v1.17.
+  Merged companion-v1.17.1 into feature/companion-v1.17 (prior 1.17.0 overlay).
+  Kept EnvyOS OTA target/hw id + BLE_DFU_DISABLED; took 1.17.1 FEM PA-gain hooks
+  and CC310 nRFCrypto begin/end. Cherry-picked T096 slim env from envyos/dev.
+  vk496 replay: no.
