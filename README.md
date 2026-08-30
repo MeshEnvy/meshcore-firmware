@@ -21,7 +21,7 @@ Features below are on `envyos/main` and are **not** in stock MeshCore unless Sta
 | SD superseeder | active | [vk496#5](https://github.com/vk496/MeshCore/pull/5) |
 | EnvyBoot `get bootloader.ver` marker | active | EnvyOS-only |
 | JSON prefs `-DCONFIG_MAX_TOKEN_LEN=512` | active | EnvyOS-only (OTA signer hex blob) |
-| ConfigSerializer `rd_len` uint16_t | active | meshcore-dev (PR pending) |
+| ConfigSerializer `rd_len` uint16_t | active | [meshcore-dev#3322](https://github.com/meshcore-dev/MeshCore/pull/3322) |
 | `ota ls` session tag | upstreamed (vk496) | [vk496#1](https://github.com/vk496/MeshCore/pull/1) |
 
 ---
