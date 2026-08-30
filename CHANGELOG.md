@@ -29,6 +29,7 @@ First `upstream-evN` pin. Rebase onto MeshCore `companion-v1.17.1`. Overlay from
 
 - **nRF `get bootloader.ver`.** Recognize EnvyOS `EnvyBoot ` INFO_UF2 marker (Adafruit `UF2 Bootloader ` still works). Empty version on v0.1.3 EnvyBoot nodes was this miss.
 - **JSON prefs `ota.signers`.** EnvyOS sets `-DCONFIG_MAX_TOKEN_LEN=512` (4×32 B allowlist is 256 hex). `rd_len` widened to `uint16_t` so that override works above 255. [meshcore-dev#3322](https://github.com/meshcore-dev/MeshCore/pull/3322).
+- **Stale `-DFIRMWARE_VERSION=v0.1.0` in `platformio.ini`.** Distro-coupled leftover. `./envyos build` injects the pin stamp; bare `pio run` uses the example header (`v1.17.1`).
 
 ## [0.1.3] - 2026-08-27
 
