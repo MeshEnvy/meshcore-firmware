@@ -28,7 +28,7 @@ public:
 
 class MockPrintStream : public Stream {
     int len = 0;
-    uint8_t _buf[2048];
+    uint8_t _buf[1024];
 
     size_t printSigned(long long value) {
         char text[24];

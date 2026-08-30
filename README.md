@@ -1,3 +1,31 @@
+# MeshCore (MeshEnvy / EnvyOS fork)
+
+This is MeshEnvy's integration fork of [meshcore-dev/MeshCore](https://github.com/meshcore-dev/MeshCore), used by the [EnvyOS](https://github.com/MeshEnvy/envyos) distro. Default branch is `envyos/main`.
+
+Stock MeshCore notes live on [upstream GitHub Releases](https://github.com/meshcore-dev/MeshCore/releases). Overlay pins (`1.17.1-ev1`, …) are in [CHANGELOG.md](CHANGELOG.md). Fleet binaries ship from [EnvyOS releases](https://github.com/MeshEnvy/envyos/releases), not this repo.
+
+## EnvyOS overlay
+
+Features below are on `envyos/main` and are **not** in stock MeshCore unless Status is `upstreamed`. Drop or rewrite a row when the upstream PR merges or a core feature replaces it.
+
+| Overlay | Status | Upstream |
+|---------|--------|----------|
+| Next-hop retry (echo-primary, `hop.retry`) | active | [meshcore-dev#2980](https://github.com/meshcore-dev/MeshCore/pull/2980) (draft) |
+| Serial log tail (`log tail on`) | active | [meshcore-dev#2991](https://github.com/meshcore-dev/MeshCore/pull/2991) |
+| Companion LittleFS fsck on boot | active | [meshcore-dev#3012](https://github.com/meshcore-dev/MeshCore/pull/3012) (draft) |
+| Defer remote admin CLI (advert lockup) | active | [meshcore-dev#3196](https://github.com/meshcore-dev/MeshCore/pull/3196) |
+| LoRa OTA (`.mota`, device `ota` CLI) | active | [vk496/MeshCore](https://github.com/vk496/MeshCore) `feature/ota-lora` |
+| Role-aware OTA staging ceiling | active | [vk496#3](https://github.com/vk496/MeshCore/pull/3) |
+| `ota ls` start-at-N | active | [vk496#2](https://github.com/vk496/MeshCore/pull/2) |
+| Slim repeater (RAK4631 / T096 / SenseCAP) | active | [vk496#4](https://github.com/vk496/MeshCore/pull/4) (RAK4631). T096 / SenseCAP EnvyOS-only |
+| SD superseeder | active | [vk496#5](https://github.com/vk496/MeshCore/pull/5) |
+| EnvyBoot `get bootloader.ver` marker | active | EnvyOS-only |
+| JSON prefs `-DCONFIG_MAX_TOKEN_LEN=512` | active | EnvyOS-only (OTA signer hex blob) |
+| ConfigSerializer `rd_len` uint16_t | active | meshcore-dev (PR pending) |
+| `ota ls` session tag | upstreamed (vk496) | [vk496#1](https://github.com/vk496/MeshCore/pull/1) |
+
+---
+
 ## About MeshCore
 
 MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.
