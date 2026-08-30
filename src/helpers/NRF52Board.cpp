@@ -389,19 +389,29 @@ void NRF52Board::powerOff() {
 }
 
 bool NRF52Board::getBootloaderVersion(char* out, size_t max_len) {
-    static const char BOOTLOADER_MARKER[] = "UF2 Bootloader ";
-    const uint8_t* flash = (const uint8_t*)0x000FB000; // earliest known info.txt location is 0xFB90B, latest is 0xFCC4B
+    // INFO_UF2.TXT is in the nRF52840 bootloader image (0xF4000–0xFE000).
+    // Adafruit/OTAFIX: "UF2 Bootloader <ver>". EnvyOS: "EnvyBoot <ver>".
+    static const char ENVY_MARKER[] = "EnvyBoot ";
+    static const char UF2_MARKER[] = "UF2 Bootloader ";
+    const char* const markers[] = {ENVY_MARKER, UF2_MARKER};
+    const size_t mlens[] = {sizeof(ENVY_MARKER) - 1, sizeof(UF2_MARKER) - 1};
+    const uint8_t* flash = (const uint8_t*)0x000F4000;
+    const uint32_t span = 0x000FE000 - 0x000F4000;
 
-    for (uint32_t i = 0; i < 0x3000 - (sizeof(BOOTLOADER_MARKER) - 1); i++) {
-        if (memcmp(&flash[i], BOOTLOADER_MARKER, sizeof(BOOTLOADER_MARKER) - 1) == 0) {
-            const char* ver = (const char*)&flash[i + sizeof(BOOTLOADER_MARKER) - 1];
-            size_t len = 0;
-            while (len < max_len - 1 && ver[len] != '\0' && ver[len] != ' ' && ver[len] != '\n' && ver[len] != '\r') {
-                out[len] = ver[len];
-                len++;
+    for (size_t m = 0; m < 2; m++) {
+        const char* marker = markers[m];
+        const size_t mlen = mlens[m];
+        for (uint32_t i = 0; i + mlen < span; i++) {
+            if (memcmp(&flash[i], marker, mlen) == 0) {
+                const char* ver = (const char*)&flash[i + mlen];
+                size_t len = 0;
+                while (len < max_len - 1 && ver[len] != '\0' && ver[len] != ' ' && ver[len] != '\n' && ver[len] != '\r') {
+                    out[len] = ver[len];
+                    len++;
+                }
+                out[len] = '\0';
+                return len > 0;
             }
-            out[len] = '\0';
-            return len > 0; // bootloader string is non-empty
         }
     }
     return false;
