@@ -7,7 +7,7 @@ mode: integrate
 meshcore_tag: companion-v1.17.1
 meshcore_sha: d9296435
 integrate_branch: envyos/integrate/companion-v1.17.1
-envyos_main_sha: pending
+envyos_main_sha: 2cf4a528
 last_integrate: 2026-08-29
 notes: >-
   Merged companion-v1.17.1 into the 1.17.0 overlay, then pulled current envyos/main
