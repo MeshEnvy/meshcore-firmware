@@ -11,7 +11,8 @@
 #endif
 
 #ifndef CONFIG_MAX_TOKEN_LEN
-  #define CONFIG_MAX_TOKEN_LEN   128
+  // Must hold the largest hex blob: ota.signers is 4×32 B → 256 hex chars + NUL.
+  #define CONFIG_MAX_TOKEN_LEN   512
 #endif
 
 class ConfigSerializer {
@@ -23,7 +24,7 @@ class ConfigSerializer {
   class Context {
     Stream* _f;
     OP _op;
-    uint8_t rd_len;
+    uint16_t rd_len;
     uint8_t rd_mode;
     char pending;
     char rd_buf[CONFIG_MAX_TOKEN_LEN];

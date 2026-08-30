@@ -7,11 +7,11 @@ mode: integrate
 meshcore_tag: companion-v1.17.1
 meshcore_sha: d9296435
 integrate_branch: envyos/integrate/companion-v1.17.1
-integrate_sha: e530a434
 envyos_main_sha: pending  # envyos/main stays v1.16 / 0.1.3 until EC-001 is pulled
 last_integrate: 2026-08-29
 notes: >-
   Merged companion-v1.17.1 into feature/companion-v1.17 (prior 1.17.0 overlay).
   Kept EnvyOS OTA target/hw id + BLE_DFU_DISABLED; took 1.17.1 FEM PA-gain hooks
   and CC310 nRFCrypto begin/end. Cherry-picked T096 slim env from envyos/dev.
-  vk496 replay: no.
+  Raised CONFIG_MAX_TOKEN_LEN to 512 and rd_len to uint16_t so JSON prefs can
+  load ota.signers (256 hex). vk496 replay: no.
