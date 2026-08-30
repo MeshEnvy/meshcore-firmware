@@ -1,0 +1,17 @@
+# EnvyOS fleet release manifest.
+# Policy v2: companion tag merged onto envyos overlay. No vk496 OTA replay.
+# See .cursor/skills/envyos-freshen/SKILL.md and docs/integration-policy.md.
+
+policy_version: 2
+mode: integrate
+meshcore_tag: companion-v1.17.1
+meshcore_sha: d9296435
+integrate_branch: envyos/integrate/companion-v1.17.1
+envyos_main_sha: pending
+last_integrate: 2026-08-29
+notes: >-
+  Merged companion-v1.17.1 into the 1.17.0 overlay, then pulled current envyos/main
+  (EnvyBoot version marker + T096 slim). Kept EnvyOS OTA target/hw id +
+  BLE_DFU_DISABLED; took 1.17.1 FEM PA-gain hooks and CC310 nRFCrypto.
+  Raised CONFIG_MAX_TOKEN_LEN to 512 and rd_len to uint16_t so JSON prefs can
+  load ota.signers (256 hex). vk496 replay: no.

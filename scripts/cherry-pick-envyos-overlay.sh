@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# LEGACY bootstrap (2026-07): cherry-pick vk496 OTA + EnvyOS overlay onto companion-v1.16.0.
+# LEGACY bootstrap: cherry-pick vk496 OTA + EnvyOS overlay onto a companion tag.
 # Retired for companion bumps — OTA is on envyos/main; use integrate merge per
 # envyos/docs/integration-policy.md. Kept for reproducibility only.
-# Run from envycore/ after: git reset --hard companion-v1.16.0
 set -euo pipefail
 
 COMMITS=(
@@ -53,6 +52,8 @@ COMMITS=(
   2e7d5a61
   899ba168
   0e70236c
+  481c9aa6
+  502b2e9e
 )
 
 for sha in "${COMMITS[@]}"; do
