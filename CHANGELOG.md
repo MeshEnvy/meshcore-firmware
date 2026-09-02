@@ -24,6 +24,7 @@ First `upstream-evN` pin. Rebase onto MeshCore `companion-v1.17.1`. Overlay from
 ### Added
 
 - **Heltec T096 slim repeater.**
+- **Heltec T096 USB seeder** (`Heltec_t096_seeder` / `heltec-t096-seeder`). Slim + folder relay. Distinct `target_id` from slim. Also registered `Heltec_t096_repeater_slim` in `OtaTargets.h` (was missing).
 
 ### Fixed
 
