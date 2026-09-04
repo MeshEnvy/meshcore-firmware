@@ -13,6 +13,10 @@ Add user-visible overlay work under **`## [Unreleased]`** in the same change set
 
 ## [Unreleased]
 
+### Fixed
+
+- **T096 slim:** hold GPS off and TFT backlight off in `T096Board::begin()`. Slim never compiled the GPS driver, so `GPS_EN` (active-low) stayed high-Z after reset.
+
 ## [1.17.1-ev1] - unpublished bench pin
 
 First `upstream-evN` pin. Rebase onto MeshCore `companion-v1.17.1`. Overlay from `0.1.3` carried forward.
