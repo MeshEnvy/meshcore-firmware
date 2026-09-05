@@ -13,6 +13,10 @@ Add user-visible overlay work under **`## [Unreleased]`** in the same change set
 
 ## [Unreleased]
 
+### Added
+
+- **CLI `try`.** `try [reboot] <secs> <set-args>` applies a pref trial, persists to `/try.json`, auto-reverts on RTC timeout unless `set` commits. Up to 4 slots. `get try` lists pending trials.
+
 ### Fixed
 
 - **T096 slim:** hold GPS off and TFT backlight off in `T096Board::begin()`. Slim never compiled the GPS driver, so `GPS_EN` (active-low) stayed high-Z after reset.

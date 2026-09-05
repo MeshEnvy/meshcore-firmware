@@ -1435,6 +1435,8 @@ void MyMesh::loop() {
 
   processPendingRemoteCli();
 
+  _cli.loop();
+
   mesh::Mesh::loop();   // also drives the OTA fetch loop (centralized in mesh::Mesh)
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
