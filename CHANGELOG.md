@@ -20,6 +20,7 @@ Add user-visible overlay work under **`## [Unreleased]`** in the same change set
 ### Fixed
 
 - **T096 slim:** hold GPS off and TFT backlight off in `T096Board::begin()`. Slim never compiled the GPS driver, so `GPS_EN` (active-low) stayed high-Z after reset.
+- **EndF `ota self` on nRF52 (EC-022).** `find_self_firmware` hashed the flash body via `Utils::sha256` → CC310 `CRYS_HASH`, which DMA-reads SRAM only. Trailer was on the image; verify always failed (`target:00000000`). Hash with software SHA-256 instead.
 
 ## [1.17.1-ev1] - unpublished bench pin
 

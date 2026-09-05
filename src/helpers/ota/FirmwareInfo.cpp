@@ -1,6 +1,6 @@
 #include "FirmwareInfo.h"
-#include "Multihash.h"
 #include "OtaByteIO.h"
+#include <SHA256.h>
 #include <string.h>
 
 namespace mesh {
@@ -18,8 +18,13 @@ bool find_self_firmware(const uint8_t* region, uint32_t region_len,
     if (body_len != off) continue;                            // trailer must sit right after the body
 
     if (verify_body) {
+      // Software SHA-256, not mh8()/Utils::sha256. On nRF52 that is CC310 CRYS_HASH,
+      // which DMA-reads SRAM only — a ~350 KB memory-mapped flash body fails and
+      // ota self reports no EndF even when the trailer is on the image.
+      SHA256 sha;
+      sha.update(region, body_len);
       uint8_t h[8];
-      mh8(h, region, body_len);
+      sha.finalize(h, 8);
       if (memcmp(h, region + off + 8, 8) != 0) continue;       // coincidental marker — keep scanning
     }
     out.valid = true;
