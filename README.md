@@ -17,7 +17,7 @@ Features below are on `envyos/main` and are **not** in stock MeshCore unless Sta
 | LoRa OTA (`.mota`, device `ota` CLI) | active | [vk496/MeshCore](https://github.com/vk496/MeshCore) `feature/ota-lora` |
 | Role-aware OTA staging ceiling | active | [vk496#3](https://github.com/vk496/MeshCore/pull/3) |
 | `ota ls` start-at-N | active | [vk496#2](https://github.com/vk496/MeshCore/pull/2) |
-| Slim repeater (RAK4631 / T096 / SenseCAP) | active | [vk496#4](https://github.com/vk496/MeshCore/pull/4) (RAK4631). T096 / SenseCAP EnvyOS-only |
+| Slim repeater (RAK4631 / T096 / SenseCAP / XIAO nRF52) | active | [vk496#4](https://github.com/vk496/MeshCore/pull/4) (RAK4631). T096 / SenseCAP / XIAO EnvyOS-only |
 | SD superseeder | active | [vk496#5](https://github.com/vk496/MeshCore/pull/5) |
 | EnvyBoot `get bootloader.ver` marker | active | EnvyOS-only |
 | JSON prefs `-DCONFIG_MAX_TOKEN_LEN=512` | active | EnvyOS-only (OTA signer hex blob) |

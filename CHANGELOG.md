@@ -16,6 +16,7 @@ Add user-visible overlay work under **`## [Unreleased]`** in the same change set
 ### Added
 
 - **CLI `try`.** `try [reboot] <secs> <set-args>` applies a pref trial, persists to `/try.json`, auto-reverts on RTC timeout unless `set` commits. Up to 4 slots. `get try` lists pending trials.
+- **Seeed XIAO nRF52840 slim repeater** (`Xiao_nrf52_repeater_slim` / `xiao-nrf52-repeater-slim`). Wio-SX1262 kit. S140 v7 app base `0x27000`. OTAFIX board `xiao_nrf52840_ble`.
 
 ### Fixed
 
