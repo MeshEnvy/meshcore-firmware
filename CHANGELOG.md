@@ -13,8 +13,11 @@ Add user-visible overlay work under **`## [Unreleased]`** in the same change set
 
 ## [Unreleased]
 
+## [1.17.1-ev2] - unpublished bench pin
+
 ### Added
 
+- **Discover reply serial line.** An accepted `discover.neighbors` reply prints `discover <pubkey8> rx=<dB> in=<dB> rssi=<dBm>` on the USB console. `rx` is the local SNR. `in` is the inbound SNR byte that `neighbors` drops. `rssi` is this board's RSSI for that reply.
 - **CLI `try`.** `try [reboot] <secs> <set-args>` applies a pref trial, persists to `/try.json`, auto-reverts on RTC timeout unless `set` commits. Up to 4 slots. `get try` lists pending trials.
 - **Seeed XIAO nRF52840 slim repeater** (`Xiao_nrf52_repeater_slim` / `xiao-nrf52-repeater-slim`). Wio-SX1262 kit. S140 v7 app base `0x27000`. OTAFIX board `xiao_nrf52840_ble`.
 

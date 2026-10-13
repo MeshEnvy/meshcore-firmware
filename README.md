@@ -2,7 +2,7 @@
 
 This is MeshEnvy's integration fork of [meshcore-dev/MeshCore](https://github.com/meshcore-dev/MeshCore), used by the [EnvyOS](https://github.com/MeshEnvy/envyos) distro. Default branch is `envyos/main`.
 
-Stock MeshCore notes live on [upstream GitHub Releases](https://github.com/meshcore-dev/MeshCore/releases). Overlay pins (`1.17.1-ev1`, …) are in [CHANGELOG.md](CHANGELOG.md). Fleet binaries ship from [EnvyOS releases](https://github.com/MeshEnvy/envyos/releases), not this repo.
+Stock MeshCore notes live on [upstream GitHub Releases](https://github.com/meshcore-dev/MeshCore/releases). Overlay pins (`1.17.1-ev2`, …) are in [CHANGELOG.md](CHANGELOG.md). Fleet binaries ship from [EnvyOS releases](https://github.com/MeshEnvy/envyos/releases), not this repo.
 
 ## EnvyOS overlay
 
@@ -23,6 +23,7 @@ Features below are on `envyos/main` and are **not** in stock MeshCore unless Sta
 | JSON prefs `-DCONFIG_MAX_TOKEN_LEN=512` | active | EnvyOS-only (OTA signer hex blob) |
 | ConfigSerializer `rd_len` uint16_t | active | [meshcore-dev#3322](https://github.com/meshcore-dev/MeshCore/pull/3322) |
 | CLI `try` (confirm-or-revert prefs) | active | [meshcore-dev#3358](https://github.com/meshcore-dev/MeshCore/pull/3358) (draft) |
+| Discover reply serial (`rx` / `in` / `rssi`) | active | EnvyOS-only |
 | `ota ls` session tag | upstreamed (vk496) | [vk496#1](https://github.com/vk496/MeshCore/pull/1) |
 
 ---

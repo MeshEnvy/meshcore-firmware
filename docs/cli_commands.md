@@ -127,6 +127,14 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 **Usage:** 
 - `discover.neighbors`
 
+**USB console:** each accepted reply also prints one line:
+
+```
+discover <pubkey8> rx=<dB> in=<dB> rssi=<dBm>
+```
+
+`rx` is the SNR at this board (how well this board heard them). `in` is the SNR byte in the reply (how well they heard this board), divided by 4. `rssi` is this board's RSSI for that reply. `neighbors` does not keep `in` or `rssi`.
+
 ---
 
 ## Statistics

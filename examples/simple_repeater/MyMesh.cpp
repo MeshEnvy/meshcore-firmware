@@ -1,5 +1,6 @@
 #include "MyMesh.h"
 #include <algorithm>
+#include <stdio.h>
 
 /* ------------------------------ Config -------------------------------- */
 
@@ -924,6 +925,17 @@ bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t 
 #define CTL_TYPE_NODE_DISCOVER_REQ   0x80
 #define CTL_TYPE_NODE_DISCOVER_RESP  0x90
 
+// nRF printf often has no float. One decimal, sign only when negative.
+static void formatSnrTenths(char* dest, size_t cap, float db) {
+  int tenths = (int)(db * 10.0f + (db >= 0.0f ? 0.5f : -0.5f));
+  if (tenths < 0) {
+    tenths = -tenths;
+    snprintf(dest, cap, "-%d.%d", tenths / 10, tenths % 10);
+  } else {
+    snprintf(dest, cap, "%d.%d", tenths / 10, tenths % 10);
+  }
+}
+
 void MyMesh::onControlDataRecv(mesh::Packet* packet) {
   uint8_t type = packet->payload[0] & 0xF0;    // just test upper 4 bits
   if (type == CTL_TYPE_NODE_DISCOVER_REQ && packet->payload_len >= 6
@@ -976,6 +988,21 @@ void MyMesh::onControlDataRecv(mesh::Packet* packet) {
     if (id.matches(self_id)) {
       return;
     }
+    // neighbors stores local RX only. payload[1] is how well they heard us (SNR x 4).
+    char hex[12];
+    char rx_txt[12];
+    char in_txt[12];
+    mesh::Utils::toHex(hex, id.pub_key, 4);
+    formatSnrTenths(rx_txt, sizeof(rx_txt), packet->getSNR());
+    formatSnrTenths(in_txt, sizeof(in_txt), ((int8_t)packet->payload[1]) / 4.0f);
+    Serial.print("discover ");
+    Serial.print(hex);
+    Serial.print(" rx=");
+    Serial.print(rx_txt);
+    Serial.print(" in=");
+    Serial.print(in_txt);
+    Serial.print(" rssi=");
+    Serial.println((int)radio_driver.getLastRSSI());
     putNeighbour(id, rtc_clock.getCurrentTime(), packet->getSNR());
   }
 }
