@@ -13,7 +13,11 @@ Add user-visible overlay work under **`## [Unreleased]`** in the same change set
 
 ## [Unreleased]
 
-## [1.17.1-ev2] - unpublished bench pin
+## [1.18.0-ev2] - unpublished bench pin
+
+### Changed
+
+- **MeshCore repeater-v1.18.0.** Stamp is `1.18.0-ev2`. `companion-v1.18.0` and `room-server-v1.18.0` are the same commit.
 
 ### Added
 
