@@ -26,19 +26,38 @@ MultiSerialInterface interface_manager;
     // include nrf52 bluetooth interface
     #include <helpers/nrf52/SerialBLEInterface.h>
     SerialBLEInterface bluetooth_interface;
+  #elif defined(RP2040_PLATFORM)
+    // include rp2040 (Pico W / CYW43) bluetooth interface
+    #include <helpers/rp2040/SerialBLEInterface.h>
+    SerialBLEInterface bluetooth_interface;
   #else
     #error "SerialBLEInterface is not defined for this platform"
   #endif
 #endif
 
 // include wifi interface
-#ifdef WIFI_SSID
+#ifdef ENABLE_WIFI_INTERFACE
+  #ifndef WIFI_SSID
+    #define WIFI_SSID ""
+  #endif
+  #ifndef WIFI_PWD
+    #define WIFI_PWD ""
+  #endif
   #ifndef TCP_PORT
     #define TCP_PORT 5000
   #endif
-  #ifdef ESP32
-    // include esp32 wifi interface
-    #include <helpers/esp32/SerialWifiInterface.h>
+  #ifndef WIFI_RETRY_INTERVAL
+    #if defined(RP2040_PLATFORM)
+      #define WIFI_RETRY_INTERVAL 30000   // each attempt blocks loop(), so retry less often
+    #else
+      #define WIFI_RETRY_INTERVAL 10000   // millis between reconnect attempts
+    #endif
+  #endif
+  #ifndef WIFI_RETRY_TIMEOUT
+    #define WIFI_RETRY_TIMEOUT 5000     // RP2040: cap on how long one join may block loop()
+  #endif
+  #if defined(ESP32) || defined(RP2040_PLATFORM)
+    #include <helpers/wifi/SerialWifiInterface.h>
     SerialWifiInterface wifi_interface;
   #else
     #error "SerialWifiInterface is not defined for this platform"
@@ -95,11 +114,7 @@ MultiSerialInterface interface_manager;
 
 StdRNG fast_rng;
 SimpleMeshTables tables;
-MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
-   #ifdef DISPLAY_CLASS
-      , &ui_task
-   #endif
-);
+MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store);
 
 /* END GLOBAL OBJECTS */
 
@@ -108,9 +123,13 @@ void halt() {
 }
 
 /* WIFI RECONNECT TRACKERS */
-#if defined(ESP32) && defined(WIFI_SSID)
+#ifdef ENABLE_WIFI_INTERFACE
   bool wifi_needs_reconnect = false;
   unsigned long last_wifi_reconnect_attempt = 0;
+  char wifi_ssid[33] = WIFI_SSID;   // replaced by stored prefs at boot, if set
+  char wifi_pwd[64] = WIFI_PWD;
+  bool wifi_was_connected = false;
+  bool wifi_enabled = false;   // set at boot from prefs; false also when the effective SSID is blank
 #endif
 
 /* WIFI OTA SEEDER — relay a host folder of .mota over WiFi (motatool `serve --tcp`), on a DEDICATED port
@@ -237,35 +256,36 @@ void setup() {
   #endif
   #endif
   store.begin();
-  the_mesh.begin(
-    #ifdef DISPLAY_CLASS
-        disp != NULL
-    #else
-        false
-    #endif
-  );
+  the_mesh.begin();
 #elif defined(RP2040_PLATFORM)
   LittleFS.begin();
   store.begin();
-  the_mesh.begin(
-    #ifdef DISPLAY_CLASS
-        disp != NULL
-    #else
-        false
-    #endif
-  );
+  the_mesh.begin();
 #elif defined(ESP32)
   SPIFFS.begin(true);
   store.begin();
-  the_mesh.begin(
-    #ifdef DISPLAY_CLASS
-        disp != NULL
-    #else
-        false
-    #endif
-  );
+  the_mesh.begin();
 #else
   #error "need to define filesystem"
+#endif
+
+#ifdef BLE_PIN_CODE // 123456 by default
+  if (the_mesh.getNodePrefs()->ble_pin == 0) {
+#ifdef DISPLAY_CLASS
+    if (disp != NULL && BLE_PIN_CODE == 123456) {
+      StdRNG rng;
+      the_mesh.setBLEPin(rng.nextInt(100000, 999999)); // random pin each session
+    } else {
+      the_mesh.setBLEPin(BLE_PIN_CODE); // otherwise static pin
+    }
+#else
+    the_mesh.setBLEPin(BLE_PIN_CODE); // otherwise static pin
+#endif
+  } else {
+    the_mesh.setBLEPin(the_mesh.getNodePrefs()->ble_pin);
+  }
+#else
+  the_mesh.setBLEPin(0);
 #endif
 
 // add bluetooth interface
@@ -275,34 +295,58 @@ void setup() {
 #endif
 
 // add wifi interface
-#ifdef WIFI_SSID
-  board.setInhibitSleep(true);   // prevent sleep when WiFi is active
-  WiFi.setAutoReconnect(true);
+#ifdef ENABLE_WIFI_INTERFACE
+  // use wifi ssid and password from prefs if ssid is not empty, otherwise use the build flag defaults
+  if (the_mesh.getNodePrefs()->wifi_ssid[0]) {
+    strcpy(wifi_ssid, the_mesh.getNodePrefs()->wifi_ssid);
+    strcpy(wifi_pwd, the_mesh.getNodePrefs()->wifi_pwd);
+  }
+  // only start wifi if enabled and ssid is not empty
+  wifi_enabled = the_mesh.getNodePrefs()->wifi_enabled;
+  if (wifi_enabled && wifi_ssid[0]) {
+#if defined(ESP32)
+    board.setInhibitSleep(true);   // prevent sleep when WiFi is active
+    WiFi.setAutoReconnect(true);
 
-  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info){
-      if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
-          WIFI_DEBUG_PRINTLN("WiFi disconnected. Flagging for reconnect...");
-          wifi_needs_reconnect = true;
-      } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
-          WIFI_DEBUG_PRINTLN("connected! IP %s  (companion app on :%d)",
-                             WiFi.localIP().toString().c_str(), TCP_PORT);
-          wifi_needs_reconnect = false;
-      }
-  });
+    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info){
+        if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+            WIFI_DEBUG_PRINTLN("WiFi disconnected (reason=%s). Flagging for reconnect...",
+              WiFi.disconnectReasonName((wifi_err_reason_t)info.wifi_sta_disconnected.reason));
+            wifi_needs_reconnect = true;
+        } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+            WIFI_DEBUG_PRINTLN("WiFi connected successfully!");
+            wifi_needs_reconnect = false;
+        }
+    });
+#endif
 
-  WiFi.begin(WIFI_SSID, WIFI_PWD);
-  // Disable WiFi modem power-save: its periodic modem/light-sleep stalls the SX1262 SPI+DIO servicing,
-  // which makes the LoRa radio go deaf (no TX/RX) while WiFi is associated. Required for LoRa+WiFi to
-  // coexist on this ESP32 — the small extra idle current is well worth a working radio.
-  WiFi.setSleep(false);
-  wifi_interface.begin(TCP_PORT);
-  interface_manager.addInterface(InterfaceType::WiFi, &wifi_interface);
-  #ifdef ENABLE_OTA
+    WIFI_DEBUG_PRINTLN("connecting to %s", wifi_ssid);
+
+#if defined(RP2040_PLATFORM)
+    // the join itself blocks inside the core (CYW43::begin busy-waits for the
+    // association), so every attempt stalls the mesh loop. beginNoBlock() only skips the
+    // extra DHCP wait. Give the first connect a full window, then bound the retries below.
+    WiFi.beginNoBlock(wifi_ssid, wifi_pwd);
+    last_wifi_reconnect_attempt = millis();   // let DHCP finish before the poll can retry
+#else
+    WiFi.begin(wifi_ssid, wifi_pwd);
+#if defined(ESP32)
+    // Disable WiFi modem power-save: its periodic modem/light-sleep stalls the SX1262 SPI+DIO servicing,
+    // which makes the LoRa radio go deaf (no TX/RX) while WiFi is associated.
+    WiFi.setSleep(false);
+#endif
+#endif
+    wifi_interface.begin(TCP_PORT);
+    interface_manager.addInterface(InterfaceType::WiFi, &wifi_interface);
+#if defined(ESP32) && defined(ENABLE_OTA)
     ota_seeder_server.begin();   // dedicated OTA seeder port for `motatool serve --tcp` (relay over LoRa)
     WIFI_DEBUG_PRINTLN("OTA seeder listening on :%d  (motatool serve --tcp)", OTA_SEEDER_TCP_PORT);
     ota_console_server.begin();  // dedicated OTA text-console port (`nc <ip> 5002` -> `ota ...`)
     WIFI_DEBUG_PRINTLN("OTA console listening on :%d  (nc <ip> %d, type `ota ...`)", OTA_CONSOLE_TCP_PORT, OTA_CONSOLE_TCP_PORT);
-  #endif
+#endif
+  } else {
+    WIFI_DEBUG_PRINTLN("wifi disabled");
+  }
 #endif
 
 // add usb interface
@@ -334,6 +378,7 @@ void setup() {
 
 #ifdef DISPLAY_CLASS
   ui_task.begin(disp, &sensors, the_mesh.getNodePrefs());  // still want to pass this in as dependency, as prefs might be moved
+  the_mesh.setListener(&ui_task);
 #endif
 
   board.onBootComplete();
@@ -347,6 +392,7 @@ void loop() {
   ui_task.loop();
 #endif
   rtc_clock.tick();
+  board.loop();
 #ifdef HAS_EXTERNAL_WATCHDOG
   external_watchdog.loop();
 #endif
@@ -357,17 +403,38 @@ void loop() {
 #endif
   }
 
-#if defined(ESP32) && defined(WIFI_SSID)
-  #ifdef ENABLE_OTA
+#ifdef ENABLE_WIFI_INTERFACE
+  if (wifi_enabled) {
+#if defined(ESP32) && defined(ENABLE_OTA)
     ota_seeder_loop();   // accept/drop a motatool `serve --tcp` connection on the dedicated seeder port
     ota_console_loop();  // service the OTA text console (port 5002)
+#endif
+    // RP2040 has no WiFi event callbacks, so poll the link state instead
+  #if defined(RP2040_PLATFORM)
+      wifi_needs_reconnect = (WiFi.status() != WL_CONNECTED);
+      if (wifi_was_connected == wifi_needs_reconnect) {   // link state changed
+        wifi_was_connected = !wifi_needs_reconnect;
+        if (wifi_was_connected) {
+          WIFI_DEBUG_PRINTLN("connected, listening on %s:%d", WiFi.localIP().toString().c_str(), TCP_PORT);
+        } else {
+          WIFI_DEBUG_PRINTLN("link lost");
+        }
+      }
   #endif
-  // Safely attempt to reconnect every 10 seconds if flagged
-  if (wifi_needs_reconnect && (millis() - last_wifi_reconnect_attempt > 10000)) {
-    WIFI_DEBUG_PRINTLN("Attempting manual WiFi reconnect...");
-    WiFi.disconnect();
-    WiFi.reconnect();
-    last_wifi_reconnect_attempt = millis();
+
+    // Safely attempt to reconnect if flagged. On RP2040 each attempt blocks the mesh loop
+    // for up to WIFI_RETRY_TIMEOUT, so retry less often and cap how long a join may stall.
+    if (wifi_needs_reconnect && (millis() - last_wifi_reconnect_attempt > WIFI_RETRY_INTERVAL)) {
+      WIFI_DEBUG_PRINTLN("Attempting manual WiFi reconnect to %s (status %d)...", wifi_ssid, WiFi.status());
+    #if defined(RP2040_PLATFORM)
+        WiFi.setTimeout(WIFI_RETRY_TIMEOUT);
+        WiFi.beginNoBlock(wifi_ssid, wifi_pwd);   // no reconnect() on this platform
+    #else
+        WiFi.disconnect();
+        WiFi.reconnect();
+    #endif
+      last_wifi_reconnect_attempt = millis();
+    }
   }
 #endif
 }

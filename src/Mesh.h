@@ -45,7 +45,7 @@ class Mesh : public Dispatcher {
   void removeSelfFromPath(Packet* packet);
   void routeDirectRecvAcks(Packet* packet, uint32_t delay_millis);
   //void routeRecvAcks(Packet* packet, uint32_t delay_millis);
-  DispatcherAction forwardMultipartDirect(Packet* pkt);
+  DispatcherAction forwardMultipartDirect(Packet* pkt, uint32_t delay_millis);
 
 #ifndef HOP_RETRY_PENDING_MAX
 #define HOP_RETRY_PENDING_MAX 4
