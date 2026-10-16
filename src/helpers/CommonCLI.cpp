@@ -4,6 +4,10 @@
 #include "AdvertDataHelpers.h"
 #include "TxtDataHelpers.h"
 #include <RTClib.h>
+#if defined(ENABLE_OTA)
+  #include "ota/OtaCli.h"
+  #include "ota/OtaContext.h"   // persist/sync OTA policy + signer allowlist with NodePrefs
+#endif
 
 #ifndef BRIDGE_MAX_BAUD
 #define BRIDGE_MAX_BAUD 115200
@@ -28,6 +32,8 @@ static bool isValidName(const char *n) {
 }
 
 void CommonCLI::loadPrefs(FILESYSTEM* fs) {
+  _fs = fs;
+  bool loaded = false;
   if (fs->exists("/prefs.json")) {
 #if defined(RP2040_PLATFORM)
     File file = fs->open("/prefs.json", "r");
@@ -35,16 +41,46 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
     File file = fs->open("/prefs.json");
 #endif
     if (file) {
-      _prefs->loadSerial(file);   // new Serial prefs
+      _prefs->loadSerial(file);   // new JSON prefs
       file.close();
+      loaded = true;
     }
   } else if (fs->exists("/com_prefs")) {
     loadPrefsInt(fs, "/com_prefs");
-    if (savePrefs(fs)) {  // save to new Serial prefs
+    if (savePrefs(fs)) {  // migrate to JSON prefs
   //    fs->remove("/com_prefs");  // remove old
     }
+    loaded = true;
   }
+#if defined(ENABLE_OTA)
+  if (loaded) syncOtaConfigFromPrefs();   // persisted OTA policy/keys -> OtaContext (else keep safe defaults)
+#endif
+  loadTrySlots();
 }
+
+#if defined(ENABLE_OTA)
+// Push the persisted OTA policy + signer allowlist into the running OtaContext (called after load).
+void CommonCLI::syncOtaConfigFromPrefs() {
+  mesh::ota::OtaContext& c = mesh::ota::ota_ctx();
+  c.manager.set_autofetch(_prefs->ota_autofetch);
+  c.manager.set_checkpoint_blocks(_prefs->ota_checkpoint_blocks);
+  c.manager.set_advert_mins(_prefs->ota_advert_interval);
+  c.manager.set_max_hops(_prefs->ota_max_hops);
+  c.autoinstall = _prefs->ota_autoinstall;
+  c.allow.clear();
+  for (uint8_t i = 0; i < _prefs->ota_signer_count && i < MAX_OTA_SIGNERS; i++)
+    c.allow.add(_prefs->ota_signers[i]);
+#if defined(OTA_SUPERSEEDER)
+  if (_prefs->ota_seeder_allow_filter) {
+    c.seeder_allow.clear();  // filter mode, admit nothing until entries added
+    for (uint8_t i = 0; i < _prefs->ota_seeder_allow_count && i < 8; i++)
+      c.seeder_allow.add(_prefs->ota_seeder_allow[i]);
+  } else {
+    c.seeder_allow.reset();  // admit all
+  }
+#endif
+}
+#endif
 
 void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {  // Legacy prefs loader
 #if defined(RP2040_PLATFORM)
@@ -102,7 +138,31 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {  // Legacy 
     file.read((uint8_t *)&_prefs->flood_max_advert, sizeof(_prefs->flood_max_advert));             // 292
     file.read((uint8_t *)&_prefs->radio_fem_rxgain, sizeof(_prefs->radio_fem_rxgain));             // 293
     file.read((uint8_t *)&_prefs->cad_enabled, sizeof(_prefs->cad_enabled));                       // 294
-    // next: 295
+    // OTA config (295+). Default first so older prefs files (which lack these) keep conservative
+    // defaults: a short file makes the reads below no-ops (read returns 0 bytes, values unchanged).
+    _prefs->ota_autofetch = 0; _prefs->ota_autoinstall = 0; _prefs->ota_signer_count = 0;
+    _prefs->ota_checkpoint_blocks = 4;
+    _prefs->ota_advert_interval = 1440;
+    _prefs->ota_max_hops = 3;
+    file.read((uint8_t *)&_prefs->ota_autofetch, sizeof(_prefs->ota_autofetch));                   // 295
+    file.read((uint8_t *)&_prefs->ota_autoinstall, sizeof(_prefs->ota_autoinstall));               // 296
+    file.read((uint8_t *)&_prefs->ota_signer_count, sizeof(_prefs->ota_signer_count));             // 297
+    file.read((uint8_t *)_prefs->ota_signers, sizeof(_prefs->ota_signers));                        // 298
+    file.read((uint8_t *)&_prefs->ota_checkpoint_blocks, sizeof(_prefs->ota_checkpoint_blocks));   // 426
+    file.read((uint8_t *)&_prefs->ota_advert_interval, sizeof(_prefs->ota_advert_interval));       // 428
+    file.read((uint8_t *)&_prefs->ota_max_hops, sizeof(_prefs->ota_max_hops));                     // 430
+    _prefs->hop_retry = 0;
+    _prefs->hop_retry_ms = 1500;
+    file.read((uint8_t *)&_prefs->hop_retry, sizeof(_prefs->hop_retry));                         // 431
+    file.read((uint8_t *)&_prefs->hop_retry_ms, sizeof(_prefs->hop_retry_ms));                   // 432
+    _prefs->ota_seeder_allow_count = 0;
+    _prefs->ota_seeder_allow_filter = 0;
+    memset(_prefs->ota_seeder_allow, 0, sizeof(_prefs->ota_seeder_allow));
+    file.read((uint8_t *)&_prefs->ota_seeder_allow_count, sizeof(_prefs->ota_seeder_allow_count)); // 434
+    file.read((uint8_t *)&_prefs->ota_seeder_allow_filter, sizeof(_prefs->ota_seeder_allow_filter)); // 435
+    file.read(pad, 2);                                                                              // 436
+    file.read((uint8_t *)_prefs->ota_seeder_allow, sizeof(_prefs->ota_seeder_allow));              // 438
+    // next: 470
 
     // sanitise bad pref values
     _prefs->rx_delay_base = constrain(_prefs->rx_delay_base, 0, 20.0f);
@@ -135,6 +195,17 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {  // Legacy 
     _prefs->radio_fem_rxgain = constrain(_prefs->radio_fem_rxgain, 0, 1); // boolean
     _prefs->radio_fem_txgain = constrain(_prefs->radio_fem_txgain, 0, 1); // boolean
     _prefs->cad_enabled = constrain(_prefs->cad_enabled, 0, 1); // boolean
+    _prefs->ota_autofetch = constrain(_prefs->ota_autofetch, 0, 2);
+    _prefs->ota_autoinstall = constrain(_prefs->ota_autoinstall, 0, 1);
+    if (_prefs->ota_checkpoint_blocks > 4096) _prefs->ota_checkpoint_blocks = 4;
+    if (_prefs->ota_advert_interval > 10080) _prefs->ota_advert_interval = 1440;
+    if (_prefs->ota_max_hops > 8) _prefs->ota_max_hops = 3;
+    if (_prefs->ota_signer_count > 4) _prefs->ota_signer_count = 0;
+    if (_prefs->ota_seeder_allow_count > 8) _prefs->ota_seeder_allow_count = 0;
+    if (_prefs->ota_seeder_allow_filter > 1) _prefs->ota_seeder_allow_filter = 0;
+    _prefs->hop_retry = constrain(_prefs->hop_retry, 0, 5);
+    if (_prefs->hop_retry_ms < 200) _prefs->hop_retry_ms = 200;
+    if (_prefs->hop_retry_ms > 10000) _prefs->hop_retry_ms = 10000;
 
     file.close();
   }
@@ -273,10 +344,13 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
     } else if (memcmp(command, "clear stats", 11) == 0) {
       _callbacks->clearStats();
       strcpy(reply, "(OK - stats reset)");
+    } else if (memcmp(command, "try ", 4) == 0) {
+      handleTryCmd(sender_timestamp, &command[4], reply);
     } else if (memcmp(command, "get ", 4) == 0) {
       handleGetCmd(sender_timestamp, command, reply);
     } else if (memcmp(command, "set ", 4) == 0) {
       handleSetCmd(sender_timestamp, command, reply);
+      tryOnSetCommitted(&command[4], reply);
     } else if (sender_timestamp == 0 && strcmp(command, "erase") == 0) {
       bool s = _callbacks->formatFileSystem();
       sprintf(reply, "File system erase: %s", s ? "OK" : "Err");
@@ -297,6 +371,29 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
               solar_state,
               _board->isExternalPowered() ? "yes" : "no",
               _board->isChargerActive() ? "yes" : "no");
+#if defined(ENABLE_OTA)
+    } else if (memcmp(command, "ota", 3) == 0 && (command[3] == 0 || command[3] == ' ')) {
+      mesh::ota::handle_ota_command(command, reply, *_board);
+      if (mesh::ota::ota_ctx().config_dirty) {        // a policy/key changed via the CLI -> persist it
+        mesh::ota::OtaContext& c = mesh::ota::ota_ctx();
+        _prefs->ota_autofetch = c.manager.autofetch();
+        _prefs->ota_checkpoint_blocks = c.manager.checkpoint_blocks();
+        _prefs->ota_advert_interval = c.manager.advert_mins();
+        _prefs->ota_max_hops = c.manager.max_hops();
+        _prefs->ota_autoinstall = c.autoinstall;
+        _prefs->ota_signer_count = c.allow.count();
+        for (uint8_t i = 0; i < c.allow.count() && i < MAX_OTA_SIGNERS; i++)
+          memcpy(_prefs->ota_signers[i], c.allow.get(i), 32);
+#if defined(OTA_SUPERSEEDER)
+        _prefs->ota_seeder_allow_filter = c.seeder_allow.filtering() ? 1 : 0;
+        _prefs->ota_seeder_allow_count = c.seeder_allow.count();
+        for (uint8_t i = 0; i < c.seeder_allow.count() && i < 8; i++)
+          _prefs->ota_seeder_allow[i] = c.seeder_allow.get(i);
+#endif
+        _callbacks->savePrefs();
+        c.config_dirty = false;
+      }
+#endif
     } else if (memcmp(command, "sensor get ", 11) == 0) {
       const char* key = command + 11;
       const char* val = _sensors->getSettingByKey(key);
@@ -450,16 +547,27 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
 #else
       strcpy(reply, "Board not supported");
 #endif
+      tryOnSetCommitted("powersaving on", reply);
     } else if (memcmp(command, "powersaving off", 15) == 0) {
       _prefs->powersaving_enabled = 0;
       savePrefs();
       strcpy(reply, "off");
+      tryOnSetCommitted("powersaving off", reply);
     } else if (memcmp(command, "powersaving", 11) == 0) {
       if (_prefs->powersaving_enabled) {
         strcpy(reply, "on");
       } else {
         strcpy(reply, "off");
       }
+    } else if (sender_timestamp == 0 && memcmp(command, "log tail on", 11) == 0
+               && (command[11] == 0 || command[11] == ' ')) {
+      _callbacks->setLoggingOn(true);
+      _callbacks->setTailOn(true);
+      strcpy(reply, "   tail on");
+    } else if (sender_timestamp == 0 && memcmp(command, "log tail off", 12) == 0
+               && (command[12] == 0 || command[12] == ' ')) {
+      _callbacks->setTailOn(false);
+      strcpy(reply, "   tail off");
     } else if (memcmp(command, "log start", 9) == 0) {
       _callbacks->setLoggingOn(true);
       strcpy(reply, "   logging on");
@@ -573,6 +681,41 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       strcpy(reply, "OK");
     } else {
       strcpy(reply, "Error, max 64");
+    }
+  } else if (memcmp(config, "direct.txdelay ", 15) == 0) {
+    float f = atof(&config[15]);
+    if (f >= 0 && f <= 2.0f) {
+      _prefs->direct_tx_delay_factor = f;
+      savePrefs();
+      strcpy(reply, "OK");
+    } else {
+      strcpy(reply, "Error, must be 0-2");
+    }
+  } else if (memcmp(config, "hop.retry ", 10) == 0) {
+    int n = atoi(&config[10]);
+    if (n >= 0 && n <= 5) {
+      _prefs->hop_retry = (uint8_t)n;
+      savePrefs();
+      strcpy(reply, "OK");
+    } else {
+      strcpy(reply, "Error, must be 0-5");
+    }
+  } else if (memcmp(config, "hop.retry.ms ", 13) == 0) {
+    int n = atoi(&config[13]);
+    if (n >= 200 && n <= 10000) {
+      _prefs->hop_retry_ms = (uint16_t)n;
+      savePrefs();
+      strcpy(reply, "OK");
+    } else {
+      strcpy(reply, "Error, must be 200-10000");
+    }
+  } else if (memcmp(config, "hop.ignore ", 11) == 0) {
+    int n = atoi(&config[11]);
+    if (n >= 0 && n <= 255) {
+      _callbacks->setHopAckIgnore((uint8_t)n);
+      strcpy(reply, "OK");
+    } else {
+      strcpy(reply, "Error, must be 0-255");
     }
   } else if (memcmp(config, "owner.info ", 11) == 0) {
     config += 11;
@@ -700,7 +843,26 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
 
 void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* reply) {
   const char* config = &command[4];
-  if (memcmp(config, "allow.read.only", 15) == 0) {
+  if (memcmp(config, "try", 3) == 0 && (config[3] == 0 || config[3] == ' ')) {
+    handleGetTry(reply);
+    return;
+  }
+  if (memcmp(config, "dutycycle", 9) == 0) {
+    float dc = 100.0f / (_prefs->airtime_factor + 1.0f);
+    int dc_int = (int)dc;
+    int dc_frac = (int)((dc - dc_int) * 10.0f + 0.5f);
+    sprintf(reply, "> %d.%d%%", dc_int, dc_frac);
+  } else if (memcmp(config, "af", 2) == 0) {
+    sprintf(reply, "> %s", StrHelper::ftoa(_prefs->airtime_factor));
+  } else if (memcmp(config, "int.thresh", 10) == 0) {
+    sprintf(reply, "> %d", (uint32_t) _prefs->interference_threshold);
+  } else if (memcmp(config, "cad", 3) == 0) {
+    sprintf(reply, "> %s", _prefs->cad_enabled ? "on" : "off");
+  } else if (memcmp(config, "agc.reset.interval", 18) == 0) {
+    sprintf(reply, "> %d", ((uint32_t) _prefs->agc_reset_interval) * 4);
+  } else if (memcmp(config, "multi.acks", 10) == 0) {
+    sprintf(reply, "> %d", (uint32_t) _prefs->multi_acks);
+  } else if (memcmp(config, "allow.read.only", 15) == 0) {
     sprintf(reply, "> %s", _prefs->allow_read_only ? "on" : "off");
   } else if (memcmp(config, "flood.advert.interval", 21) == 0) {
     sprintf(reply, "> %d", ((uint32_t) _prefs->flood_advert_interval));
@@ -727,6 +889,14 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     sprintf(reply, "> %d", (uint32_t)_prefs->flood_max_unscoped);
   } else if (memcmp(config, "flood.max", 9) == 0) {
     sprintf(reply, "> %d", (uint32_t)_prefs->flood_max);
+  } else if (memcmp(config, "direct.txdelay", 14) == 0) {
+    sprintf(reply, "> %s", StrHelper::ftoa(_prefs->direct_tx_delay_factor));
+  } else if (memcmp(config, "hop.retry.ms", 12) == 0) {
+    sprintf(reply, "> %u", (unsigned)_prefs->hop_retry_ms);
+  } else if (memcmp(config, "hop.ignore", 10) == 0) {
+    sprintf(reply, "> %u", (unsigned)_callbacks->getHopAckIgnore());
+  } else if (memcmp(config, "hop.retry", 9) == 0) {
+    sprintf(reply, "> %u", (unsigned)_prefs->hop_retry);
   } else if (memcmp(config, "owner.info", 10) == 0) {
     auto start = reply;
     *reply++ = '>';
@@ -1023,5 +1193,407 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
     }
   } else {
     strcpy(reply, "Err - ??");
+  }
+}
+
+// ---------------- try (confirm-or-revert prefs) ----------------
+
+static bool tryJsonNeedsEscape(char c) {
+  return c == '"' || c == '\\';
+}
+
+static void tryJsonWriteStr(File& file, const char* s) {
+  file.print('"');
+  while (*s) {
+    char c = *s++;
+    if (tryJsonNeedsEscape(c)) file.print('\\');
+    file.print(c);
+  }
+  file.print('"');
+}
+
+bool CommonCLI::tryReplyIsOk(const char* reply) {
+  return reply && (memcmp(reply, "OK", 2) == 0 || memcmp(reply, "on -", 4) == 0 || memcmp(reply, "off", 3) == 0);
+}
+
+bool CommonCLI::tryReplyNeedsRebootApply(const char* reply) {
+  return reply && strstr(reply, "reboot to apply") != nullptr;
+}
+
+bool CommonCLI::tryIsDeniedKey(const char* key) const {
+  static const char* denied[] = {
+    "prv.key", "password", "guest.password", "name", "lat", "lon", nullptr
+  };
+  for (int i = 0; denied[i]; i++) {
+    if (strcmp(key, denied[i]) == 0) return true;
+  }
+  return false;
+}
+
+bool CommonCLI::tryExtractKey(const char* args, char* key, size_t key_len) const {
+  if (memcmp(args, "powersaving", 11) == 0 && (args[11] == 0 || args[11] == ' ')) {
+    StrHelper::strncpy(key, "powersaving", key_len);
+    return true;
+  }
+  const char* sp = strchr(args, ' ');
+  size_t len = sp ? (size_t)(sp - args) : strlen(args);
+  if (len == 0 || len >= key_len) return false;
+  memcpy(key, args, len);
+  key[len] = 0;
+  return true;
+}
+
+bool CommonCLI::trySplitKeyValue(const char* args, char* key, char* value, size_t val_len) const {
+  if (!tryExtractKey(args, key, 32)) return false;
+  if (strcmp(key, "powersaving") == 0) {
+    const char* p = args + 11;
+    while (*p == ' ') p++;
+    StrHelper::strncpy(value, (*p) ? p : "on", val_len);
+    return true;
+  }
+  const char* sp = strchr(args, ' ');
+  if (!sp) {
+    value[0] = 0;
+    return true;
+  }
+  while (*sp == ' ') sp++;
+  StrHelper::strncpy(value, sp, val_len);
+  return true;
+}
+
+int CommonCLI::tryFindSlot(const char* key) const {
+  for (int i = 0; i < TRY_MAX_SLOTS; i++) {
+    if (_try_slots[i].active() && strcmp(_try_slots[i].key, key) == 0) return i;
+  }
+  return -1;
+}
+
+int CommonCLI::tryFreeSlot() const {
+  for (int i = 0; i < TRY_MAX_SLOTS; i++) {
+    if (!_try_slots[i].active()) return i;
+  }
+  return -1;
+}
+
+void CommonCLI::tryCancelSlotForKey(const char* key) {
+  int idx = tryFindSlot(key);
+  if (idx < 0) return;
+  _try_slots[idx].clear();
+  saveTrySlots();
+}
+
+void CommonCLI::tryOnSetCommitted(const char* set_config, char* reply) {
+  if (!tryReplyIsOk(reply)) return;
+  char key[32];
+  if (!tryExtractKey(set_config, key, sizeof(key))) return;
+  tryCancelSlotForKey(key);
+}
+
+bool CommonCLI::trySnapshotValue(uint32_t sender_timestamp, const char* key, char* revert, size_t revert_len) {
+  if (strcmp(key, "powersaving") == 0) {
+    StrHelper::strncpy(revert, _prefs->powersaving_enabled ? "on" : "off", revert_len);
+    return true;
+  }
+  char getcmd[64];
+  snprintf(getcmd, sizeof(getcmd), "get %s", key);
+  char snap[160];
+  handleGetCmd(sender_timestamp, getcmd, snap);
+  if (memcmp(snap, "> ", 2) == 0) {
+    StrHelper::strncpy(revert, snap + 2, revert_len);
+    return true;
+  }
+  if (snap[0] == '?' || memcmp(snap, "Error", 5) == 0 || memcmp(snap, "unknown", 7) == 0) {
+    return false;
+  }
+  StrHelper::strncpy(revert, snap, revert_len);
+  return revert[0] != 0;
+}
+
+void CommonCLI::tryApplyArgs(uint32_t sender_timestamp, const char* args, char* reply) {
+  if (memcmp(args, "powersaving on", 14) == 0 && (args[14] == 0 || args[14] == ' ')) {
+#if defined(NRF52_PLATFORM)
+    _prefs->powersaving_enabled = 1;
+    savePrefs();
+    strcpy(reply, "on - Immediate effect");
+#elif defined(ESP32) && !defined(WITH_BRIDGE)
+    _prefs->powersaving_enabled = 1;
+    savePrefs();
+    strcpy(reply, "on - After 2 minutes");
+#elif defined(WITH_BRIDGE)
+    strcpy(reply, "Bridge not supported");
+#else
+    strcpy(reply, "Board not supported");
+#endif
+    return;
+  }
+  if (memcmp(args, "powersaving off", 15) == 0 && (args[15] == 0 || args[15] == ' ')) {
+    _prefs->powersaving_enabled = 0;
+    savePrefs();
+    strcpy(reply, "off");
+    return;
+  }
+  char buf[120];
+  snprintf(buf, sizeof(buf), "set %s", args);
+  handleSetCmd(sender_timestamp, buf, reply);
+}
+
+void CommonCLI::tryRevertSlot(TrySlot& slot, char* reply) {
+  if (strcmp(slot.key, "powersaving") == 0) {
+    if (strcmp(slot.revert, "on") == 0) {
+      tryApplyArgs(0, "powersaving on", reply);
+    } else {
+      tryApplyArgs(0, "powersaving off", reply);
+    }
+    return;
+  }
+  char buf[96];
+  snprintf(buf, sizeof(buf), "%s %s", slot.key, slot.revert);
+  tryApplyArgs(0, buf, reply);
+}
+
+void CommonCLI::tryFormatOkReply(char* reply, uint32_t secs, bool reboot_armed, bool apply_reboot) const {
+  if (reboot_armed && apply_reboot) {
+    sprintf(reply, "OK - try %us (reverts unless set, reboot armed; reboot to apply)", (unsigned)secs);
+  } else if (reboot_armed) {
+    sprintf(reply, "OK - try %us (reverts unless set, reboot armed)", (unsigned)secs);
+  } else {
+    sprintf(reply, "OK - try %us (reverts unless set)", (unsigned)secs);
+  }
+}
+
+void CommonCLI::tryNormalizeExpires(TrySlot& slot) {
+  uint32_t now = getRTCClock()->getCurrentTime();
+  if (now + slot.secs < slot.expires_at) {
+    slot.expires_at = now + slot.secs;
+  }
+}
+
+static bool tryJsonExtractStr(const char* obj, const char* label, char* out, size_t out_len) {
+  char pat[24];
+  snprintf(pat, sizeof(pat), "\"%s\":\"", label);
+  const char* p = strstr(obj, pat);
+  if (!p) return false;
+  p += strlen(pat);
+  size_t i = 0;
+  while (*p && *p != '"' && i + 1 < out_len) {
+    if (*p == '\\' && p[1]) p++;
+    out[i++] = *p++;
+  }
+  out[i] = 0;
+  return i > 0;
+}
+
+static bool tryJsonExtractU32(const char* obj, const char* label, uint32_t* out) {
+  char pat[24];
+  snprintf(pat, sizeof(pat), "\"%s\":", label);
+  const char* p = strstr(obj, pat);
+  if (!p) return false;
+  p += strlen(pat);
+  *out = _atoi(p);
+  return true;
+}
+
+void CommonCLI::loadTrySlots() {
+  for (int i = 0; i < TRY_MAX_SLOTS; i++) _try_slots[i].clear();
+  if (_fs == nullptr || !_fs->exists("/try.json")) return;
+
+#if defined(RP2040_PLATFORM)
+  File file = _fs->open("/try.json", "r");
+#else
+  File file = _fs->open("/try.json");
+#endif
+  if (!file) return;
+
+  char buf[512];
+  int len = 0;
+  while (file.available() && len < (int)sizeof(buf) - 1) {
+    buf[len++] = (char)file.read();
+  }
+  buf[len] = 0;
+  file.close();
+
+  int slot_idx = 0;
+  char* scan = buf;
+  while (slot_idx < TRY_MAX_SLOTS) {
+    char* obj = strchr(scan, '{');
+    if (!obj) break;
+    char* obj_end = strchr(obj + 1, '}');
+    if (!obj_end) break;
+    char saved = obj_end[1];
+    obj_end[1] = 0;
+
+    TrySlot& s = _try_slots[slot_idx];
+    s.clear();
+    if (tryJsonExtractStr(obj, "key", s.key, sizeof(s.key))) {
+      tryJsonExtractStr(obj, "revert", s.revert, sizeof(s.revert));
+      tryJsonExtractStr(obj, "trial", s.trial, sizeof(s.trial));
+      tryJsonExtractU32(obj, "secs", &s.secs);
+      tryJsonExtractU32(obj, "expires_at", &s.expires_at);
+      uint32_t rb = 0;
+      if (tryJsonExtractU32(obj, "reboot", &rb)) s.reboot = (uint8_t)rb;
+      if (tryJsonExtractU32(obj, "apply_reboot", &rb)) s.apply_reboot = (uint8_t)rb;
+      tryNormalizeExpires(s);
+      slot_idx++;
+    }
+
+    obj_end[1] = saved;
+    scan = obj_end + 1;
+  }
+}
+
+bool CommonCLI::saveTrySlots() {
+  if (_fs == nullptr) return false;
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+  _fs->remove("/try.json");
+  File file = _fs->open("/try.json", FILE_O_WRITE);
+#elif defined(RP2040_PLATFORM)
+  File file = _fs->open("/try.json", "w");
+#else
+  File file = _fs->open("/try.json", "w", true);
+#endif
+  if (!file) return false;
+
+  file.print("{\"slots\":[");
+  bool first = true;
+  for (int i = 0; i < TRY_MAX_SLOTS; i++) {
+    TrySlot& s = _try_slots[i];
+    if (!s.active()) continue;
+    if (!first) file.print(',');
+    first = false;
+    file.print('{');
+    file.print("\"key\":");
+    tryJsonWriteStr(file, s.key);
+    file.print(",\"revert\":");
+    tryJsonWriteStr(file, s.revert);
+    file.print(",\"trial\":");
+    tryJsonWriteStr(file, s.trial);
+    file.printf(",\"secs\":%u,\"expires_at\":%u,\"reboot\":%u,\"apply_reboot\":%u",
+                (unsigned)s.secs, (unsigned)s.expires_at, (unsigned)s.reboot, (unsigned)s.apply_reboot);
+    file.print('}');
+  }
+  file.print("]}");
+  file.close();
+  return true;
+}
+
+void CommonCLI::handleGetTry(char* reply) {
+  reply[0] = 0;
+  char* dp = reply;
+  int remaining = 160;
+  uint32_t now = getRTCClock()->getCurrentTime();
+  bool any = false;
+
+  for (int i = 0; i < TRY_MAX_SLOTS; i++) {
+    TrySlot& s = _try_slots[i];
+    if (!s.active()) continue;
+    any = true;
+    uint32_t left = (s.expires_at > now) ? (s.expires_at - now) : 0;
+    int n = snprintf(dp, remaining, "%s%s %s %us%s",
+                     (dp == reply) ? "" : "\n",
+                     s.key, s.trial, (unsigned)left, s.reboot ? " reboot" : "");
+    if (n <= 0 || n >= remaining) break;
+    dp += n;
+    remaining -= n;
+  }
+  if (!any) strcpy(reply, "(none)");
+}
+
+void CommonCLI::handleTryCmd(uint32_t sender_timestamp, char* args, char* reply) {
+  bool reboot_kw = false;
+  if (memcmp(args, "reboot ", 7) == 0) {
+    reboot_kw = true;
+    args += 7;
+  }
+  while (*args == ' ') args++;
+
+  char* sp = args;
+  while (*sp >= '0' && *sp <= '9') sp++;
+  if (sp == args || *sp != ' ') {
+    strcpy(reply, "Error: usage try [reboot] <secs> <set-args>");
+    return;
+  }
+  uint32_t secs = _atoi(args);
+  if (secs == 0 || secs > TRY_MAX_SECS) {
+    strcpy(reply, "Error: secs must be 1-604800");
+    return;
+  }
+  while (*sp == ' ') sp++;
+  if (*sp == 0) {
+    strcpy(reply, "Error: missing set-args");
+    return;
+  }
+
+  char key[32];
+  char trial[48];
+  if (!trySplitKeyValue(sp, key, trial, sizeof(trial))) {
+    strcpy(reply, "Error: bad try args");
+    return;
+  }
+  if (tryIsDeniedKey(key)) {
+    strcpy(reply, "Error: try not allowed for this key");
+    return;
+  }
+
+  char revert[48];
+  if (!trySnapshotValue(sender_timestamp, key, revert, sizeof(revert))) {
+    strcpy(reply, "Error: cannot snapshot current value");
+    return;
+  }
+
+  char apply_reply[160];
+  tryApplyArgs(sender_timestamp, sp, apply_reply);
+  if (!tryReplyIsOk(apply_reply)) {
+    StrHelper::strncpy(reply, apply_reply, 160);
+    return;
+  }
+
+  bool apply_reboot = tryReplyNeedsRebootApply(apply_reply);
+  bool reboot_armed = reboot_kw || apply_reboot;
+
+  int idx = tryFindSlot(key);
+  if (idx < 0) {
+    idx = tryFreeSlot();
+    if (idx < 0) {
+      strcpy(reply, "Error: try slots full");
+      return;
+    }
+    StrHelper::strncpy(_try_slots[idx].key, key, sizeof(_try_slots[idx].key));
+    StrHelper::strncpy(_try_slots[idx].revert, revert, sizeof(_try_slots[idx].revert));
+  }
+
+  TrySlot& slot = _try_slots[idx];
+  slot.secs = secs;
+  slot.expires_at = getRTCClock()->getCurrentTime() + secs;
+  slot.reboot = reboot_armed ? 1 : 0;
+  slot.apply_reboot = apply_reboot ? 1 : 0;
+  StrHelper::strncpy(slot.trial, trial, sizeof(slot.trial));
+
+  saveTrySlots();
+  tryFormatOkReply(reply, secs, reboot_armed, apply_reboot);
+}
+
+void CommonCLI::tryProcessExpired() {
+  uint32_t now = getRTCClock()->getCurrentTime();
+  for (int i = 0; i < TRY_MAX_SLOTS; i++) {
+    TrySlot& slot = _try_slots[i];
+    if (!slot.active()) continue;
+    if (now < slot.expires_at) continue;
+
+    char revert_reply[160];
+    bool do_reboot = slot.reboot != 0;
+    tryRevertSlot(slot, revert_reply);
+    slot.clear();
+    saveTrySlots();
+    if (do_reboot) {
+      _try_reboot_at = millis() + TRY_REBOOT_DELAY_MS;
+    }
+  }
+}
+
+void CommonCLI::loop() {
+  tryProcessExpired();
+  if (_try_reboot_at != 0 && (long)(millis() - _try_reboot_at) >= 0) {
+    _try_reboot_at = 0;
+    _board->reboot();
   }
 }

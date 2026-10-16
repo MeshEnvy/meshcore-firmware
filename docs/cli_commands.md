@@ -127,6 +127,14 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 **Usage:** 
 - `discover.neighbors`
 
+**USB console:** each accepted reply also prints one line:
+
+```
+discover <pubkey8> rx=<dB> in=<dB> rssi=<dBm>
+```
+
+`rx` is the SNR at this board (how well this board heard them). `in` is the SNR byte in the reply (how well they heard this board), divided by 4. `rssi` is this board's RSSI for that reply. `neighbors` does not keep `in` or `rssi`.
+
 ---
 
 ## Statistics
@@ -167,6 +175,20 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 
 ### End capture of rx log to node storage
 **Usage:** `log stop`
+
+---
+
+### Mirror packet log to serial (live)
+**Usage:** `log tail on`
+
+**Note:** Streams RX/TX log lines to USB serial as they are captured. Enables logging if not already active (`log start`). Serial-only (not available via remote admin).
+
+---
+
+### Stop live serial log mirror
+**Usage:** `log tail off`
+
+**Serial Only:** Yes
 
 ---
 
@@ -245,6 +267,30 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 - `timeout_mins`: Duration in minutes (must be > 0)
 
 **Note:** This is not saved to preferences and will clear on reboot
+
+---
+
+#### Try a setting with automatic revert
+**Usage:**
+- `try <secs> <set-args>`
+- `try reboot <secs> <set-args>`
+- `get try`
+
+**Parameters:**
+- `secs`: Trial duration in seconds (1–604800, max 7 days)
+- `set-args`: Same arguments as `set` (e.g. `radio.rxgain off`) or `powersaving on|off`
+- `reboot`: Optional keyword before `secs`. On timeout, restore the snapshotted value and reboot (~2 s later)
+
+**Examples:**
+- `try 3600 radio.rxgain off`
+- `try reboot 3600 radio 915.0,250,11,5`
+- `set radio.rxgain off` commits the trial before timeout (cancels revert)
+
+**Notes:**
+- Up to **4** concurrent trials (`/try.json` on flash). Survives reboot; timer uses RTC `expires_at`.
+- Denied keys: `prv.key`, `password`, `guest.password`, `name`, `lat`, `lon`.
+- `set radio` / `set freq` inherit **reboot armed** on revert (reply says so). Apply still needs a manual reboot.
+- Reply forms: `OK - try Ns (reverts unless set)` or `… reboot armed` (+ `; reboot to apply` when applicable).
 
 ---
 
@@ -543,6 +589,33 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 
 ---
 
+#### View or change next-hop retry for direct-path relays
+**Usage:**
+- `get hop.retry`
+- `set hop.retry <count>`
+- `get hop.retry.ms`
+- `set hop.retry.ms <milliseconds>`
+
+**Parameters:**
+- `count`: Extra retransmits if the next hop's echo or HOP_ACK is not received (0-5). `0` disables hop retry (fire-and-forget). Default `0` (opt-in); e.g. `2` means up to 3 total transmissions (initial + 2 retries).
+- `milliseconds`: Base listen window before each retry (200-10000). Default `1500`. Actual deadline also includes forward delay and packet airtime.
+
+**Note:** When a repeater forwards a direct-path packet, it waits for the next hop's **echo** (hearing its own packet retransmitted downstream). If the echo is missed within the listen window, it retries. A hop that receives a duplicate addressed to itself replies with a zero-hop **HOP_ACK** instead of forwarding again — this terminates the retry loop when the first delivery succeeded but the echo was lost. No extra airtime in the healthy case. Not used on the last hop (zero-hop delivery to the destination). Prefer `set multi.acks 0` when hop retry is enabled.
+
+---
+
+#### Test mode: drop next N direct-forward opportunities
+**Usage:**
+- `get hop.ignore`
+- `set hop.ignore <count>`
+
+**Parameters:**
+- `count`: Number of upcoming direct-forward opportunities to silently discard (0-255). `0` disables (default).
+
+**Note:** For the next `count` times this node would forward a direct-routed packet, it discards it instead — no forward, no HOP_ACK, no dedup mark (so an upstream retry of the same packet is evaluated again next time). Simulates a dead/unreachable next hop without power-cycling it, to exercise `hop.retry` on the upstream node. **Not persisted** — resets to 0 on reboot, unlike `hop.retry`/`hop.retry.ms`.
+
+---
+
 #### [Experimental] View or change the processing delay for received traffic
 **Usage:**
 - `get rxdelay`
@@ -643,6 +716,8 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 - `state`: `0` (disable) or `1` (enable)
 
 **Default:** `0`
+
+**Note:** Sends extra copies of direct ACKs. With hop retry enabled (`hop.retry` > 0), prefer leaving this off — hop retry uses echo confirmation and duplicate-triggered HOP_ACK instead of blind duplicate ACKs.
 
 ---
 

@@ -13,10 +13,8 @@ const PowerMgtConfig power_config = {
 };
 
 void T096Board::initiateShutdown(uint8_t reason) {
-#if ENV_INCLUDE_GPS == 1
   pinMode(PIN_GPS_EN, OUTPUT);
   digitalWrite(PIN_GPS_EN, !PIN_GPS_EN_ACTIVE);
-#endif
   variant_shutdown();
 
   bool enable_lpcomp = (reason == SHUTDOWN_REASON_LOW_VOLTAGE ||
@@ -49,7 +47,19 @@ void T096Board::begin() {
   pinMode(P_LORA_TX_LED, OUTPUT);
   digitalWrite(P_LORA_TX_LED, LOW);
 
-  periph_power.begin();
+  periph_power.begin(); // VEXT off until display/GPS claim()
+#ifndef DISPLAY_CLASS
+  pinMode(PIN_TFT_LEDA_CTL, OUTPUT);
+  digitalWrite(PIN_TFT_LEDA_CTL, !PIN_TFT_LEDA_CTL_ACTIVE);
+#endif
+#ifndef ENV_INCLUDE_GPS
+  // GPS_EN is active-low. Slim never compiled the GPS driver, so the pin
+  // stayed high-Z after reset and the module could sit powered.
+  pinMode(PIN_GPS_EN, OUTPUT);
+  digitalWrite(PIN_GPS_EN, !PIN_GPS_EN_ACTIVE);
+  pinMode(PIN_GPS_RESET, OUTPUT);
+  digitalWrite(PIN_GPS_RESET, PIN_GPS_RESET_ACTIVE);
+#endif
   loRaFEMControl.init();
   delay(1);
 }

@@ -2,12 +2,16 @@
 #include "NRF52Board.h"
 #include <target.h>
 
-#include <bluefruit.h>
 #include <nrf_soc.h>
 
 #ifdef USE_CC310_HW_CRYPTO
 #include <Adafruit_nRFCrypto.h>
 #endif
+
+// BLE_DFU_DISABLED drops the Bluefruit BLE DFU fallback (`start ota` CLI) so slim/headless roles
+// don't link the BLE stack (~15 KB flash) they never otherwise use.
+#ifndef BLE_DFU_DISABLED
+#include <bluefruit.h>
 
 static BLEDfu bledfu;
 
@@ -22,6 +26,7 @@ static void disconnect_callback(uint16_t conn_handle, uint8_t reason) {
 
   MESH_DEBUG_PRINTLN("BLE client disconnected");
 }
+#endif
 
 void NRF52Board::begin() {
   startup_reason = BD_STARTUP_NORMAL;
@@ -391,24 +396,39 @@ void NRF52Board::powerOff() {
 }
 
 bool NRF52Board::getBootloaderVersion(char* out, size_t max_len) {
-    static const char BOOTLOADER_MARKER[] = "UF2 Bootloader ";
-    const uint8_t* flash = (const uint8_t*)0x000FB000; // earliest known info.txt location is 0xFB90B, latest is 0xFCC4B
+    // INFO_UF2.TXT is in the nRF52840 bootloader image (0xF4000–0xFE000).
+    // Adafruit/OTAFIX: "UF2 Bootloader <ver>". EnvyOS: "EnvyBoot <ver>".
+    static const char ENVY_MARKER[] = "EnvyBoot ";
+    static const char UF2_MARKER[] = "UF2 Bootloader ";
+    const char* const markers[] = {ENVY_MARKER, UF2_MARKER};
+    const size_t mlens[] = {sizeof(ENVY_MARKER) - 1, sizeof(UF2_MARKER) - 1};
+    const uint8_t* flash = (const uint8_t*)0x000F4000;
+    const uint32_t span = 0x000FE000 - 0x000F4000;
 
-    for (uint32_t i = 0; i < 0x3000 - (sizeof(BOOTLOADER_MARKER) - 1); i++) {
-        if (memcmp(&flash[i], BOOTLOADER_MARKER, sizeof(BOOTLOADER_MARKER) - 1) == 0) {
-            const char* ver = (const char*)&flash[i + sizeof(BOOTLOADER_MARKER) - 1];
-            size_t len = 0;
-            while (len < max_len - 1 && ver[len] != '\0' && ver[len] != ' ' && ver[len] != '\n' && ver[len] != '\r') {
-                out[len] = ver[len];
-                len++;
+    for (size_t m = 0; m < 2; m++) {
+        const char* marker = markers[m];
+        const size_t mlen = mlens[m];
+        for (uint32_t i = 0; i + mlen < span; i++) {
+            if (memcmp(&flash[i], marker, mlen) == 0) {
+                const char* ver = (const char*)&flash[i + mlen];
+                size_t len = 0;
+                while (len < max_len - 1 && ver[len] != '\0' && ver[len] != ' ' && ver[len] != '\n' && ver[len] != '\r') {
+                    out[len] = ver[len];
+                    len++;
+                }
+                out[len] = '\0';
+                return len > 0;
             }
-            out[len] = '\0';
-            return len > 0; // bootloader string is non-empty
         }
     }
     return false;
 }
 
+#ifdef BLE_DFU_DISABLED
+bool NRF52Board::startOTAUpdate(const char *id, char reply[]) {
+  return false;   // BLE DFU compiled out
+}
+#else
 bool NRF52Board::startOTAUpdate(const char *id, char reply[]) {
   // Config the peripheral connection with maximum bandwidth
   // more SRAM required by SoftDevice
@@ -457,4 +477,5 @@ bool NRF52Board::startOTAUpdate(const char *id, char reply[]) {
 
   return true;
 }
+#endif  // BLE_DFU_DISABLED
 #endif
