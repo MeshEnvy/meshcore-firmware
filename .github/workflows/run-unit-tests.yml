@@ -22,6 +22,12 @@ jobs:
       - name: Run Unit Tests
         run: pio test -e native -e native_kiss_modem -vv
 
+      - name: Run Bootloader Migration Host Checks
+        run: |
+          python -m pip install intelhex
+          python tools/mota/test_bootloader_migration.py
+          python tools/mota/test_bootloader_migration_runtime.py
+
       - name: Upload Test Results
         # Upload test results even if the test step failed.
         if: always()

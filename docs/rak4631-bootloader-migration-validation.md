@@ -103,3 +103,15 @@ not part of the unchanged-settings claim.
   MeshPocket and MeshTower normal-radio settings were restored. The existing
   MeshPocket contact's routing/settings were restored; its firmware-managed
   contact modification timestamp advanced as expected.
+
+## Changes after the hardware run
+
+PR preparation added an in-flight-radio TX check, cancellation if a separate OTA
+operation starts while migration is armed, and correct reporting after a retained
+error followed by a new attempt. These guards have host regressions and the final
+opt-in application compiles on Windows and Linux; the end-to-end hardware run
+above used the earlier bridge hash, not the final PR build. No second bootloader
+migration or power-cut test is claimed for those follow-up changes.
+
+Build and activation instructions are in the
+[migration guide](rak4631-bootloader-migration.md).
