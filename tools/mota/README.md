@@ -27,6 +27,7 @@ Uses the repo's Python venv (`meshcore/`). Dependencies: `detools` (delta), `cry
 | `gen_vectors.py` | Generates `test/test_ota/mota_vectors.h` — the cross-check vectors the native C++ tests run against. |
 | `gen_targets.py` | Generates `src/helpers/ota/OtaTargets.h` — the `target_id → env-name` table (every `ENABLE_OTA` env, resolved from `pio project config`). Shared by the firmware and `motatool` so a node can name a target seen over the air without sending the string. Regenerate when the OTA env set changes. |
 | `test_mota.py` | Unit tests for `motalib` (run directly or via pytest). |
+| `pio_bootloader_migration.py`, `bootloader_migration_resource.py` | Opt-in RAK4631 internal-flash bootloader bridge; see the [migration guide](../../docs/rak4631-bootloader-migration.md). Disabled in ordinary builds. |
 
 ## Tests
 

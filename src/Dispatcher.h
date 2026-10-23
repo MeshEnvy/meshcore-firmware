@@ -138,6 +138,9 @@ protected:
   MillisecondClock* _ms;
   uint16_t _err_flags;
 
+  // A packet leaves the queue before the radio finishes transmitting it.
+  bool isOutboundIdle() const { return outbound == nullptr && _mgr->getOutboundTotal() == 0; }
+
   Dispatcher(Radio& radio, MillisecondClock& ms, PacketManager& mgr)
     : _radio(&radio), _ms(&ms), _mgr(&mgr)
   {

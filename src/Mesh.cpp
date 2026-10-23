@@ -1,4 +1,5 @@
 #include "Mesh.h"
+#include "helpers/ota/BootloaderMigration.h"
 //#include <Arduino.h>
 #if defined(ENABLE_OTA)
 #include "helpers/ota/OtaContext.h"   // OTA mesh-integration is centralized here so every role gets it
@@ -71,6 +72,10 @@ void Mesh::loop() {
   // whose queue never idles.
   {
     ota::OtaContext& oc = ota::ota_ctx();
+#if defined(OTA_BOOTLOADER_MIGRATION)
+    ota::bootloader_migration_tick(isOutboundIdle(),
+                                  !oc.apply_pending && oc.manager.fetchState() == ota::OtaManager::IDLE);
+#endif
     if (oc.apply_pending) {
       if (oc.apply_at == 0) {
         oc.apply_at = futureMillis(1500);

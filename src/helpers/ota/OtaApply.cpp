@@ -438,9 +438,16 @@ void ota_reboot_to_apply() {                   // public: set the apply magic + 
   uint8_t sd_en = 0;
   sd_softdevice_is_enabled(&sd_en);
   if (sd_en) {                                 // POWER is SD-restricted while the SoftDevice runs
+#if defined(OTA_BOOTLOADER_MIGRATION)
+    sd_power_gpregret_clr(1, 0xFFFFFFFF);
+    sd_power_gpregret_set(1, MOTA_NRF52_STAGE_CEILING == 0xED000u ? 0xEDu : 0xD4u);
+#endif
     sd_power_gpregret_clr(0, 0xFFFFFFFF);
     sd_power_gpregret_set(0, GPREGRET_OTA_APPLY);
   } else {
+#if defined(OTA_BOOTLOADER_MIGRATION)
+    NRF_POWER->GPREGRET2 = MOTA_NRF52_STAGE_CEILING == 0xED000u ? 0xEDu : 0xD4u;
+#endif
     NRF_POWER->GPREGRET = GPREGRET_OTA_APPLY;
   }
   NVIC_SystemReset();                          // does not return

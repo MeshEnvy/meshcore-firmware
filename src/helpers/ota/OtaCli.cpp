@@ -4,6 +4,7 @@
 #include "OtaVerify.h"
 #include "OtaSelf.h"
 #include "OtaTargets.h"   // ota_target_env_name(): human-readable name for a target_id (no string on the wire)
+#include "BootloaderMigration.h"
 #if defined(NRF52_PLATFORM)
   #include "OtaBlInfo.h"  // ota_bootloader_caps(): can this device's bootloader apply a .mota?
 #endif
@@ -101,6 +102,29 @@ bool handle_ota_command(const char* command, char* reply, mesh::MainBoard& board
   while (*a == ' ') a++;
   OtaContext& c = ota_ctx();
   const char* rest = a;
+
+#if defined(OTA_BOOTLOADER_MIGRATION)
+  if (is_cmd(a, "bootloader", &rest)) {
+    if (strcmp(rest, "status") == 0 || *rest == 0) {
+      bootloader_migration_status(reply, 160);
+    } else if (strcmp(rest, "audit") == 0) {
+      bootloader_migration_audit(reply, 160);
+    } else if (strncmp(rest, "install ", 8) == 0) {
+      if (c.apply_pending || c.manager.fetchState() != OtaManager::IDLE) {
+        strcpy(reply, "ERR finish or cancel the current OTA session first");
+      } else {
+        bootloader_migration_request(rest + 8, reply, 160);
+      }
+    } else {
+      strcpy(reply, "usage: ota bootloader status|audit|install <image-hash>");
+    }
+    return true;
+  }
+  if (bootloader_migration_pending()) {
+    strcpy(reply, "ERR bootloader migration is armed");
+    return true;
+  }
+#endif
 
   // ---- raw / internal primitives, tucked under `ota dev ...` ----
   if (is_cmd(a, "dev", &rest)) {
