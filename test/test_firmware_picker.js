@@ -1183,11 +1183,41 @@ const publishedReleases = [release(publishedControls.familyTag, '2026-10-24T00:0
 const publishedCatalog = picker.buildCatalog(publishedReleases, publishedControls);
 assert.strictEqual(publishedCatalog.rows.length, publishedAssets.length);
 assert(publishedCatalog.profiles.every(profile => profile.controls && profile.chipFamily !== 'unknown'));
+for (const file of publishedAssets) {
+  assert(publishedCatalog.rows.some(row => row.name === file.name && row.url === file.browser_download_url),
+    'Recommendation consolidation must preserve every exact filename and download URL: ' + file.name);
+}
+const embeddedRakCompatibilitySuccessors = new Map([
+  ['RAK_3401_repeater_lora_ota_no_external_sensors', 'RAK_3401_repeater_unified_lora_ota'],
+  ['RAK_3401_repeater_rak13302_w25q16_lora_ota', 'RAK_3401_repeater_unified_lora_ota'],
+  ['RAK_4631_repeater_lora_ota_no_external_sensors', 'RAK_4631_repeater_unified_lora_ota'],
+  ['RAK_4631_repeater_w25q16_lora_ota', 'RAK_4631_repeater_unified_lora_ota'],
+  ['RAK_4631_repeater_rak15001_slot_c_lora_ota', 'RAK_4631_repeater_unified_lora_ota'],
+  ['RAK_4631_repeater_bridge_rs232_serial1_lora_ota_no_external_sensors', 'RAK_4631_repeater_unified_lora_ota'],
+  ['RAK_4631_repeater_bridge_rs232_serial2_lora_ota_no_external_sensors', 'RAK_4631_repeater_unified_lora_ota'],
+]);
 const embeddedControls = Object.entries(publishedControls.profiles).filter(([, info]) => info.embeddedBootloader);
 assert.strictEqual(embeddedControls.length, 154);
+let consolidatedEmbeddedProfiles = 0;
 for (const [target, info] of embeddedControls) {
-  const profile = publishedCatalog.profiles.find(item => item.target === target);
-  assert(profile, target + ' must remain selectable');
+  let profile = publishedCatalog.profiles.find(item => item.target === target);
+  const base = target.replace(/-with-bootloader-\d+(?:\.\d+){2}-(?:full|reduced)$/, '');
+  const successorBase = embeddedRakCompatibilitySuccessors.get(base);
+  if (successorBase) {
+    assert.strictEqual(profile, undefined, target + ' must use its exact combined recommendation');
+    const successor = successorBase + '-with-bootloader-' + info.embeddedBootloader.release + '-' + info.sensorProfile;
+    assert(publishedCatalog.profiles.some(item => item.target === successor),
+      target + ' can be consolidated only with the same bootloader release and sensor policy');
+    const file = publishedAssets.find(item => item.name.startsWith(target + '-'));
+    assert(file && publishedCatalog.rows.some(row => row.target === target &&
+      row.name === file.name && row.url === file.browser_download_url),
+    target + ' must retain its exact compatibility download');
+    profile = picker.buildCatalog([
+      release(publishedControls.familyTag, '2026-10-24T00:00:00Z', [file]),
+    ], publishedControls).profiles.find(item => item.target === target);
+    consolidatedEmbeddedProfiles += 1;
+  }
+  assert(profile, target + ' must remain selectable when its exact successor is unavailable');
   assert.deepStrictEqual(profile.embeddedBootloader, info.embeddedBootloader);
   const ordinaryTarget = target.replace('-with-bootloader-' + info.embeddedBootloader.release, '');
   const ordinaryAsset = publishedAssets.find(file => file.name.startsWith(ordinaryTarget + '-'));
@@ -1205,6 +1235,171 @@ for (const [target, info] of embeddedControls) {
   assert(instructions.includes('Recovery and unrecognized bootloaders'));
   assert(instructions.includes('get bootloader.ver'));
 }
+assert.strictEqual(consolidatedEmbeddedProfiles, 14);
+
+const rak118Context = {hardware: 'RAK_4631', role: 'repeater', ota: 'lora-receiver'};
+const rak118Bases = ['RAK_4631_repeater_unified_lora_ota', 'RAK_4631_repeater_ethernet'];
+const rak118Targets = rak118Bases.flatMap(base => ['', '-with-bootloader-2.4.12'].flatMap(marker =>
+  ['full', 'reduced'].map(policy => base + marker + '-' + policy)));
+const rak118Profiles = publishedCatalog.profiles.filter(profile => picker.profileMatchesFacets(profile, rak118Context));
+assert.deepStrictEqual(rak118Profiles.map(profile => profile.target).sort(), rak118Targets.slice().sort(),
+  'RAK4631 must recommend exactly adaptive/Ethernet x Full/Reduced x ordinary/embedded');
+const rak118Choices = picker.firmwareProfileChoices(publishedCatalog.profiles,
+  {...rak118Context, feature: 'full', variant: 'default'});
+assert.strictEqual(rak118Choices.length, 8, 'Each real RAK4631 firmware combination needs its own choice');
+assert.strictEqual(new Set(rak118Choices.map(choice => choice.label)).size, 8,
+  'Ordinary, Ethernet and embedded bootloader choices must have distinct labels');
+assert.strictEqual(rak118Choices.filter(choice => choice.label.includes('bootloader included')).length, 4);
+assert.strictEqual(rak118Choices.filter(choice => choice.label.includes('Ethernet')).length, 4);
+assert.strictEqual(new Set(rak118Profiles.map(picker.firmwareProfileValue)).size, 8,
+  'Embedded Ethernet must never collide with the adaptive bootloader-included choice');
+for (const profile of rak118Profiles) {
+  const label = picker.firmwareProfileLabel(profile);
+  assert.strictEqual(label.includes('Ethernet'), profile.target.startsWith('RAK_4631_repeater_ethernet-'));
+  assert.strictEqual(label.includes('bootloader included'), Boolean(profile.embeddedBootloader));
+  if (profile.target.startsWith('RAK_4631_repeater_unified_lora_ota-')) {
+    assert.deepStrictEqual(picker.profileFieldValues(profile, 'mode'), ['standard', 'rs232'],
+      'Ordinary and embedded adaptive images must retain runtime UART2 bridge selection');
+    assert(!label.includes('Unified'), 'The embedded marker must not invent a new physical Unified variant');
+  }
+}
+const rak118LinkedSelection = picker.selectionFromUrl(
+  'https://mikecarper.github.io/MeshCore/firmware_picker/?s=1.hRAK_4631.rrepeater.olora-receiver.ffull.vdefault',
+  publishedCatalog.profiles);
+assert.deepStrictEqual(rak118LinkedSelection.unavailable, []);
+assert.deepStrictEqual(publishedCatalog.profiles.filter(profile =>
+  picker.profileMatchesFacets(profile, rak118LinkedSelection.filters)).map(profile => profile.target),
+['RAK_4631_repeater_unified_lora_ota-full'], 'Existing default links must retain the ordinary adaptive Full image');
+
+function rak118PartialCatalog(targets, extraControls = {}) {
+  const metadata = {...publishedControls, profiles: {...publishedControls.profiles, ...extraControls}};
+  const files = targets.map(target => asset(target + '-' + publishedControls.familyTag + '.uf2'));
+  return picker.buildCatalog([
+    release(publishedControls.familyTag, '2026-10-24T00:00:00Z', files),
+  ], metadata);
+}
+for (const hardware of ['RAK_3401', 'RAK_4631']) {
+  for (const policy of ['full', 'reduced']) {
+    const target = hardware + '_repeater_unified_lora_ota-with-bootloader-2.4.12-' + policy;
+    const oldFilters = {hardware, role: 'repeater', ota: 'lora-receiver',
+      feature: policy === 'full' ? 'full' : 'standard', variant: 'unified-with-bootloader-2-4-12'};
+    const oldUrl = picker.shortSelectionUrl('https://mikecarper.github.io/MeshCore/firmware_picker/', oldFilters, true);
+    const restored = picker.selectionFromUrl(oldUrl, publishedCatalog.profiles);
+    assert.deepStrictEqual(restored.unavailable, [], 'Saved embedded unified links must retain their exact image');
+    assert.strictEqual(restored.filters.variant, 'with-bootloader-2-4-12');
+    assert.deepStrictEqual(publishedCatalog.profiles.filter(profile =>
+      picker.profileMatchesFacets(profile, restored.filters)).map(profile => profile.target), [target]);
+    const canonicalUrl = picker.shortSelectionUrl(oldUrl, restored.filters, restored.automaticChipFamily);
+    assert(!canonicalUrl.includes('unified-with-bootloader'));
+    assert.deepStrictEqual(picker.selectionFromUrl(canonicalUrl, publishedCatalog.profiles), restored,
+      'New canonical embedded links must round-trip without changing any selected facet');
+    for (const fault of ['missing', 'invalid']) {
+      const changed = JSON.parse(JSON.stringify(publishedControls.profiles[target]));
+      if (fault === 'missing') delete changed.embeddedBootloader;
+      else changed.embeddedBootloader.candidate_sha256 = 'invalid';
+      const partial = rak118PartialCatalog([target], {[target]: changed});
+      const rejected = picker.selectionFromUrl(oldUrl, partial.profiles);
+      assert(rejected.unavailable.includes('variant=' + oldFilters.variant),
+        'Saved unified aliases require validated embedded metadata: ' + fault);
+      assert.notStrictEqual(rejected.filters.variant, 'with-bootloader-2-4-12');
+    }
+  }
+}
+for (const policy of ['full', 'reduced']) {
+  const target = 'RAK_4631_repeater_ethernet-with-bootloader-2.4.12-' + policy;
+  const oldFilters = {hardware: 'RAK_4631', role: 'repeater', mode: 'ethernet', ota: 'lora-receiver',
+    feature: policy === 'full' ? 'full' : 'standard', variant: 'with-bootloader-2-4-12'};
+  const oldUrl = picker.selectionUrl('https://mikecarper.github.io/MeshCore/firmware_picker/', oldFilters, true);
+  const restored = picker.selectionFromUrl(oldUrl, publishedCatalog.profiles);
+  assert.deepStrictEqual(restored.unavailable, []);
+  assert.strictEqual(restored.filters.variant, 'ethernet-with-bootloader-2-4-12');
+  assert.deepStrictEqual(publishedCatalog.profiles.filter(profile =>
+    picker.profileMatchesFacets(profile, restored.filters)).map(profile => profile.target), [target]);
+  assert.deepStrictEqual(picker.selectionFromUrl(picker.shortSelectionUrl(oldUrl, restored.filters, true),
+    publishedCatalog.profiles), restored, 'Canonical Ethernet embedded links must retain the exact image');
+  const noMode = picker.selectionFromUrl(picker.selectionUrl(oldUrl, {...oldFilters, mode: ''}, true),
+    publishedCatalog.profiles);
+  assert.strictEqual(noMode.filters.variant, 'with-bootloader-2-4-12',
+    'An ambiguous old generic variant must not guess an Ethernet hardware selection');
+  for (const fault of ['missing', 'invalid']) {
+    const changed = JSON.parse(JSON.stringify(publishedControls.profiles[target]));
+    if (fault === 'missing') delete changed.embeddedBootloader;
+    else changed.embeddedBootloader.candidate_sha256 = 'invalid';
+    const partial = rak118PartialCatalog([target], {[target]: changed});
+    const rejected = picker.selectionFromUrl(oldUrl, partial.profiles);
+    assert(rejected.unavailable.includes('variant=' + oldFilters.variant));
+    assert.notStrictEqual(rejected.filters.variant, 'ethernet-with-bootloader-2-4-12',
+      'An Ethernet saved-link alias requires validated embedded metadata');
+  }
+}
+console.log('saved embedded RAK unified and explicit Ethernet links retain exact validated identities');
+for (const [legacyBase, successorBase] of embeddedRakCompatibilitySuccessors) {
+  for (const policy of ['full', 'reduced']) {
+    const otherPolicy = policy === 'full' ? 'reduced' : 'full';
+    const legacy = legacyBase + '-with-bootloader-2.4.12-' + policy;
+    const successor = successorBase + '-with-bootloader-2.4.12-' + policy;
+    const ordinarySuccessor = successorBase + '-' + policy;
+    const anotherVersion = successorBase + '-with-bootloader-2.4.11-' + policy;
+    const anotherVersionControls = {
+      ...publishedControls.profiles[successor],
+      embeddedBootloader: {...publishedControls.profiles[successor].embeddedBootloader, release: '2.4.11'},
+    };
+    for (const [fault, targets, metadata] of [
+      ['other sensor policy', [legacy, successorBase + '-with-bootloader-2.4.12-' + otherPolicy], {}],
+      ['ordinary application only', [legacy, ordinarySuccessor], {}],
+      ['other embedded version', [legacy, anotherVersion], {[anotherVersion]: anotherVersionControls}],
+    ]) {
+      const partial = rak118PartialCatalog(targets, metadata);
+      assert(partial.profiles.some(profile => profile.target === legacy),
+        legacy + ' must remain selectable with only a successor for ' + fault);
+      assert(partial.rows.some(row => row.target === legacy && row.name === legacy + '-' + publishedControls.familyTag + '.uf2'),
+        'Missing-successor checks must retain the exact legacy file');
+    }
+    const exact = rak118PartialCatalog([legacy, successor]);
+    assert(!exact.profiles.some(profile => profile.target === legacy),
+      'The exact same-version, same-policy combined image must replace the legacy recommendation');
+    assert(exact.rows.some(row => row.target === legacy));
+    const ordinaryLegacy = legacyBase + '-' + policy;
+    const embeddedOnly = rak118PartialCatalog([ordinaryLegacy, successor]);
+    assert(embeddedOnly.profiles.some(profile => profile.target === ordinaryLegacy),
+      'An embedded successor must not hide an ordinary compatibility application');
+    const missingMarker = rak118PartialCatalog([legacy, ordinarySuccessor], {
+      [ordinarySuccessor]: publishedControls.profiles[successor],
+    });
+    assert(missingMarker.profiles.some(profile => profile.target === legacy),
+      'Embedded metadata alone must not turn an ordinary filename into a matching embedded successor');
+    const metadataFaults = ['missing_embedded', 'stale_embedded_source', 'stale_sensor_source',
+      'invalid_candidate', 'different_candidate', 'different_profile', 'invalid_delay',
+      'different_asset', 'different_manifest', 'invalid_asset', 'invalid_manifest', 'nonadaptive_storage'];
+    if (legacyBase.includes('_bridge_rs232_')) metadataFaults.push('unmerged_rs232', 'stale_rs232_source');
+    for (const fault of metadataFaults) {
+      const changed = JSON.parse(JSON.stringify(publishedControls.profiles[successor]));
+      if (fault === 'missing_embedded') delete changed.embeddedBootloader;
+      if (fault === 'stale_embedded_source') changed.embeddedBootloaderSource = 'b'.repeat(40);
+      if (fault === 'stale_sensor_source') changed.sensorProfileSource = 'b'.repeat(40);
+      if (fault === 'invalid_candidate') changed.embeddedBootloader.candidate_sha256 = 'invalid';
+      if (fault === 'different_candidate') changed.embeddedBootloader.candidate_sha256 = '0'.repeat(64);
+      if (fault === 'different_profile') changed.embeddedBootloader.profile = 'another_board_profile';
+      if (fault === 'invalid_delay') changed.embeddedBootloader.automatic_delay_seconds = 1;
+      if (fault === 'different_asset') changed.embeddedBootloader.asset_sha256 = '0'.repeat(64);
+      if (fault === 'different_manifest') changed.embeddedBootloader.manifest_sha256 = '0'.repeat(64);
+      if (fault === 'invalid_asset') changed.embeddedBootloader.asset_sha256 = 'invalid';
+      if (fault === 'invalid_manifest') changed.embeddedBootloader.manifest_sha256 = 'invalid';
+      if (fault === 'unmerged_rs232') changed.rs232Merged = false;
+      if (fault === 'stale_rs232_source') changed.rs232Source = 'b'.repeat(40);
+      if (fault === 'nonadaptive_storage') changed.updateRequirements.lora.storage = 'internal_flash';
+      const partial = rak118PartialCatalog([legacy, successor], {[successor]: changed});
+      assert(partial.profiles.some(profile => profile.target === legacy),
+        legacy + ' must remain selectable when its proposed successor has ' + fault);
+    }
+    const unqualifiedLegacy = JSON.parse(JSON.stringify(publishedControls.profiles[legacy]));
+    unqualifiedLegacy.embeddedBootloader.candidate_sha256 = 'invalid';
+    const invalidLegacy = rak118PartialCatalog([legacy, successor], {[legacy]: unqualifiedLegacy});
+    assert(invalidLegacy.profiles.some(profile => profile.target === legacy),
+      'A matching successor must not conceal an unqualified legacy embedded claim');
+  }
+}
+console.log('RAK 1.18 recommendations keep eight distinct choices and exact missing-successor safety');
 const [embeddedTarget] = embeddedControls[0];
 for (const fault of ['stale_source', 'invalid_candidate', 'wrong_delay', 'wrong_version', 'ordinary_target']) {
   const metadata = JSON.parse(JSON.stringify(publishedControls));
