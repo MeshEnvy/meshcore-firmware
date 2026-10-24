@@ -79,6 +79,42 @@ class PickerControlsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'ambiguous'):
             GENERATOR.runtime_metadata(manifest, False, source)
 
+    def test_embedded_bootloader_controls_retain_qualified_exact_board_metadata(self):
+        from nrf52_embedded_bootloader import MANIFEST_SHA256, load_manifest, select_profile
+        source = 'a' * 40
+        target = 'RAK_4631_repeater'
+        profile, _ = select_profile(load_manifest(), target)
+        metadata = dict(release='2.4.12', profile=profile['id'],
+                        manifest_sha256=MANIFEST_SHA256,
+                        asset_sha256=profile['files']['zip']['sha256'],
+                        candidate_sha256='c' * 64, legacy_sha256=None,
+                        image_bytes=40960, app_offset=32,
+                        activation='ota bootloader update', automatic_delay_seconds=70)
+        manifest = dict(target=target,
+                        artifact_target=target + '-with-bootloader-2.4.12-full-ota',
+                        platform='NRF52_PLATFORM', verified=True, ota_update_verified=True,
+                        capabilities=['ota.update.lora', 'sensor.profile.full', 'bootloader.embedded'],
+                        ota_update_methods=['lora'], embedded_bootloader=metadata,
+                        verification=[dict(capability='ota.update.lora', present=True, source='linked image'),
+                                      dict(capability='bootloader.embedded', present=True,
+                                           source='packaged application')])
+        result = GENERATOR.runtime_metadata(manifest, False, source)
+        self.assertEqual(result['embeddedBootloader'], metadata)
+        self.assertIsNot(result['embeddedBootloader'], metadata)
+        self.assertEqual(result['embeddedBootloaderSource'], source)
+        for fault in ('wrong_board', 'wrong_delay', 'no_packaged_proof', 'no_metadata'):
+            changed = json.loads(json.dumps(manifest))
+            if fault == 'wrong_board':
+                changed['embedded_bootloader']['profile'] = 'xiao'
+            elif fault == 'wrong_delay':
+                changed['embedded_bootloader']['automatic_delay_seconds'] = 1
+            elif fault == 'no_packaged_proof':
+                changed['verification'].pop()
+            else:
+                del changed['embedded_bootloader']
+            with self.subTest(fault=fault), self.assertRaises(ValueError):
+                GENERATOR.runtime_metadata(changed, False, source)
+
     def test_merged_rs232_requires_qualified_linked_and_packaged_proof(self):
         source = 'a' * 40
         manifest = dict(target='Xiao_nrf52_repeater', source_commit=source, verified=True,

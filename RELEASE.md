@@ -1,24 +1,25 @@
 # Releasing Firmware
 
-For 1.17.1.9 and later, build the complete qualified local release from a
+For 1.18.0.1, build the complete qualified local release from a
 clean, committed checkout. The builder runs one PlatformIO process at a time:
 
 ```bash
 python3 scripts/build_local_release.py \
-  --firmware-version v1.17.1.9-halo-keymind-cascade-dev --pio-jobs 4 --resume
+  --firmware-version v1.18.0.1-halo-keymind-cascade-dev --pio-jobs 8 --resume
 ```
 
 Package its completed directory for stable publication:
 
 ```bash
 python3 scripts/package_cascade_release.py \
-  --input .releases/v1.17.1.9-halo-keymind-cascade-dev-SOURCE8 \
+  --input .releases/v1.18.0.1-halo-keymind-cascade-dev-SOURCE8 \
   --output /path/to/publication-stage --local-release --stable \
-  --version 1.17.1.9 --commit FULL_SOURCE_COMMIT
+  --version 1.18.0.1 --commit FULL_SOURCE_COMMIT
 ```
 
 The packager rechecks the local checksum inventory, qualified firmware,
-full/reduced nRF52 pairs, and every exact ESP32 migration package. It keeps
+Full/Reduced nRF52 pairs, separate exact-board OTAFIX 2.4.12 embedded variants,
+standalone bootloader files, and every exact ESP32 migration package. It keeps
 migration-only application identities inside their migration ZIPs. It does
 not upload anything. Review `release-plan.json`, generate the picker controls
 as described in [the picker guide](docs/firmware_picker.md), and generate
@@ -39,10 +40,12 @@ names, sizes and checksums before switching the catalogs. Regenerate the
 downloadable picker from the same family and update its checksum on every
 page. Documentation-only follow-up commits do not move firmware tags.
 
-Include the [1.17.1.9 release notes](docs/releases/1.17.1.9.md) and
-[1.17.1.8 WiFi upgrade guide](docs/upgrading_1.17.1.8_to_1.17.1.9.md) in the
-publication review. Replace the release notes' final package-validation gate
-with the completed inventory only after packaging passes. Keep the firmware
+Include the [1.18.0.1 release notes](docs/releases/1.18.0.1.md) and
+[embedded bootloader guide](docs/nrf52_embedded_bootloader.md) in the
+publication review. The historical
+[1.17.1.8 WiFi upgrade guide](docs/upgrading_1.17.1.8_to_1.17.1.9.md) retains
+its measured starting-version limits. Record the completed inventory only
+after packaging passes. Keep the firmware
 source separate from a later documentation-only commit, and retain the
 measured hardware scope and old-updater completion limitation.
 
@@ -72,6 +75,6 @@ The current trigger explicitly excludes `repeater-room-*`.
 
 Use role-specific introductions for Companion, Repeater/Room Server, Sensor,
 LoRa OTA Repeater, and expanded Full infrastructure pages. Link the exact
-board/storage [OTAFIX 2.4.6 release](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/0.11.0-OTAFIX2.4.6)
+board/storage [OTAFIX 2.4.12 release](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/v0.11.0-OTAFIX2.4.12)
 where nRF52 bootloader requirements apply. Later documentation commits can be
 linked from release notes without moving the firmware tag or rebuilding assets.

@@ -4,7 +4,7 @@
 
 # Firmware picker
 
-<div class="firmware-picker" data-firmware-picker data-release-repo="mikecarper/MeshCore" data-controls-url="../_data/firmware_controls.json?v=t114-autodisplay-794f5f7b" data-bootloaders-url="../_data/bootloader_manifest.json?v=20261002-1" data-share-url="https://mikecarper.github.io/MeshCore/p/">
+<div class="firmware-picker" data-firmware-picker data-release-repo="mikecarper/MeshCore" data-controls-url="../_data/firmware_controls.json?v=1.18.0.1-03214a16" data-bootloaders-url="../_data/bootloader_manifest.json?v=otafix-2.4.12" data-share-url="https://mikecarper.github.io/MeshCore/p/">
   <form class="firmware-picker-form" data-role="form">
     <div class="firmware-picker-feedback firmware-picker-wide" data-role="filter-feedback" hidden>
       <div aria-live="polite" aria-atomic="true">
@@ -286,7 +286,7 @@ capacity and sensor-profile choices.
 Moving an older ESP32 installation to an expanded Full layout requires a
 partition migration.
 Use the exact-board merged image over USB, or a supported exact board and role
-staged migration ZIP from the [utility release](https://github.com/mikecarper/MeshCore/releases/tag/utility-v1.17.1.9-halo-keymind-cascade-dev-88c85108).
+staged migration ZIP from the [utility release](https://github.com/mikecarper/MeshCore/releases/tag/utility-v1.18.0.1-halo-keymind-cascade-dev-03214a16).
 Read that ZIP's README before choosing the Wi-Fi or LoRa route. Do not send a
 loose app-only Full `.bin` directly to an older layout: the running application
 cannot move its own active and inactive partitions. Run
@@ -478,7 +478,7 @@ is available. ESP32 and other chip families do not show this section. The web
 picker checks the latest stable OTAFIX release; the downloadable picker
 includes the bootloader release named in its saved catalog. If a board has no
 verified mapping or a file is missing, the picker explains that instead of
-offering another board's bootloader. OTAFIX 2.4.11 publishes a combined
+offering another board's bootloader. OTAFIX 2.4.12 includes a combined
 MeshTower V2 SD/internal image, mapped only to `Heltec_tower_v2_sdcard`.
 The historical `Heltec_tower_v2` internal-only profile is explicitly retired:
 move to the normal combined image with a one-time local USB/BLE DFU or SWD
@@ -493,8 +493,15 @@ for the source checks and boards still awaiting a dedicated, tested release.
 Board mappings and file names, URLs, sizes and SHA-256 hashes come from
 `bootloader-manifest.json` in the
 [OTAFIX release](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/latest).
-Application UF2 and DFU files do not install a bootloader. Follow the bootloader
-release's migration instructions if the installed version needs a recovery bridge.
+Ordinary application UF2 and DFU files preserve the installed bootloader.
+Separate **OTAFIX 2.4.12 bootloader included** Repeater and Room Server choices
+carry their exact-board bootloader inside the application. Leave that application
+running for at least 70 seconds after startup; it checks once when radio and OTA
+activity are idle, updates a recognized compatible older bootloader, and skips
+a matching current or newer version. Check `get bootloader.ver` after reboot.
+Recovery and unrecognized bootloaders require the documented migration route;
+the embedded updater does not guess a different board identity. See
+[embedded bootloader installation](nrf52_embedded_bootloader.md).
 
 nRF52 LoRa OTA requires an OTAFIX bootloader built for the exact board and
 storage layout. Select the hardware-matched HEX, Serial DFU ZIP, or
@@ -509,7 +516,7 @@ pin map, and other physical differences without crowding the Hardware dropdown.
 that need a different image or wiring, such as serial port or external storage.
 The picker skips this step when all available profile choices lead to the
 same firmware file.
-The 1.17.1.9 nRF52 repeater, room-server and sensor releases publish two separately
+The 1.18.0.1 nRF52 repeater, room-server and sensor releases publish two separately
 qualified choices: **Reduced sensors + LoRa OTA** and
 **Full supported sensors + LoRa OTA**, with `-reduced-ota` and `-full-ota` artifact suffixes. Each keeps
 its exact board/role OTA identity and storage layout; the suffix is not a new

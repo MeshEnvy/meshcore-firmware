@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 from package_esp32_partition_migration import BOARDS
-from package_cascade_release import nrf52_sensor_profile
+from package_cascade_release import embedded_bootloader_variant, nrf52_sensor_profile
 from station_g3_profiles import runtime_metadata as station_g3_metadata
 from optional_display_profiles import runtime_metadata as display_metadata
 from consolidated_profiles import runtime_metadata as consolidation_metadata
@@ -91,6 +91,15 @@ def runtime_metadata(manifest, mqtt, release_source=None):
         if not isinstance(source, str) or not re.fullmatch(r'[0-9a-f]{40}', source):
             raise ValueError('Sensor profiles require an exact source commit: ' + manifest['target'])
         result.update(sensorProfile=sensor_profile, sensorProfileSource=source)
+    if (manifest.get('embedded_bootloader') is not None
+            or 'bootloader.embedded' in capabilities
+            or '-with-bootloader-' in manifest.get('artifact_target', '')):
+        embedded_bootloader_variant(manifest)
+        source = manifest.get('source_commit', release_source)
+        if not isinstance(source, str) or not re.fullmatch(r'[0-9a-f]{40}', source):
+            raise ValueError('Embedded bootloader requires an exact source commit: ' + manifest['target'])
+        result.update(embeddedBootloader=dict(manifest['embedded_bootloader']),
+                      embeddedBootloaderSource=source)
     if {'logging.usb.packets', 'logging.usb.control'} <= packaged:
         result['loggingModes'] = ['none', 'usb', 'wifi', 'both'] if mqtt else ['none', 'usb']
         result['loggingControl'] = 'logging.output' if mqtt else 'usb.logging'

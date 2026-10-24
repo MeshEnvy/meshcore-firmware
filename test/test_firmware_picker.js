@@ -1173,9 +1173,62 @@ assert(stale.profiles.every(p => !p.controls));
 assert(!picker.runtimeDirections({...mqttCompanion, controls: undefined}, {}).some(s => s.title === 'GPS'));
 console.log('role-specific runtime directions tests passed');
 
-// Exercise every profile from the current generated catalog while the tests
-// above keep the older release's USB and capacity workarounds intact.
-const currentControls = require('../docs/_data/firmware_controls.json');
+// Every currently published profile must retain its own release-bound controls.
+// Bootloader-carrying applications stay separate from ordinary applications.
+const publishedControls = require('../docs/_data/firmware_controls.json');
+const publishedAssets = Object.entries(publishedControls.profiles).map(([target, info]) =>
+  asset(target + '-' + publishedControls.familyTag +
+    (info.platform === 'NRF52_PLATFORM' ? '.uf2' : '.bin')));
+const publishedReleases = [release(publishedControls.familyTag, '2026-10-24T00:00:00Z', publishedAssets)];
+const publishedCatalog = picker.buildCatalog(publishedReleases, publishedControls);
+assert.strictEqual(publishedCatalog.rows.length, publishedAssets.length);
+assert(publishedCatalog.profiles.every(profile => profile.controls && profile.chipFamily !== 'unknown'));
+const embeddedControls = Object.entries(publishedControls.profiles).filter(([, info]) => info.embeddedBootloader);
+assert.strictEqual(embeddedControls.length, 154);
+for (const [target, info] of embeddedControls) {
+  const profile = publishedCatalog.profiles.find(item => item.target === target);
+  assert(profile, target + ' must remain selectable');
+  assert.deepStrictEqual(profile.embeddedBootloader, info.embeddedBootloader);
+  const ordinaryTarget = target.replace('-with-bootloader-' + info.embeddedBootloader.release, '');
+  const ordinaryAsset = publishedAssets.find(file => file.name.startsWith(ordinaryTarget + '-'));
+  assert(ordinaryAsset, target + ' must retain its exact ordinary application download');
+  const ordinary = picker.buildCatalog([
+    release(publishedControls.familyTag, '2026-10-24T00:00:00Z', [ordinaryAsset]),
+  ], publishedControls).profiles.find(item => item.target === ordinaryTarget);
+  assert(ordinary, target + ' must retain its ordinary application identity');
+  assert.strictEqual(ordinary.embeddedBootloader, undefined);
+  assert.notStrictEqual(picker.firmwareProfileValue(profile), picker.firmwareProfileValue(ordinary));
+  assert(picker.firmwareProfileLabel(profile).includes('OTAFIX 2.4.12 bootloader included'));
+  assert(!picker.firmwareProfileLabel(ordinary).includes('bootloader included'));
+  const instructions = picker.installSteps(profile, 'uf2').join('\n');
+  assert(instructions.includes('at least 70 seconds'));
+  assert(instructions.includes('Recovery and unrecognized bootloaders'));
+  assert(instructions.includes('get bootloader.ver'));
+}
+const [embeddedTarget] = embeddedControls[0];
+for (const fault of ['stale_source', 'invalid_candidate', 'wrong_delay', 'wrong_version', 'ordinary_target']) {
+  const metadata = JSON.parse(JSON.stringify(publishedControls));
+  let target = embeddedTarget;
+  const changed = metadata.profiles[target];
+  if (fault === 'stale_source') changed.embeddedBootloaderSource = 'b'.repeat(40);
+  if (fault === 'invalid_candidate') changed.embeddedBootloader.candidate_sha256 = 'invalid';
+  if (fault === 'wrong_delay') changed.embeddedBootloader.automatic_delay_seconds = 1;
+  if (fault === 'wrong_version') changed.embeddedBootloader.release = '2.4.11';
+  if (fault === 'ordinary_target') {
+    target = embeddedTarget.replace('-with-bootloader-2.4.12', '');
+    metadata.profiles[target] = changed;
+  }
+  const profile = picker.buildCatalog(publishedReleases, metadata).profiles.find(item => item.target === target);
+  assert(profile, fault);
+  assert.strictEqual(profile.embeddedBootloader, undefined, fault);
+  assert(!picker.firmwareProfileLabel(profile).includes('bootloader included'), fault);
+  assert(!picker.installSteps(profile, 'uf2').join('\n').includes('at least 70 seconds'), fault);
+}
+console.log('all current release profiles, distinct embedded bootloaders and unsafe metadata rejection passed');
+
+// Keep the published 1.17.1.9 compatibility matrix independent of the newest
+// release, which can retire old recovery targets or add new firmware choices.
+const currentControls = require('./fixtures/firmware_picker_1_17_1_9_controls.json');
 const currentAssets = Object.entries(currentControls.profiles).map(([target, info]) => {
   const source = info.loggingSource || info.memorySource || currentControls.source;
   const tag = currentControls.familyTag.replace(/-[0-9a-f]{8}$/, '-' + source.slice(0, 8));

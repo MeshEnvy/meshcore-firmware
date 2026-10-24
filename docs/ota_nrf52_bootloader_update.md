@@ -5,8 +5,10 @@
 # nRF52 bootloader updates over LoRa
 
 For an application image that carries its own board-matched 2.4.12 replacement,
-see [embedded nRF52 bootloader updates](nrf52_embedded_bootloader.md). That opt-in
-bridge uses a separate admin activation command after the application is running.
+see [embedded nRF52 bootloader updates](nrf52_embedded_bootloader.md). A separate
+`with-bootloader-2.4.12` image checks once after 70 seconds of startup and updates
+a recognized compatible older bootloader when radio and OTA activity are idle.
+The authenticated admin activation command remains available for manual retry.
 
 For **1.17.1.5**, use the exact board/storage profile from
 [OTAFIX 2.4.6](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/0.11.0-OTAFIX2.4.6)

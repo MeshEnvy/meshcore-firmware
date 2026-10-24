@@ -18,6 +18,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SUFFIXES = {".bin", ".zip", ".uf2", ".hex"}
 PLATFORMS = {"ESP32_PLATFORM": "esp32", "NRF52_PLATFORM": "nrf52",
              "RP2040_PLATFORM": "noflash", "STM32_PLATFORM": "noflash"}
+ADDITIONAL_HARDWARE_CARDS = {
+    ("esp32", "Waveshare_S3_LR1121"): {
+        "maker": "waveshare", "name": "Waveshare ESP32-S3 LR1121", "type": "esp32"},
+    ("esp32", "Wio_Tracker_L2"): {
+        "maker": "seeed", "name": "Seeed Wio Tracker L2", "type": "esp32"},
+}
 
 
 def identity(name):
@@ -149,9 +155,17 @@ def generate(catalog, plan, family, records, profiles, repo):
             # A download-only card is an installer restriction, not a chip.
             # Retain that restriction for new profiles of the same hardware.
             indexes.update(by_hardware.get(("noflash", parsed["hardware"]), set()))
+            card_key = (platform, parsed["hardware"])
+            if not indexes and card_key in ADDITIONAL_HARDWARE_CARDS:
+                card = ADDITIONAL_HARDWARE_CARDS[card_key]
+                if card["maker"] not in catalog["maker"]:
+                    raise ValueError("new hardware card has no curated maker")
+                indexes = {len(result["device"])}
+                result["device"].append({**card, "firmware": []})
+                by_hardware[card_key] = indexes
             if len(indexes) != 1:
                 raise ValueError(f"new profile needs an exact hardware card mapping: {target}")
-        if any(catalog["device"][i]["type"] not in (platform, "noflash") for i in indexes):
+        if any(result["device"][i]["type"] not in (platform, "noflash") for i in indexes):
             raise ValueError("firmware platform differs from its hardware card")
         role, title = {"repeater": ("repeater", "Repeater"),
                        "room": ("roomServer", "Room Server"),
@@ -204,7 +218,7 @@ def generate(catalog, plan, family, records, profiles, repo):
                   f"SOURCE - https://github.com/{repo}/tree/{row.get('source_commit', plan['source'])}",
                   f"RELEASE - https://github.com/{repo}/releases/tag/{tag}"]
         for index in sorted(indexes):
-            install_platform = catalog["device"][index]["type"]
+            install_platform = result["device"][index]["type"]
             card_notes = list(notes)
             if install_platform == "noflash":
                 card_notes.append("MESH AMERICA - Downloads only. In-app flashing is not qualified for this hardware card.")

@@ -8,8 +8,8 @@ Choose firmware with the [firmware picker](firmware_picker.md). For help with a 
 
 ## Current release
 
-- [1.17.1.8 USA Cascade release notes](releases/1.17.1.8.md)
-- [Test Results](test-results/index.md) — validation archive and 1.17.1.8 Preview 1 qualification evidence
+- [1.18.0.1 USA Cascade release notes](releases/1.18.0.1.md)
+- [Test Results](test-results/index.md) - source-specific validation archive
 
 ## Documentation
 
@@ -32,7 +32,7 @@ The navigation groups the remaining guides under Documentation, including board-
 
 ## Engineering records
 
-- [Research](research/index.md) — design notes, diagnostics, and historical update-chain studies
-- [Old Releases](old-releases/index.md) — historical release notes and supporting files
+- [Research](research/index.md) - design notes, diagnostics, and historical update-chain studies
+- [Old Releases](old-releases/index.md) - historical release notes and supporting files
 
 Found a mistake or missing information? [Edit the documentation](https://github.com/mikecarper/MeshCore/tree/keymindCascade/docs).
