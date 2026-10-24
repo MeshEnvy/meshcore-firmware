@@ -2006,6 +2006,93 @@ assert(!tloraObserverDirections.some(section => /^RS232 bridge/.test(section.tit
 assert(!commands(tloraObserverDirections).some(command => command.startsWith('set rs232.')));
 console.log('T-LoRa RAM exception preserves separate UART and MQTT Full picker choices');
 
+const tlora118Targets = ['LilyGo_TLora_V2_1_1_6_repeater-full-logging', tloraObserverTarget];
+const tlora118Profiles = tlora118Targets.map(target => publishedCatalog.profiles.find(profile => profile.target === target));
+assert(tlora118Profiles.every(Boolean), 'The current release must exercise both qualified T-LoRa images');
+assert.deepStrictEqual(tlora118Profiles.map(profile => profile.variant), ['rs232-bridge', 'mqtt-observer']);
+assert(picker.firmwareProfileLabel(tlora118Profiles[0]).includes('RS-232 bridge'));
+assert(picker.firmwareProfileLabel(tlora118Profiles[1]).includes('Wi-Fi MQTT observer'));
+for (const logging of ['none', 'usb']) {
+  for (const mode of ['standard', 'espnow']) {
+    const filters = {hardware: 'LilyGo_TLora_V2_1_1_6', role: 'repeater', logging, mode};
+    const choices = picker.firmwareProfileChoices(publishedCatalog.profiles, filters);
+    assert.strictEqual(choices.length, 2, 'Shared T-LoRa logging/transport choices must still select two real images');
+    assert.strictEqual(new Set(choices.map(choice => choice.value)).size, 2);
+    assert.strictEqual(new Set(choices.map(choice => choice.label)).size, 2);
+    for (const profile of tlora118Profiles) {
+      assert(picker.profileMatchesFacets(profile, filters));
+      const selected = {...filters, ota: profile.ota, feature: profile.feature, variant: profile.variant, install: 'bin'};
+      const url = picker.shortSelectionUrl('https://mikecarper.github.io/MeshCore/firmware_picker/', selected, true);
+      const restored = picker.selectionFromUrl(url, publishedCatalog.profiles);
+      assert.deepStrictEqual(restored.unavailable, []);
+      assert.deepStrictEqual(publishedCatalog.profiles.filter(item =>
+        picker.profileMatchesFacets(item, restored.filters)).map(item => item.target), [profile.target],
+      'The new T-LoRa profile URL must identify exactly the chosen application');
+    }
+  }
+}
+for (const logging of ['wifi', 'both']) {
+  assert.deepStrictEqual(tlora118Profiles.filter(profile =>
+    picker.profileMatchesFacets(profile, {logging})).map(profile => profile.target), [tlora118Targets[1]],
+  'Only the observer image supports direct Wi-Fi MQTT output');
+}
+assert.deepStrictEqual(tlora118Profiles.filter(profile =>
+  picker.profileMatchesFacets(profile, {mode: 'rs232'})).map(profile => profile.target), [tlora118Targets[0]],
+'Only the normal T-LoRa image supports the UART bridge');
+for (const profile of tlora118Profiles) {
+  const original = publishedAssets.find(file => file.name.startsWith(profile.target + '-'));
+  assert(original && profile.files.some(file => file.name === original.name && file.url === original.browser_download_url));
+  assert(publishedCatalog.rows.some(file => file.name === original.name && file.url === original.browser_download_url),
+    'T-LoRa profile labels must preserve exact published filenames and URLs');
+}
+for (const target of tlora118Targets) {
+  const normal = target === tlora118Targets[0];
+  const faults = ['missing_logging_source', 'stale_logging_source', 'missing_logging_modes',
+    'wrong_logging_control', 'missing_controls_source', 'wrong_hardware'];
+  if (normal) faults.push('missing_uart_source', 'stale_uart_source', 'unmerged_uart');
+  for (const fault of faults) {
+    const info = JSON.parse(JSON.stringify(publishedControls.profiles[target]));
+    let changedTarget = target;
+    let source = publishedControls.source;
+    if (fault === 'missing_logging_source') delete info.loggingSource;
+    if (fault === 'stale_logging_source') info.loggingSource = 'b'.repeat(40);
+    if (fault === 'missing_logging_modes') delete info.loggingModes;
+    if (fault === 'wrong_logging_control') info.loggingControl = normal ? 'logging.output' : 'usb.logging';
+    if (fault === 'missing_controls_source') source = undefined;
+    if (fault === 'wrong_hardware') changedTarget = target.replace('V2_1_1_6', 'V2_0');
+    if (fault === 'missing_uart_source') delete info.rs232Source;
+    if (fault === 'stale_uart_source') info.rs232Source = 'b'.repeat(40);
+    if (fault === 'unmerged_uart') info.rs232Merged = false;
+    const partial = picker.buildCatalog([
+      release(publishedControls.familyTag, '2026-10-24T00:00:00Z',
+        [asset(changedTarget + '-' + publishedControls.familyTag + '.bin')]),
+    ], {...publishedControls, source, profiles: {[changedTarget]: info}});
+    assert.strictEqual(partial.profiles.length, 1);
+    assert(!['rs232-bridge', 'mqtt-observer'].includes(partial.profiles[0].variant),
+      'T-LoRa transport variants require exact source-qualified capability proof: ' + target + ': ' + fault);
+  }
+}
+
+// Distinct images can share a profile tuple only when another exposed selector
+// actually separates them, as with the Tracker V2's different connection modes.
+function profilesOverlap(left, right, field) {
+  const values = field === 'install' ? left.installKinds : picker.profileFieldValues(left, field);
+  const other = field === 'install' ? right.installKinds : picker.profileFieldValues(right, field);
+  return values.some(value => other.includes(value));
+}
+for (let leftIndex = 0; leftIndex < publishedCatalog.profiles.length; leftIndex += 1) {
+  const left = publishedCatalog.profiles[leftIndex];
+  for (const right of publishedCatalog.profiles.slice(leftIndex + 1)) {
+    if (left.hardware !== right.hardware || left.role !== right.role ||
+        !['ota', 'feature', 'mode', 'logging', 'install'].every(field => profilesOverlap(left, right, field))) continue;
+    assert.notStrictEqual(picker.firmwareProfileValue(left), picker.firmwareProfileValue(right),
+      'Overlapping selectors must not merge distinct firmware profile values: ' + left.target + ' / ' + right.target);
+    assert.notStrictEqual(picker.firmwareProfileLabel(left), picker.firmwareProfileLabel(right),
+      'Overlapping selectors must not show indistinguishable firmware labels: ' + left.target + ' / ' + right.target);
+  }
+}
+console.log('current T-LoRa profiles remain distinct and every overlapping release choice has a unique value and label');
+
 // Partition expansion uses the packager's lookup and published utility assets,
 // not hardware labels or guessed slugs (several historical names differ).
 const migrationFamily = currentControls.familyTag;
