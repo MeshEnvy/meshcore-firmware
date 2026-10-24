@@ -35,6 +35,9 @@ RADIO_PINS = (
 SENSORS = tuple(slot + "_sensor" for slot in SLOTS)
 SOURCE = "a" * 40
 FAMILY = "v1.17.1.9-halo-keymind-cascade-dev-" + SOURCE[:8]
+CATALOG_FILENAMES = ("keymind-cascade-v1.16.0-provider.json",
+                     "keymind-cascade-logging-v1.16.0-provider.json")
+CATALOG_FIXTURE = ROOT / "test/fixtures/station_g3_mesh_america_1_17_1_9.json"
 
 
 def definitions(flags):
@@ -45,9 +48,9 @@ def definitions(flags):
     return result
 
 
-def manifest(target):
+def manifest(target, *, family=FAMILY):
     profile = target + "-full-logging-ota"
-    stem = profile + "-" + FAMILY
+    stem = profile + "-" + family
     capabilities = ["profile.full", "ota.update.lora", "ota.update.wifi"]
     return dict(target=target, artifact_target=profile, platformio_env=target,
                 platform="ESP32_PLATFORM", build_profile="full", verified=True,
@@ -249,9 +252,11 @@ run_logging_matrix_build_targets "${SUPPORTED_PIO_ENVS[@]}" >/dev/null
         plan = dict(version="1.17.1.9", source=SOURCE, groups=[dict(key="full-profiles")])
         names = {"Station_G3_ESP32": "UnitEng/BQ Voyage Station G3",
                  "Station_G3_ESP32_r2": "UnitEng/BQ Voyage Station G3 ESP32 R2"}
-        for filename in ("keymind-cascade-v1.16.0-provider.json",
-                         "keymind-cascade-logging-v1.16.0-provider.json"):
-            catalog = json.loads((ROOT / "mesh-america" / filename).read_text())
+        # These fixed-slot recipes predate the automatic-slot G3 release.
+        # Keep their exact historical cards independent of active catalogs.
+        fixture = json.loads(CATALOG_FIXTURE.read_text(encoding="ascii"))
+        for filename in CATALOG_FILENAMES:
+            catalog = fixture["catalogs"][filename]
             targets = {row["artifact_target"] for row in rows}
             targets.update(catalogs.identity(file["name"]) for device in catalog["device"]
                            for firmware in device["firmware"]
@@ -268,6 +273,39 @@ run_logging_matrix_build_targets "${SUPPORTED_PIO_ENVS[@]}" >/dev/null
                     files = firmware["version"][FAMILY]["files"]
                     self.assertEqual({file["type"] for file in files}, {"flash-wipe", "flash-update"})
                     self.assertTrue(all(file["name"].startswith(slot + "_sensor-") for file in files))
+
+    def test_canonical_sensor_routes_without_guessing_a_legacy_r2_card(self):
+        family = "v1.18.0.1-halo-keymind-cascade-dev-" + SOURCE[:8]
+        plan = dict(version="1.18.0.1", source=SOURCE, groups=[dict(key="full-profiles")])
+        canonical = manifest("Station_G3_ESP32_sensor", family=family)
+        legacy = manifest("Station_G3_ESP32_r2_sensor", family=family)
+        fixture = json.loads(CATALOG_FIXTURE.read_text(encoding="ascii"))
+        for filename in CATALOG_FILENAMES:
+            original = fixture["catalogs"][filename]
+            # A pinned base-card-only input models the consolidated catalog;
+            # future published releases must not silently change this contract.
+            catalog = {**original, "device": [device for device in original["device"]
+                       if device["name"] in fixture["canonical_device_names"]]}
+            seed_targets = {catalogs.identity(file["name"]) for device in catalog["device"]
+                            for firmware in device["firmware"]
+                            for version in firmware["version"].values() for file in version["files"]}
+            profiles = catalogs.target_profiles(seed_targets | {canonical["artifact_target"], legacy["artifact_target"]})
+            def record(row):
+                return (row, "full-profiles-" + family,
+                        [Path(name) for name in row["files"] if name.endswith(".bin")])
+            with self.subTest(catalog=filename, profile="canonical"):
+                result = catalogs.generate(catalog, plan, family, [record(canonical)], profiles, "mikecarper/MeshCore")
+                card, = result["device"]
+                self.assertEqual(card["name"], "UnitEng/BQ Voyage Station G3")
+                firmware, = card["firmware"]
+                self.assertEqual(firmware["role"], "sensor")
+                self.assertEqual(firmware["subTitle"], "Station_G3_ESP32_sensor-full-logging-ota - Full profile")
+                self.assertEqual({file["name"] for file in firmware["version"][family]["files"]},
+                                 {name for name in canonical["files"] if name.endswith(".bin")})
+            with self.subTest(catalog=filename, profile="unqualified legacy R2"):
+                with self.assertRaisesRegex(ValueError, "exact hardware card mapping: Station_G3_ESP32_r2_sensor"):
+                    catalogs.generate(catalog, plan, family, [record(legacy)], profiles, "mikecarper/MeshCore")
+                self.assertEqual([device["name"] for device in catalog["device"]], fixture["canonical_device_names"])
 
     def test_controls_expose_qualified_ota_without_inventing_a_sensor_web_portal(self):
         rows = [manifest(target) for target in SENSORS]

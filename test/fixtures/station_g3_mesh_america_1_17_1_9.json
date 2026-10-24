@@ -1,0 +1,151 @@
+{
+  "format": "meshcore-station-g3-provider-fixture-v1",
+  "provenance": {
+    "repository": "mikecarper/MeshCore",
+    "source_commit": "03214a16df2bd09d3272dfb001d2d322c6740f60",
+    "selection": "Exact pre-consolidation G3 and G3 R2 card metadata, with one unchanged real app-update file from a Repeater profile per card. Other cards, firmware profiles and release notes are omitted.",
+    "source_catalogs": [
+      {
+        "path": "mesh-america/keymind-cascade-v1.16.0-provider.json",
+        "sha256": "f6a9d7f05a7dd271a0acd1fd7ac8a50dd8478922db7c6140cbf5aff5b7e090e5"
+      },
+      {
+        "path": "mesh-america/keymind-cascade-logging-v1.16.0-provider.json",
+        "sha256": "f6a9d7f05a7dd271a0acd1fd7ac8a50dd8478922db7c6140cbf5aff5b7e090e5"
+      }
+    ]
+  },
+  "canonical_device_names": [
+    "UnitEng/BQ Voyage Station G3"
+  ],
+  "catalogs": {
+    "keymind-cascade-v1.16.0-provider.json": {
+      "description": "Pinned Station G3 hardware-card routing fixture.",
+      "maker": {
+        "uniteng": {
+          "name": "UnitEng"
+        }
+      },
+      "role": {
+        "sensor": {
+          "name": "Sensor",
+          "description": "Telemetry node that reads and publishes only the sensors compiled for and detected on the selected board; this custom role is not a companion or repeater."
+        }
+      },
+      "device": [
+        {
+          "maker": "uniteng",
+          "name": "UnitEng/BQ Voyage Station G3",
+          "type": "esp32",
+          "firmware": [
+            {
+              "role": "repeater",
+              "title": "Repeater",
+              "subTitle": "Station_G3_ESP32_repeater-full-usb-wifi-ota - Full profile",
+              "version": {
+                "v1.17.1.9-halo-keymind-cascade-dev-88c85108": {
+                  "files": [
+                    {
+                      "type": "flash-update",
+                      "name": "Station_G3_ESP32_repeater-full-usb-wifi-ota-v1.17.1.9-halo-keymind-cascade-dev-88c85108.bin",
+                      "title": "App update (matching partition layout only)",
+                      "url": "https://github.com/mikecarper/MeshCore/releases/download/full-profiles-v1.17.1.9-halo-keymind-cascade-dev-88c85108/Station_G3_ESP32_repeater-full-usb-wifi-ota-v1.17.1.9-halo-keymind-cascade-dev-88c85108.bin"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "maker": "uniteng",
+          "name": "UnitEng/BQ Voyage Station G3 ESP32 R2",
+          "type": "esp32",
+          "firmware": [
+            {
+              "role": "repeater",
+              "title": "Repeater",
+              "subTitle": "Station_G3_ESP32_r2_repeater_observer_mqtt-full-usb-wifi-ota - Full profile",
+              "version": {
+                "v1.17.1.9-halo-keymind-cascade-dev-88c85108": {
+                  "files": [
+                    {
+                      "type": "flash-update",
+                      "name": "Station_G3_ESP32_r2_repeater_observer_mqtt-full-usb-wifi-ota-v1.17.1.9-halo-keymind-cascade-dev-88c85108.bin",
+                      "title": "App update (matching partition layout only)",
+                      "url": "https://github.com/mikecarper/MeshCore/releases/download/full-profiles-v1.17.1.9-halo-keymind-cascade-dev-88c85108/Station_G3_ESP32_r2_repeater_observer_mqtt-full-usb-wifi-ota-v1.17.1.9-halo-keymind-cascade-dev-88c85108.bin"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "keymind-cascade-logging-v1.16.0-provider.json": {
+      "description": "Pinned Station G3 hardware-card routing fixture.",
+      "maker": {
+        "uniteng": {
+          "name": "UnitEng"
+        }
+      },
+      "role": {
+        "sensor": {
+          "name": "Sensor",
+          "description": "Telemetry node that reads and publishes only the sensors compiled for and detected on the selected board; this custom role is not a companion or repeater."
+        }
+      },
+      "device": [
+        {
+          "maker": "uniteng",
+          "name": "UnitEng/BQ Voyage Station G3",
+          "type": "esp32",
+          "firmware": [
+            {
+              "role": "repeater",
+              "title": "Repeater",
+              "subTitle": "Station_G3_ESP32_repeater-full-usb-wifi-ota - Full profile",
+              "version": {
+                "v1.17.1.9-halo-keymind-cascade-dev-88c85108": {
+                  "files": [
+                    {
+                      "type": "flash-update",
+                      "name": "Station_G3_ESP32_repeater-full-usb-wifi-ota-v1.17.1.9-halo-keymind-cascade-dev-88c85108.bin",
+                      "title": "App update (matching partition layout only)",
+                      "url": "https://github.com/mikecarper/MeshCore/releases/download/full-profiles-v1.17.1.9-halo-keymind-cascade-dev-88c85108/Station_G3_ESP32_repeater-full-usb-wifi-ota-v1.17.1.9-halo-keymind-cascade-dev-88c85108.bin"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "maker": "uniteng",
+          "name": "UnitEng/BQ Voyage Station G3 ESP32 R2",
+          "type": "esp32",
+          "firmware": [
+            {
+              "role": "repeater",
+              "title": "Repeater",
+              "subTitle": "Station_G3_ESP32_r2_repeater_observer_mqtt-full-usb-wifi-ota - Full profile",
+              "version": {
+                "v1.17.1.9-halo-keymind-cascade-dev-88c85108": {
+                  "files": [
+                    {
+                      "type": "flash-update",
+                      "name": "Station_G3_ESP32_r2_repeater_observer_mqtt-full-usb-wifi-ota-v1.17.1.9-halo-keymind-cascade-dev-88c85108.bin",
+                      "title": "App update (matching partition layout only)",
+                      "url": "https://github.com/mikecarper/MeshCore/releases/download/full-profiles-v1.17.1.9-halo-keymind-cascade-dev-88c85108/Station_G3_ESP32_r2_repeater_observer_mqtt-full-usb-wifi-ota-v1.17.1.9-halo-keymind-cascade-dev-88c85108.bin"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
