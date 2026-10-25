@@ -4,14 +4,17 @@
 
 # Scripted LoRa OTA from start to finish
 
-For **1.17.1.5**, use the exact board/storage profile from
-[OTAFIX 2.4.6](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/0.11.0-OTAFIX2.4.6)
-for nRF52 OTAFIX installations. New internal-flash hybrid receivers require
-its 64 KiB retained-RAM handoff; QSPI and microSD targets require their own
-matching bootloader profiles. Earlier preview versions mentioned below
-describe compatibility/migration history, not the current recommended download.
-Full Companion is a MOTA source and normally updates itself over USB.
-
+For **[1.18.0.1 USA Cascade](releases/1.18.0.1.md)**, download the exact board,
+role and storage profile from the [firmware picker](firmware_picker.md).
+For a new nRF52 installation, use the matching
+[OTAFIX 2.4.12](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/v0.11.0-OTAFIX2.4.12)
+bootloader. Supported Repeater and Room Server downloads also offer
+**with bootloader** application images; these check once after 70 seconds and
+can update a recognized compatible older bootloader. Read the
+[embedded bootloader guide](nrf52_embedded_bootloader.md) before choosing one.
+Ordinary application images preserve the installed bootloader. Full Companion
+is a mOTA source and normally updates itself over USB. Older versions below
+describe compatibility history.
 
 The dedicated [RAK3401 chain report](research/rak3401_mota_chain.md) records the
 physical failures of withdrawn migrations and the physically qualified compact
@@ -20,16 +23,18 @@ accepted bridge image by SHA-256.
 
 [`tools/lora_ota/lora_ota.sh`](https://github.com/mikecarper/MeshCore/blob/keymindCascade/tools/lora_ota/lora_ota.sh) and
 [`tools/lora_ota/lora_ota.ps1`](https://github.com/mikecarper/MeshCore/blob/keymindCascade/tools/lora_ota/lora_ota.ps1) automate a
-MeshCore LoRa firmware update from a release `.zip` or ready `.mota`. They
+MeshCore LoRa firmware update from a firmware `.zip` or ready `.mota`. They
 identify the destination, validate the hardware and running firmware, prepare
 the right container, move the participating nodes to a temporary radio
 channel, serve and monitor the download, request installation, restore the
 controller, and check the rebooted node.
 
-The script cannot install the destination's first OTA-capable firmware. It can
+The destination must already have working application OTA support; install its
+first compatible application and bootloader locally. The script can
 stage signed v3 bootloader containers with `--no-install`, but never sends the
 privileged bootloader install command. Invalid v2 containers carrying the
-bootloader flag remain rejected. Do the first nRF52 bootloader installation over USB.
+bootloader flag remain rejected. A **with bootloader** application is a separate
+case: its firmware performs the startup check after the application is installed.
 An already-capable, explicitly supported internal-flash, XIAO QSPI, or exact
 MeshTower V2 microSD repeater may later use the separate manual
 [`ota bootloader install`](ota_nrf52_bootloader_update.md) workflow.
@@ -300,8 +305,10 @@ that was actually flashed. A matching filename or version alone is not enough.
 ## 1. Install the host tools
 
 Install Python 3.10 or newer, [Rust](https://rustup.rs/), Git, the official
-[`meshcore-cli`](https://github.com/meshcore-dev/meshcore-cli) **1.6.0 or newer**, and the official
-[`motatool`](https://github.com/vk496/motatool).
+[`meshcore-cli`](https://github.com/meshcore-dev/meshcore-cli) **1.6.0 or newer**, and the
+supported [`mikecarper/motatool`](https://github.com/mikecarper/motatool) fork.
+The commands below use the same pinned revision as the runner's repair path.
+Building it requires stable Cargo and rustc **1.86.0 or newer**.
 
 For signed bootloader staging, see the automatic `cryptography` and
 bootloader-capable `motatool` repairs above. Pip is needed only when installing
@@ -320,8 +327,8 @@ python3 -m pip install --user pipx
 python3 -m pipx ensurepath
 pipx install meshcore-cli
 
-git clone https://github.com/vk496/motatool.git
-cargo install --path ./motatool
+cargo install --git https://github.com/mikecarper/motatool.git \
+  --rev 8c38369e7d35ad50cf74261869676d52dd24adf7 --locked --bin motatool
 
 meshcli -v
 motatool --version
@@ -334,8 +341,8 @@ py -m pip install --user pipx
 py -m pipx ensurepath
 pipx install meshcore-cli
 
-git clone https://github.com/vk496/motatool.git
-cargo install --path .\motatool
+cargo install --git https://github.com/mikecarper/motatool.git `
+  --rev 8c38369e7d35ad50cf74261869676d52dd24adf7 --locked --bin motatool
 
 meshcli -v
 motatool --version
@@ -462,7 +469,7 @@ packages still require the independently checked `ota bootloader status` board,
 target, ABI, codec and storage identity; missing version text never bypasses
 package signature checks or the explicit bootloader-install workflow. The
 separate hardware-qualified `rak3401_mota_chain.py` retains its exact deployed
-version restriction; it is not a general OTAFIX 2.4.6 update runner.
+version restriction; it is not a general bootloader update runner.
 Current firmware also reports `maxblk:2048` near the front of both OTA replies.
 The runner treats a missing marker as the deployed 1 KiB receive limit, rejects
 a ready 2 KiB package for such a target before transfer, and passes the live
@@ -534,7 +541,8 @@ RXPS improves receive performance per unit of radio-on time, so the runner
 keeps the destination's saved RXPS preference enabled whenever the selected
 fast tuple has a qualified timing window. Before changing any radio, it reads
 `ver` from the destination, controller, source, and every named relay. It treats
-v1.17.1.5 as the first forward contract in which every SF5-SF8 transmission,
+v1.17.1.5 as the historical compatibility boundary (also met by 1.18.0.1) in
+which every SF5-SF8 transmission,
 including a retry, uses the same tuple-selected physical preamble: normally 32
 symbols, 64 only when 32 cannot enable RXPS, and 128 only when neither 32 nor
 64 can. A saved RXPS level is also safely retuned after a radio change. An
@@ -543,7 +551,7 @@ sends `set radio.rxps off` instead of assuming an ad-hoc build contains the
 timing fixes. Automation deliberately treats the version as a wire-format
 contract.
 
-For the default SF5/BW250 tuple, the runner keeps destination RXPS on only when
+At SF5/BW250, the runner keeps destination RXPS on only when
 the destination and every possible sender are v1.17.1.5 or newer. It does not
 overwrite an existing level-based preference. Current firmware retunes that
 preference against the tuple-selected 64-symbol wire preamble; the qualified boundary is
@@ -599,10 +607,14 @@ rejections are not replayed.
 
 ## 4. Run an ESP32 update
 
-The ZIP can contain a compatible ready `.mota` or the exact board-and-role
-non-merged application `.bin`:
+Download the destination's exact 1.18.0.1 **app-only `.bin`** from the
+[firmware picker](firmware_picker.md). Put it in a ZIP for the runner; do not
+use the USB `-merged.bin`. The examples call the downloaded application
+`target-1.18.0.1.bin` and the ZIP `release.zip`; substitute your actual `.bin`
+filename when creating it. A separately prepared, verified `.mota` also works.
 
 ```bash
+python3 -m zipfile -c release.zip ./target-1.18.0.1.bin
 export MESHCORE_ADMIN_PASSWORD='target-admin-password'
 
 ./tools/lora_ota/lora_ota.sh ./release.zip "Roof ESP32" \
@@ -624,6 +636,7 @@ unattended job, add `--yes`:
 PowerShell equivalents:
 
 ```powershell
+py -m zipfile -c release.zip .\target-1.18.0.1.bin
 $env:MESHCORE_ADMIN_PASSWORD = 'target-admin-password'
 
 & .\tools\lora_ota\lora_ota.ps1 '.\release.zip' 'Roof ESP32' `
@@ -642,6 +655,10 @@ local processes. The runner keeps the password out of child `meshcli` command
 lines and removes its protected temporary command file after each call.
 
 ## 5. Run an nRF52 update
+
+Choose the destination's 1.18.0.1 package in the [firmware picker](firmware_picker.md).
+Use its exact Full or Reduced sensors profile and storage layout;
+`nrf52-new-release.zip` below means that downloaded package.
 
 If the input ZIP already contains a compatible in-place delta `.mota`, no
 base argument is needed: its embedded base hash is compared with the live

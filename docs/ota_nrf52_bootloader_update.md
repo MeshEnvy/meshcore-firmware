@@ -4,22 +4,19 @@
 
 # nRF52 bootloader updates over LoRa
 
+For **MeshCore 1.18.0.1**, choose the exact board and storage layout in the
+[firmware picker](firmware_picker.md). The matching bootloader release is
+[OTAFIX 2.4.12](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/v0.11.0-OTAFIX2.4.12).
+Firmware and bootloader versions are separate. See the
+[1.18.0.1 update guide](ota_user_guide.md) for ordinary application updates.
+
 For an application image that carries its own board-matched 2.4.12 replacement,
 see [embedded nRF52 bootloader updates](nrf52_embedded_bootloader.md). A separate
 `with-bootloader-2.4.12` image checks once after 70 seconds of startup and updates
 a recognized compatible older bootloader when radio and OTA activity are idle.
 The authenticated admin activation command remains available for manual retry.
 
-For **1.17.1.5**, use the exact board/storage profile from
-[OTAFIX 2.4.6](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/0.11.0-OTAFIX2.4.6)
-for nRF52 OTAFIX installations. New internal-flash hybrid receivers require
-its 64 KiB retained-RAM handoff; QSPI and microSD targets require their own
-matching bootloader profiles. Earlier preview versions mentioned below
-describe compatibility/migration history, not the current recommended download.
-Full Companion is a MOTA source and normally updates itself over USB.
-
-
-Selected nRF52840 repeater LoRa-OTA builds can replace their matching OTAFIX
+Selected nRF52840 Repeater and Room Server LoRa-OTA builds can replace their matching OTAFIX
 bootloader without replacing the running application. This is a privileged
 maintenance path, not a normal firmware update. A stock bootloader must first
 be replaced with the exact ABI-3 self-update-capable OTAFIX build over USB/BLE
@@ -34,11 +31,14 @@ MeshCore. This includes the MBR parameter page at `0xFE000`, so an application
 cannot initiate `COPY_BL` even after verifying a signed bootloader package.
 Hardware testing on a RAK3401 confirmed the MBR SVC enters a bus fault and
 leaves the installed bootloader unchanged. For new RAK installations use the
-normal [OTAFIX 2.4.10](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/v0.11.0-OTAFIX2.4.10)
-compatible `*_auto` bootloader. Existing standard `3401_DFU` / `4631_DFU`
-devices can receive its signed bootloader `.mota` over LoRa. Devices already
-running `3401_AUTO_DFU` / `4631_AUTO_DFU` need the matching 2.4.10 recovery
-bridge installed locally before switching to the normal image.
+normal OTAFIX 2.4.12 `wiscore_rak3401_auto` or `wiscore_rak4631_auto` image.
+These retain the standard `3401_DFU` / `4631_DFU` identities. A compatible
+standard installation can receive the exact signed bootloader `.mota` over
+LoRa. Historical `3401_AUTO_DFU` / `4631_AUTO_DFU` and dedicated external-storage
+identities need the matching local recovery bridge before moving to the normal
+image; select it from the separate `OTAFIX-2.4.12-R_recovery.zip` and follow the
+release's recovery instructions. Recovery images are migration tools, not the
+normal download.
 
 ## Storage layouts
 
@@ -120,17 +120,16 @@ estimate is unsafe when a normally linked application may extend to
 ## Internal-flash target inventory
 
 The release builder consumes the allowlist in
-`tools/mota/nrf52_internal_bootloader_targets.txt`. Ten names are also literal
-PlatformIO environments and are enabled automatically when built directly.
-The other eleven are release aliases assembled from a base environment plus
-the lean OTA overlay; build them through `build.sh`, which passes the same
-allowlist decision to the common pre-build guard. These lean repeater/bridge
-targets have no OTA-owned SD/QSPI store and have an exact curated OTAFIX
-manifest identity:
+`tools/mota/nrf52_internal_bootloader_targets.txt`. It includes literal
+PlatformIO environments and release aliases; build aliases through `build.sh`
+so the common pre-build guard receives the same storage/layout decision.
+The inventory includes lean repeaters and bridges plus the explicitly listed
+adaptive RAK receiver roles. Their bootloader identities are listed below;
+use the picker for current application names and downloads.
 
 | Build target(s) | Installed OTAFIX identity | Boot target ID |
 | --- | --- | ---: |
-| `Heltec_tower_v2_repeater_lora_ota_no_external_sensors` | `239A0071 / TOWER_V2_OTA` | `1150F50E` |
+| Historical internal-only MeshTower V2 layout; current releases use the combined SD target | `239A0071 / TOWER_V2_OTA` | `1150F50E` |
 | T096 lean repeater and RS232 bridge | `239A0071 / T096_DFU` | `42354C85` |
 | `Heltec_t1_repeater_lora_ota_no_external_sensors` | `239A0071 / T1_DFU` | `FC556FFC` |
 | T114 display and without-display lean repeaters | `239A0071 / T114_DFU` | `0C3F2902` |
@@ -140,8 +139,8 @@ manifest identity:
 | `ProMicro_repeater_lora_ota_no_external_sensors` | `239A00B3 / PROM_DFU` | `AF79E8CC` |
 | `t1000e_repeater_lora_ota_no_external_sensors` | `28860057 / T1KE_DFU` | `E6F5F03F` |
 | `ThinkNode_M3_repeater_lora_ota_no_external_sensors` | `239A00DA / TNM3_DFU` | `0CA41DB2` |
-| `RAK_3401_repeater_lora_ota_no_external_sensors` | `239A0029 / 3401_DFU` | `23818A80` |
-| RAK4631 lean repeater and both lean RS232 bridges | `239A0029 / 4631_DFU` | `2D0DF000` |
+| RAK3401 reduced repeater and unified repeater | `239A0029 / 3401_DFU` | `23818A80` |
+| RAK4631 reduced/unified repeater, both reduced RS232 bridges, and listed reduced Room/Sensor roles | `239A0029 / 4631_DFU` | `2D0DF000` |
 | GAT562 30S/Tracker Pro/EVB Pro lean targets | `239A0029 / GAT562_DFU` | `D50D2D44` |
 | `R1Neo_repeater_lora_ota_no_external_sensors` | `239A0029 / 4631_DFU` | `2D0DF000` |
 | `RAK_WisMesh_Tag_repeater_lora_ota_no_external_sensors` | `239A0029 / RTAG_DFU` | `C72E9C9C` |
@@ -205,13 +204,19 @@ cannot coexist on the same bus at those addresses. Leave RAK12500 at `0x42`,
 strap INA3221 A0 to SCL for `0x43`, and use firmware built with
 `-DTELEM_INA3221_ADDRESS=0x43` when both modules are installed.
 
+The current MeshTower V2 release uses the combined SD/internal bootloader;
+an internal-only installation needs the local migration described in the
+[MeshTower SD guide](ota_meshtower_v2_sdcard.md). Sharing a board/name pair
+does not make incompatible storage layouts interchangeable.
+
 Boards with onboard external flash are not silently redirected to internal
 staging. Mesh Solar, Nano G2 Ultra, T-Impulse Plus, ThinkNode M8, T-Echo
 Lite/Card, MeshTracker X1, and Wio WM1110 have board-specific QSPI hardware and
 need a separately matched QSPI path where available. Full Companions, other
-SD/QSPI/ExtraFS roles, Ethernet roles, source-only roles, and unqualified
-full-sensor roles are excluded from the internal-flash inventory. The exact
-MeshTower V2 SD role above is separately qualified for its SD path.
+SD/QSPI/ExtraFS roles, source-only roles, and unlisted full-sensor roles are
+excluded from the internal-flash inventory. The explicitly allowlisted RAK4631
+Ethernet Room role is an exception; the exact MeshTower V2 SD role above has
+its own SD path.
 
 This internal layout is limited to nRF52840 devices with 1 MiB internal flash,
 the exact S140 v6/v7 map, and the 40 KiB boot region at

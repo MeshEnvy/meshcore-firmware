@@ -6575,7 +6575,7 @@ The reader preserves a complete Adafruit/UF2 version string, including OTAFIX,
 preview, and vendor/build suffixes. Manufacturer two-component versions such as
 Seeed's `1.00` are preserved without inventing a patch number. If that string is
 absent or ambiguous, it uses the existing whole-image CRC and unique BLMF/BLM2
-validation to read the embedded OTAFIX version (for example, `> OTAFIX2.4.6`). Some current release
+validation to read the embedded OTAFIX version (for example, `> OTAFIX2.4.6`). Some older release
 images, including MeshTower V2 SD 2.4.6, omit the UF2 text entirely. As a last
 OTAFIX-specific fallback, it accepts one unambiguous standalone version token
 such as `v0.11.0-OTAFIX2.4.9` from only the first 40 KiB of the identified

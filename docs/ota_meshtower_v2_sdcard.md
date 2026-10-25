@@ -4,6 +4,14 @@
 
 # MeshTower V2 microSD LoRa OTA
 
+For **MeshCore 1.18.0.1**, select **MeshTower V2 SD** in the
+[firmware picker](firmware_picker.md) and use its matching combined SD/internal
+[OTAFIX 2.4.12 bootloader](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/v0.11.0-OTAFIX2.4.12).
+The [update guide](ota_user_guide.md) covers the release downloads and normal
+LoRa transfer. A separate **bootloader included** application is available for
+compatible Repeater installations; see
+[automatic and manual activation](nrf52_embedded_bootloader.md#install-and-activate).
+
 `Heltec_tower_v2_sdcard_repeater_lora_ota_no_external_sensors` is the one
 canonical MeshTower V2 repeater target. Its SD OTA target ID `0A9DBBF0`,
 hardware ID `Heltec_tower_v2`, application layout, and artifact names remain
@@ -27,8 +35,8 @@ bootloader reads the staged file and programs the application or bootloader.
 With a missing or unmountable card, the same application can select internal
 flash for signed application in-place deltas only. The signer must be trusted
 by the node, as on the SD application path. This fallback requires the
-published combined MeshTower SD/internal profile in
-[OTAFIX 2.4.11](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/v0.11.0-OTAFIX2.4.11):
+published combined MeshTower SD/internal profile in OTAFIX 2.4.12
+(introduced in 2.4.11):
 the privileged storage profile must remain exactly `09` (`SD|BOOT_UPDATE`),
 with a separate positive `MOTASTOR` optional-application storage record of
 `02` (`STAGE_CEILING`). A missing record or an internal-only bootloader does
@@ -204,12 +212,14 @@ not the installed bootloader, so `staged:none mid=- hash=-` is not an install
 failure. `blrc:00` means no retained apply result is available; it does not by
 itself prove either success or failure.
 
-Older MeshCore application firmware can report `get bootloader.ver` as `unknown`
+For historical diagnostics, older MeshCore application firmware can report
+`get bootloader.ver` as `unknown`
 for OTAFIX 2.4.6 because this bootloader image omits the legacy `UF2 Bootloader`
 text. The updated getter also reads the CRC-validated BLM2 version. For the
 official signed **MeshTower V2 SD 2.4.6** `.mota`, the installed identity is
 `TOWER_V2_OTA`, CRC `5DACDB3D`, ABI `3`, and capabilities `09`. Compare the exact
 board/storage package when interpreting these values; the non-SD image differs.
+That CRC identifies the old 2.4.6 package, not the current 2.4.12 bootloader.
 
 ## SD card CLI
 

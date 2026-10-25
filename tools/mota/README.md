@@ -5,9 +5,15 @@ spec ([`docs/ota_protocol.md`](../../docs/ota_protocol.md)) and the **build + te
 no longer a user-facing CLI.
 
 > **Want to build / verify / inspect / serve `.mota` from the command line?** Use the standalone
-> [`motatool`](https://github.com/vk496/motatool) Rust CLI (its own repository). It supersedes the old
+> supported [`motatool` fork](https://github.com/mikecarper/motatool) Rust CLI
+> ([pinned installation](../../docs/lora_ota_automation.md)). It supersedes the old
 > `mota.py` / `mota_seeder.py` (now removed) and produces byte-identical containers. The files here are
 > the spec oracle and the firmware build/test glue.
+
+For **firmware 1.18.0.1**, use the [firmware picker](../../docs/firmware_picker.md)
+and [OTA guide](../../docs/ota_user_guide.md). Its nRF52 bootloader release is
+OTAFIX 2.4.12; this does not change application format 2 or standalone
+bootloader format 3.
 
 ## Setup
 

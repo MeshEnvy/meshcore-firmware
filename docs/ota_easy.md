@@ -4,14 +4,17 @@
 
 # Easy firmware updates over LoRa
 
-For **1.17.1.5**, use the exact board/storage profile from
-[OTAFIX 2.4.6](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/0.11.0-OTAFIX2.4.6)
-for nRF52 OTAFIX installations. New internal-flash hybrid receivers require
-its 64 KiB retained-RAM handoff; QSPI and microSD targets require their own
-matching bootloader profiles. Earlier preview versions mentioned below
-describe compatibility/migration history, not the current recommended download.
-Full Companion is a MOTA source and normally updates itself over USB.
-
+For **[1.18.0.1 USA Cascade](releases/1.18.0.1.md)**, choose the exact board,
+role and storage layout in the [firmware picker](firmware_picker.md).
+For a new nRF52 installation, use the matching
+[OTAFIX 2.4.12](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/v0.11.0-OTAFIX2.4.12)
+bootloader. Supported Repeater and Room Server downloads also offer
+**with bootloader** application images; these check once after 70 seconds and
+can update a recognized compatible older bootloader. Read the
+[embedded bootloader guide](nrf52_embedded_bootloader.md) before choosing one.
+Ordinary application images preserve the installed bootloader. Full Companion
+is a mOTA source and normally updates itself over USB. Older versions below
+describe compatibility history.
 
 This guide shows the shortest manual path for sending firmware from a computer to a MeshCore node over
 LoRa. Choose the package type for the **destination** node:
@@ -63,7 +66,8 @@ configurations. Confirm that it is permitted in your location and change it when
 
 At SF5/BW250, an SX1262+TCXO destination can keep RXPS enabled only when it and
 every sender that can reach it (controller, source, and relays) follow the
-v1.17.1.5-or-newer adaptive-preamble contract. The qualified destination
+adaptive-preamble contract introduced in v1.17.1.5 and retained in 1.18.0.1.
+The qualified destination
 boundary is effective level 8, preamble 64 and `1252 / 6424 us`. For manual
 setup, save `set radio.rxps level 8 preamble 32` before entering TempRadio; the
 `32` is a conservative saved timing assumption and current firmware selects
@@ -219,24 +223,28 @@ use `192.168.4.1:5001`. The TCP seeder auto-attaches; do not also run
 
 ## Install `motatool`
 
-Install Rust if necessary, then install the standalone packaging and serving tool:
+Install stable Rust/Cargo **1.86.0 or newer** if needed, then install the
+supported [motatool fork](https://github.com/mikecarper/motatool) at the same
+revision used by the scripted updater:
 
 ```bash
-git clone https://github.com/vk496/motatool
-cargo install --path ./motatool
+cargo install --git https://github.com/mikecarper/motatool.git \
+  --rev 8c38369e7d35ad50cf74261869676d52dd24adf7 --locked --bin motatool
 ```
 
 ## ESP32: package a full firmware image
 
-The destination must be an OTA-capable ESP32 with an A/B partition table. Download or build the new
-non-merged `.bin` application for the destination's exact board **and role**. Do not use an ESP32
+The destination must be an OTA-capable ESP32 with an A/B partition table. Download the 1.18.0.1
+non-merged `.bin` application for the destination's exact board **and role** from the
+[firmware picker](firmware_picker.md), or build that image locally. Do not use an ESP32
 `-merged.bin` factory image.
 
-Put the application firmware in a working directory, then build a full `.mota` container. For example:
+Put the application firmware in a working directory. In this example it is saved as
+`target-1.18.0.1.bin`; use your downloaded application's actual filename:
 
 ```bash
 mkdir -p ./motas
-motatool build --fw ./Heltec_v3_repeater-ota-v1.16.05.bin --out-dir ./motas
+motatool build --fw ./target-1.18.0.1.bin --out-dir ./motas
 motatool verify ./motas/*.mota
 ```
 
@@ -252,9 +260,9 @@ Do not continue if `motatool verify` reports a failure.
 
 This is a one-time prerequisite. Install the OTAFIX bootloader built for the destination's **exact board**
 from the
-[OTAFIX nRF52 bootloader releases](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases).
-Internal-staging delta updates require OTAFIX 2.4 or newer. External QSPI and SD staging require OTAFIX
-2.4.1 or newer and release notes that explicitly list the exact board and storage mode. Follow the release's
+[OTAFIX 2.4.12 release](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/v0.11.0-OTAFIX2.4.12).
+Match the board and internal, QSPI or SD storage mode exactly. The internal-flash profile must support
+the retained-RAM handoff used by current firmware. Follow the release's
 board-specific installation and erase instructions. If it does not contain the destination's exact board,
 this LoRa install path is not yet available for that board; never substitute a similar board's bootloader.
 
@@ -323,7 +331,7 @@ INA226, INA260, and INA3221 I2C voltage/current monitors remain supported despit
 That trim does not remove the SSD1306 OLED, autodiscovered I2C RTCs, or GPS-compatible RAK12500 I2C path.
 The `0x42` RAK12500/INA3221 addressing rule above still applies.
 If the device has a RAK15001 installed in sensor slot C and the matching
-RAK15001 OTAFIX bootloader, use
+RAK4631 adaptive OTAFIX 2.4.12 bootloader (`wiscore_rak4631_auto`), use
 `RAK_4631_repeater_rak15001_slot_c_lora_ota` instead. That target retains the
 full sensor/GPS set and can install either a full image or a delta from the
 external 2 MiB store.
@@ -331,9 +339,11 @@ external 2 MiB store.
 With the separately wired Winbond breakout, use
 `RAK_4631_repeater_w25q16_lora_ota` for RAK4631 or
 `RAK_3401_repeater_rak13302_w25q16_lora_ota` for RAK3401 + RAK13302. Both
-require an `EF4015` 2 MiB device. As a one-time prerequisite, install
-`wiscore_rak4631_w25q16` for RAK4631 or
-`wiscore_rak3401_rak13302_w25q16` for RAK3401 + RAK13302. Wire CLK/MISO/MOSI
+require an `EF4015` 2 MiB device. Current OTAFIX 2.4.12 downloads use the
+adaptive `wiscore_rak4631_auto` profile for RAK4631 or
+`wiscore_rak3401_auto` for RAK3401 + RAK13302. Follow the
+[QSPI installation and identity-migration instructions](ota_nrf52_qspi.md#one-time-prerequisite)
+when replacing an older dedicated-storage bootloader. Wire CLK/MISO/MOSI
 to the RAK19007 IO connector pins 26/27/28, CS to J11 AIN1, and VCC/GND to J12
 VDD/GND. Fit an approximately 10 kOhm CS-to-VDD pull-up; never use VBAT. The
 SPI pins require underside taps or an interposer, but no sensor slot is
@@ -344,7 +354,7 @@ before installing either image.
 For a build that uses only the 2.54 mm headers, use the unified
 `RAK_4631_repeater_unified_lora_ota` or
 `RAK_3401_repeater_unified_lora_ota` image with its matching compatible
-OTAFIX 2.4.10 bootloader. Wire `CLK` to J10 `TX1`, `DO` to J10 `RX1`, `DI` to
+OTAFIX 2.4.12 bootloader. Wire `CLK` to J10 `TX1`, `DO` to J10 `RX1`, `DI` to
 J11 `IO1`, and `CS` to J11 `AIN1`; keep the `CS` pull-up and J12 power wiring.
 This gives up UART1 GPS/PPS but leaves I2C sensors and the RAK3401 radio
 available. See the [header-only wiring table](ota_nrf52_qspi.md#header-only-w25q16-wiring-for-the-unified-rak-images).

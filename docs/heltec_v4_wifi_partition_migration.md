@@ -4,6 +4,11 @@
 
 # Heltec V4 legacy-partition migration over Wi-Fi
 
+For **[1.18.0.1 USA Cascade](releases/1.18.0.1.md)**, choose the exact V4
+board and role in the [firmware picker](firmware_picker.md). Use its matching
+migration ZIP from the [update utilities release](https://github.com/mikecarper/MeshCore/releases/tag/utility-v1.18.0.1-halo-keymind-cascade-dev-03214a16)
+when the installed partition layout needs expansion.
+
 Heltec V4/V4.3 OLED repeaters with their normal 16 MiB flash use the shared
 [ESP32 partition migration](esp32_wifi_partition_migration.md) bridge.
 It changes Arduino's old `default.csv` layout, with two 1.25 MiB OTA slots,
@@ -13,8 +18,8 @@ Build the complete V4 package with the repeatable ESP32 recipe in WSL/Linux:
 
 ```bash
 python3 -B scripts/build_esp32_partition_migration.py \
-  --board heltec-v4 --version v1.17.1.7-halo-keymind-cascade-dev \
-  --radio-preset usa-cascadia --profile cascade
+  --board heltec-v4 --version v1.18.0.1-halo-keymind-cascade-dev \
+  --radio-preset usa-cascade-fixed --profile cascade
 ```
 
 The ZIP contains the Wi-Fi bridge, LoRa bridge, and exact-target Full image.

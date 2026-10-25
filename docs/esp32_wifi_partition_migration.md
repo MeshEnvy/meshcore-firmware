@@ -4,6 +4,12 @@
 
 # ESP32 legacy-partition migration over USB, Wi-Fi or LoRa
 
+For **[1.18.0.1 USA Cascade](releases/1.18.0.1.md)**, select the exact board
+and role in the [firmware picker](firmware_picker.md). Published migration
+packages are in the [update utilities release](https://github.com/mikecarper/MeshCore/releases/tag/utility-v1.18.0.1-halo-keymind-cascade-dev-03214a16).
+Follow the selected package's README; a normal app update does not need a
+partition migration when the installed layout already matches.
+
 The partition-migration bridge lets a supported ESP32 node move from a small
 dual-OTA layout to a verified larger dual-OTA layout without cable flashing or
 a full-chip erase. It fits a legacy 1.25 MiB slot. The Wi-Fi version exposes an
@@ -105,7 +111,7 @@ larger 4 MiB table. Ordinary repeater, room, Companion and KISS recipes retain
 sh scripts/build_esp32_partition_migration.sh \
   --board waveshare-s3-lr1121-observer-repeater \
   --board waveshare-s3-lr1121-observer-room-server \
-  --version v1.18.0-test --radio-preset usa-cascadia --profile cascade --dry-run
+  --version v1.18.0.1-halo-keymind-cascade-dev --radio-preset usa-cascade-fixed --profile cascade --dry-run
 ```
 
 Remove `--dry-run` only to build and verify the packages from a clean commit;
@@ -152,14 +158,14 @@ non-interactively:
 
 ```bash
 sh scripts/build_esp32_partition_migration.sh --board heltec-v4 \
-  --version v1.17.1.7-halo-keymind-cascade-dev \
-  --radio-preset usa-cascadia --profile cascade
+  --version v1.18.0.1-halo-keymind-cascade-dev \
+  --radio-preset usa-cascade-fixed --profile cascade
 sh scripts/build_esp32_partition_migration.sh --all \
-  --version v1.17.1.7-halo-keymind-cascade-dev \
-  --radio-preset usa-cascadia --profile cascade
+  --version v1.18.0.1-halo-keymind-cascade-dev \
+  --radio-preset usa-cascade-fixed --profile cascade
 sh scripts/build_esp32_partition_migration.sh --role sensor \
-  --version v1.17.1.7-halo-keymind-cascade-dev \
-  --radio-preset usa-cascadia --profile cascade
+  --version v1.18.0.1-halo-keymind-cascade-dev \
+  --radio-preset usa-cascade-fixed --profile cascade
 ```
 
 `--all` creates one verified ZIP per listed board/role pair and a release
@@ -173,8 +179,8 @@ The underlying Python recipe remains available:
 
 ```bash
 python3 -B scripts/build_esp32_partition_migration.py \
-  --version v1.17.1.7-halo-keymind-cascade-dev \
-  --radio-preset usa-cascadia --profile cascade
+  --version v1.18.0.1-halo-keymind-cascade-dev \
+  --radio-preset usa-cascade-fixed --profile cascade
 ```
 
 The default builds all configured board/role recipes. Add `--board heltec-v4`

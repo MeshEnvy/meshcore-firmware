@@ -1,5 +1,11 @@
 # LoRa OTA tools
 
+For **MeshCore 1.18.0.1**, choose the exact application package from the
+[firmware picker](../../docs/firmware_picker.md), then follow the
+[scripted update guide](../../docs/lora_ota_automation.md). Supported nRF52
+destinations use the matching OTAFIX 2.4.12 bootloader. Full Companion is a
+source for other nodes and normally updates itself over USB.
+
 `lora_ota.py` is the existing Companion-based update runner. The separate
 `mota_kiss_direct.py` tool serves one verified `.mota` file through a **full KISS
 modem** on logical radio port `0` or `1`. It does not use the Companion raw-packet

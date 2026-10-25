@@ -4,6 +4,11 @@
 
 # Full Companion
 
+For **[1.18.0.1 USA Cascade](releases/1.18.0.1.md)**, download the exact
+Full Companion from the [firmware picker](firmware_picker.md). To use it as
+a source for updating repeaters, room servers or sensors, follow the
+[LoRa OTA automation guide](lora_ota_automation.md).
+
 Configure message alerts with the [Companion notification builder](notifications.md).
 It generates CLI rules for contacts, rooms and channels, previews patterns, and
 can apply/test them over USB. Trusted contacts and rooms can send `!notify`
@@ -303,10 +308,12 @@ Build by using one exact listed name:
 
 ```bash
 bash build.sh build-firmware heltec_v4_r8_companion_radio_full \
-  --firmware-version v1.17.0
+  --firmware-version v1.18.0.1-halo-keymind-cascade-dev \
+  --radio-preset usa-cascade-fixed --profile cascade
 
 bash build.sh build-firmware RAK_4631_companion_radio_full \
-  --firmware-version v1.17.0
+  --firmware-version v1.18.0.1-halo-keymind-cascade-dev \
+  --radio-preset usa-cascade-fixed --profile cascade
 ```
 
 To build every canonical full Companion target, select the corresponding
@@ -314,7 +321,8 @@ interactive menu item or run:
 
 ```bash
 bash build.sh build-full-companion-firmwares \
-  --firmware-version v1.17.0
+  --firmware-version v1.18.0.1-halo-keymind-cascade-dev \
+  --radio-preset usa-cascade-fixed --profile cascade
 ```
 
 Canonical Companion bulk builds also omit legacy `_ps` and `_femoff` aliases.

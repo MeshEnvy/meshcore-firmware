@@ -4,6 +4,12 @@
 
 # Embedded nRF52 bootloader update
 
+For **MeshCore 1.18.0.1**, select your exact board and Repeater or Room Server
+role in the [firmware picker](firmware_picker.md), then choose **OTAFIX 2.4.12
+bootloader included** where available. See the
+[release notes](releases/1.18.0.1.md) and [update guide](ota_user_guide.md) for
+the application downloads and installation route.
+
 An opt-in Repeater or Room Server build can carry its application firmware and
 the exact board's [OTAFIX 2.4.12 bootloader](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/v0.11.0-OTAFIX2.4.12)
 in one application image. After installing that application, it checks the
@@ -29,8 +35,9 @@ and Room Server variants for hardware in the pinned normal OTAFIX catalog:
 bash build.sh release-build --firmware-version v1.18.0.1-halo-keymind-cascade-dev
 ```
 
-The local release also includes the exact-board standalone OTAFIX 2.4.12
-UF2, SoftDevice/bootloader DFU ZIP, and SWD HEX downloads. These serve
+The 1.18.0.1 [update utilities](https://github.com/mikecarper/MeshCore/releases/tag/utility-v1.18.0.1-halo-keymind-cascade-dev-03214a16)
+also include the exact-board standalone OTAFIX 2.4.12 UF2,
+SoftDevice/bootloader DFU ZIP, and SWD HEX downloads. These serve
 Companion and Sensor installations as well as the infrastructure roles.
 Pending, blocked and retired bootloader profiles are excluded and identified
 in the catalog. A normal application image does not update its bootloader.

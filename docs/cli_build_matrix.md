@@ -265,8 +265,9 @@ passed the combined flash/RAM qualification.
 ESP32 deliberately uses one TTY: Binary Companion and plaintext USB logging
 are mutually exclusive there. nRF52 retains its optional second CDC port.
 
-The [OTAFIX 2.4.11 release](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/v0.11.0-OTAFIX2.4.11)
-is the current bootloader reference, not an all-board qualification claim.
+The [OTAFIX 2.4.12 release](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/v0.11.0-OTAFIX2.4.12)
+is the bootloader reference for [firmware 1.18.0.1](releases/1.18.0.1.md),
+not an all-board qualification claim.
 Consult its exact-board manifest and unavailable-profile reasons. Internal
 application storage accepts exact-base in-place deltas that fit the workspace;
 full application packages need the matching external NOR or microSD profile.
