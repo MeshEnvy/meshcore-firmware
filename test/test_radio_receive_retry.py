@@ -47,6 +47,8 @@ class RadioReceiveRetryTests(unittest.TestCase):
                  ('bool', 'isPacketPendingOrReceiving'), ('bool', 'isChannelActive'),
                  ('bool', 'isReceivingPassive'), ('bool', 'setRxPowerSaving'),
                  ('bool', 'setRxBoostedGainMode'), ('void', 'startRecv'),
+                 ('mesh::RadioParamApplyResult', 'trySetRxPowerSaving'),
+                 ('mesh::RadioParamApplyResult', 'trySetRxBoostedGainMode'),
                  ('void', 'checkReceiveMode'), ('void', 'loop'),
                  ('void', 'triggerNoiseFloorCalibrate'), ('void', 'requestRestartRecv'),
                  ('void', 'noiseFloorCalibCheck'), ('void', 'endNoiseFloorCalib'),
@@ -66,7 +68,7 @@ class RadioReceiveRetryTests(unittest.TestCase):
         settle = header[start:header.index('#endif', start) + len('#endif')]
         harness = HARNESS[:HARNESS.index('int main() {')]
         harness = harness.replace('#include <RadioProfiles.h>',
-            '#include <Dispatcher.h>\n#include <helpers/StaticPoolPacketManager.h>\n'
+            '#define MESH_RECEIVE_HARNESS_HAS_DISPATCHER 1\n#include <Dispatcher.h>\n#include <helpers/StaticPoolPacketManager.h>\n'
             '#include <helpers/PowerManagementUtils.h>\n#define BD_STARTUP_RX_PACKET 1')
         harness = harness.replace('struct RadioLibWrapper {', 'struct RadioLibWrapper : mesh::Radio {')
         harness = harness.replace('Radio radio{&events}; Radio* _radio',

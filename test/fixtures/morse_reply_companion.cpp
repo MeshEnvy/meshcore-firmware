@@ -1,3 +1,4 @@
+#include <helpers/TempRadioReplyBarrier.h>
 namespace mesh { struct Packet { bool radio_reply=false; }; }
 struct ContactInfo {
   struct { uint8_t pub_key[32]={}; } id;
@@ -10,6 +11,8 @@ static uint32_t millis() { return 100; }
 struct MyMesh {
   mesh::MorseReplyHandoff _morse_reply;
   bool _morse_reply_admission=false;
+  mesh::TempRadioReplyBarrier _primary_radio_reply;
+  bool _primary_radio_reply_admission=false;
   TestRadio radio;
   unsigned active=0, forwarded=0;
   uint32_t handled_timestamp=0;

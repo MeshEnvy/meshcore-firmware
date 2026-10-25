@@ -373,10 +373,14 @@ class CompanionWiFiNetworkPowerTests(unittest.TestCase):
 #include <helpers/WiFiNetworkPowerPolicy.h>
 constexpr int WL_CONNECTED = 3, WL_DISCONNECTED = 6;
 struct { int status() const { return WL_DISCONNECTED; } } WiFi;
+struct { bool ota = false; bool isOTAUpdateRunning() const { return ota; } } board;
 namespace mesh { struct Log { void println(const char*) {} };
 inline Log& usbLoggingPort() { static Log log; return log; } }
 struct Bridge {
   int starts = 0; bool running = false;
+  void loop() {}
+  bool isStopping() const { return false; }
+  bool isStartPending() const { return false; }
   void begin() { ++starts; running = true; mesh::wifi::networkPower().setManaged(true); }
   bool isRunning() const { return running; }
 };
@@ -395,6 +399,9 @@ struct MyMesh {
 int main() {
   Bridge bridge; MyMesh node; node._mqtt_bridge = &bridge;
   assert(WiFi.status() == WL_DISCONNECTED);
+  board.ota = true;
+  node.serviceMQTT("saved-network", "saved-password");
+  assert(bridge.starts == 0); board.ota = false;
   node._wc_batch_active = true;
   node.serviceMQTT("saved-network", "saved-password");
   assert(bridge.starts == 0);

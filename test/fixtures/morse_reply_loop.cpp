@@ -28,6 +28,7 @@ struct CommonCLI {
   void loopBatteryForwarding(bool = false) {}
   void loopManagement() { ++management_loops; }
   void servicePendingTxPower() { ++tx_services; }
+  void servicePendingRxSettings() {}
   void loop();
 };
 @LOOP@

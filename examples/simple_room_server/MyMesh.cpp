@@ -1,5 +1,8 @@
 #include "MyMesh.h"
 #include <helpers/ui/DisplayNightLocation.h>
+#if defined(USE_LR2021)
+#include <helpers/radiolib/LR2021SideDetectorConfig.h>
+#endif
 #include <helpers/DefaultPasswordWarning.h>
 #if defined(HELTEC_V4_R8_TFT) && defined(HELTEC_TFT_RUNTIME_ROTATION) \
     && HELTEC_TFT_RUNTIME_ROTATION == 1
@@ -2427,6 +2430,73 @@ void MyMesh::onGroupPacketRecv(mesh::Packet* packet) {
   _clock_sync.observeGroupPacket(packet);
 }
 
+void MyMesh::servicePendingPrimaryRadioSettings(bool tx_gap) {
+  const bool revert_radio_due = revert_radio_at && millisHasNowPassed(revert_radio_at);
+  const bool radio_apply_ready = !radio_apply_retry_at || millisHasNowPassed(radio_apply_retry_at);
+  bool radio_apply_failed = false;
+  if (revert_radio_due && !temp_radio_applied) {
+    // The temporary window ended before it could be applied. Drop both timers
+    // so a previously busy radio cannot switch to the expired channel later.
+    set_radio_at = revert_radio_at = 0;
+    radio_apply_retry_at = 0;
+    radio_apply_failures = 0;
+    MESH_DEBUG_PRINTLN("Temp radio params expired before apply");
+  } else if (revert_radio_due && !hasOutbound() && radio_apply_ready) {
+    if (applySavedRadioParams()) {
+      set_radio_at = revert_radio_at = 0;
+      temp_radio_applied = false;
+      saved_radio_apply_pending = false;
+      radio_apply_retry_at = 0;
+      radio_apply_failures = 0;
+      MESH_DEBUG_PRINTLN("Radio params restored");
+    } else {
+      radio_apply_failed = true;
+    }
+  } else if (set_radio_at && millisHasNowPassed(set_radio_at) && !hasOutbound()
+             && radio_apply_ready) {
+    uint32_t rx_us = _prefs.rx_ps_rx_us;
+    uint32_t sleep_us = _prefs.rx_ps_sleep_us;
+    bool timing_ok = true;
+    if (_prefs.rx_powersaving_enabled && _prefs.rx_ps_level != 0) {
+      uint32_t preamble = _prefs.rx_ps_preamble ? _prefs.rx_ps_preamble
+                                                : rxPowerSavingPreambleForParams(pending_sf, pending_bw);
+      timing_ok = CommonCLI::calculateRxPowerSavingLevel(
+          _prefs.rx_ps_level, pending_sf, pending_bw, preamble, &rx_us, &sleep_us);
+    }
+    uint32_t timings[2] = {rx_us, sleep_us};
+    const uint32_t* applied_timings = _prefs.rx_powersaving_enabled
+        && radio_driver.supportsRxPowerSaving() ? timings : NULL;
+    if (timing_ok && _cli.radioProfiles().applyPrimary(
+          pending_freq, pending_bw, pending_sf, pending_cr, true, pending_preamble, applied_timings) == mesh::RadioParamApplyResult::APPLIED) {
+      set_radio_at = 0;
+      active_cr = pending_cr;
+      temp_radio_applied = true;
+      radio_apply_retry_at = 0;
+      radio_apply_failures = 0;
+      MESH_DEBUG_PRINTLN("Temp radio params");
+    } else {
+      // A failed setParams() may have applied only a prefix of the tuple.
+      // Ensure expiry restores the complete saved configuration.
+      saved_radio_apply_pending = true;
+      radio_apply_failed = true;
+    }
+  }
+
+  if (saved_radio_apply_pending && !temp_radio_applied && (tx_gap || !hasOutbound())
+      && radio_apply_ready && !radio_apply_failed) {
+    if (applySavedRadioParams()) {
+      saved_radio_apply_pending = false;
+      radio_apply_retry_at = 0;
+      radio_apply_failures = 0;
+    } else {
+      radio_apply_failed = true;
+    }
+  }
+  if (radio_apply_failed) {
+    radio_apply_retry_at = futureMillis(nextRadioApplyRetryDelay(radio_apply_failures));
+  }
+}
+
 void MyMesh::onSendComplete(mesh::Packet* packet) {
   mesh::Mesh::onSendComplete(packet);
   _cli.servicePendingTxPower();
@@ -2434,6 +2504,9 @@ void MyMesh::onSendComplete(mesh::Packet* packet) {
 #if MESH_ENABLE_FLEET_CONTROL
   if (_cli.fleetChannel()) _cli.fleetChannel()->complete(packet, _cli.radioProfiles());
 #endif
+  _cli.servicePendingRxSettings();
+  _cli.radioProfiles().servicePendingTuning();
+  servicePendingPrimaryRadioSettings(true);
 }
 
 void MyMesh::onSendFail(mesh::Packet* packet) {
@@ -2872,6 +2945,19 @@ void MyMesh::begin(FILESYSTEM *fs) {
 }
 
 bool MyMesh::applySavedRadioParams() {
+#if defined(USE_LR2021)
+  uint8_t extra_sf_count = 0;
+  const auto* profiles = radio_driver.profiles();
+  const bool side_detectors_allowed = !profiles || !profiles->enabled();
+  if (!mesh::lr2021::storedSideDetectorCount(_prefs.extra_sf, extra_sf_count)
+      || !mesh::lr2021::validateSideDetectorSFs(
+          _prefs.extra_sf, extra_sf_count, _prefs.sf, _prefs.bw)) {
+    if (side_detectors_allowed && !radio_driver.configSideDetectors(nullptr, 0, _prefs.bw)) return false;
+    memset(_prefs.extra_sf, 0, sizeof(_prefs.extra_sf));
+    extra_sf_count = 0;
+    savePrefs();
+  }
+#endif
   // Each setter can defer while the radio is busy. Keep recovery pending
   // until the complete saved configuration has been accepted.
   if (radio_driver.supportsRxBoostedGainMode()
@@ -2885,6 +2971,10 @@ bool MyMesh::applySavedRadioParams() {
     return false;
   }
   active_cr = _prefs.cr;
+#if defined(USE_LR2021)
+  if (side_detectors_allowed
+      && !radio_driver.configSideDetectors(_prefs.extra_sf, extra_sf_count, _prefs.bw)) return false;
+#endif
   return radio_driver.setTxPower(_prefs.tx_power_dbm);
 }
 
@@ -3209,6 +3299,26 @@ bool MyMesh::isTxPowerApplied(int8_t power_dbm) const {
 bool MyMesh::setRxPowerSaving(bool enable, uint32_t rx_us, uint32_t sleep_us) {
   return radio_driver.setRxPowerSaving(enable, rx_us, sleep_us);
 }
+
+bool MyMesh::supportsRxPowerSaving() const {
+  return radio_driver.supportsRxPowerSaving();
+}
+
+mesh::RadioParamApplyResult MyMesh::trySetRxPowerSaving(bool enable, uint32_t rx_us, uint32_t sleep_us) {
+  return radio_driver.trySetRxPowerSaving(enable, rx_us, sleep_us);
+}
+
+bool MyMesh::supportsRxPowerSavingRfRxDisable() const {
+  return radio_driver.supportsRxPowerSavingRfRxDisable();
+}
+
+mesh::RadioParamApplyResult MyMesh::trySetRxPowerSavingRfRxDisabled(bool disabled) {
+  return radio_driver.trySetRxPowerSavingRfRxDisabled(disabled);
+}
+
+bool MyMesh::isRxPowerSavingRfRxDisabled() const {
+  return radio_driver.isRxPowerSavingRfRxDisabled();
+}
 void MyMesh::getRxPsWatchdogCounts(uint32_t* soft, uint32_t* hard) {
   *soft = radio_driver.getRxPsWatchdogSoftCount();
   *hard = radio_driver.getRxPsWatchdogHardCount();
@@ -3217,6 +3327,20 @@ void MyMesh::getRxPsWatchdogCounts(uint32_t* soft, uint32_t* hard) {
 bool MyMesh::setRxBoostedGain(bool enable) {
   return radio_driver.setRxBoostedGainMode(enable);
 }
+
+bool MyMesh::supportsRxBoostedGain() const {
+  return radio_driver.supportsRxBoostedGainMode();
+}
+
+mesh::RadioParamApplyResult MyMesh::trySetRxBoostedGain(bool enable) {
+  return radio_driver.trySetRxBoostedGainMode(enable);
+}
+
+#if defined(USE_LR2021)
+mesh::RadioParamApplyResult MyMesh::tryConfigSideDetectors(const uint8_t sideDetSFs[], uint8_t num, float bw) {
+  return radio_driver.tryConfigSideDetectors(sideDetSFs, num, bw);
+}
+#endif
 
 bool MyMesh::saveIdentity(const mesh::LocalIdentity &new_id) {
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -3351,12 +3475,11 @@ bool MyMesh::startWebConfigImpl(bool force_ap, char* reply, bool automatic_setup
     strcpy(reply, "Err: OTA server is running - 'stop ota' first");
     return true;
   }
-  if (_webconfig && (_webconfig->isRunning() || _webconfig->isStopping())) {
+  if (_webconfig && _webconfig->isRunning()) {
     if (!automatic_setup && !_webconfig->isStopping()) {
       _webconfig->requestNetworkAccess();
     }
-    strcpy(reply, _webconfig->isStopping() ? "Err: webconfig still stopping, retry shortly"
-                                           : "Err: webconfig already running");
+    strcpy(reply, "Err: webconfig already running");
     return true;
   }
   if (mesh::wireless::control().blocked(mesh::wireless::WiFi)) {
@@ -3406,9 +3529,9 @@ bool MyMesh::startWebConfigImpl(bool force_ap, char* reply, bool automatic_setup
 
   bool started;
   if (force_ap) {
-    started = _webconfig->startSetupMode(reply);
+    started = _webconfig->requestStart(true, reply);
   } else {
-    started = _webconfig->startAutoMode(reply);
+    started = _webconfig->requestStart(false, reply);
   }
   if (!started) {
     _unconfigured_setup_espnow_suspended = setup_was_suspended;
@@ -3433,7 +3556,7 @@ bool MyMesh::setWebUIEnabled(bool enabled, char* reply) {
     return true;
   }
   if (enabled) {
-    if (_webconfig && (_webconfig->isRunning() || _webconfig->isStopping())) {
+    if (_webconfig && _webconfig->isRunning()) {
       strcpy(reply, "OK - webui on (already active)");
     } else {
       startWebConfig(false, reply);
@@ -3444,7 +3567,7 @@ bool MyMesh::setWebUIEnabled(bool enabled, char* reply) {
       }
     }
   } else {
-    if (_webconfig && _webconfig->isRunning()) _webconfig->requestStop();
+    if (_webconfig) _webconfig->requestStop();
     strcpy(reply, "OK - webui off");
   }
   return true;
@@ -3485,24 +3608,30 @@ bool MyMesh::getWiFiCLI(char* reply) const {
 
 bool MyMesh::setWiFiSSID(const char* value, char* reply) {
   if (WebConfigServer::setStandaloneWiFiSSID(value, reply, 160, canonicalWiFiLegacyPrefs())) {
-    const bool was_running = _webconfig && _webconfig->isRunning();
-    if (was_running) _webconfig->requestStop();
-    if (_webconfig) _webconfig->reloadStandaloneWiFi();
-    if (was_running) {
-      strcpy(reply, "OK - WiFi SSID saved; WebConfig stopping, start again to apply");
+    if (_webconfig) {
+      _webconfig->reloadStandaloneWiFi();
+      _webconfig->requestRestart();
     }
+#ifdef WITH_MQTT_BRIDGE
+    if (_prefs.bridge_enabled && bridge
+        && !_cli.getBoard()->isOTAUpdateRunning()) bridge->requestRestart();
+#endif
+    strcpy(reply, "OK - WiFi SSID saved; reconnect scheduled");
   }
   return true;
 }
 
 bool MyMesh::setWiFiPassword(const char* value, char* reply) {
   if (WebConfigServer::setStandaloneWiFiPassword(value, reply, 160, canonicalWiFiLegacyPrefs())) {
-    const bool was_running = _webconfig && _webconfig->isRunning();
-    if (was_running) _webconfig->requestStop();
-    if (_webconfig) _webconfig->reloadStandaloneWiFi();
-    if (was_running) {
-      strcpy(reply, "OK - WiFi password saved; WebConfig stopping, start again to apply");
+    if (_webconfig) {
+      _webconfig->reloadStandaloneWiFi();
+      _webconfig->requestRestart();
     }
+#ifdef WITH_MQTT_BRIDGE
+    if (_prefs.bridge_enabled && bridge
+        && !_cli.getBoard()->isOTAUpdateRunning()) bridge->requestRestart();
+#endif
+    strcpy(reply, "OK - WiFi password saved; reconnect scheduled");
   }
   return true;
 }
@@ -3521,7 +3650,8 @@ bool MyMesh::setWiFiCLI(const char* value, char* reply) {
 }
 
 bool MyMesh::stopWebConfig(char* reply) {
-  if (!_webconfig || !_webconfig->isRunning()) {
+  if (!_webconfig || (!_webconfig->isRunning() && !_webconfig->isStopping()
+                      && !_webconfig->isStartPending())) {
     strcpy(reply, "Err: webconfig not running");
     return true;
   }
@@ -4127,7 +4257,7 @@ void MyMesh::loop() {
 #endif
 #ifdef WITH_MQTT_BRIDGE
   // TLS runs on Core 0; the radio loop reaps only an acknowledged CLI stop.
-  if (bridge && bridge->isRunning()) bridge->loop();
+  if (bridge) bridge->loop();
 #endif
 #ifdef WITH_ESPNOW_BRIDGE
   if (espnow_bridge.isRunning()) espnow_bridge.loop();
@@ -4150,70 +4280,7 @@ void MyMesh::loop() {
     updateAdvertTimer(); // schedule next local advert
   }
 
-  const bool revert_radio_due = revert_radio_at && millisHasNowPassed(revert_radio_at);
-  const bool radio_apply_ready = !radio_apply_retry_at || millisHasNowPassed(radio_apply_retry_at);
-  bool radio_apply_failed = false;
-  if (revert_radio_due && !temp_radio_applied) {
-    // The temporary window ended before it could be applied. Drop both timers
-    // so a previously busy radio cannot switch to the expired channel later.
-    set_radio_at = revert_radio_at = 0;
-    radio_apply_retry_at = 0;
-    radio_apply_failures = 0;
-    MESH_DEBUG_PRINTLN("Temp radio params expired before apply");
-  } else if (revert_radio_due && !hasOutbound() && radio_apply_ready) {
-    if (applySavedRadioParams()) {
-      set_radio_at = revert_radio_at = 0;
-      temp_radio_applied = false;
-      saved_radio_apply_pending = false;
-      radio_apply_retry_at = 0;
-      radio_apply_failures = 0;
-      MESH_DEBUG_PRINTLN("Radio params restored");
-    } else {
-      radio_apply_failed = true;
-    }
-  } else if (set_radio_at && millisHasNowPassed(set_radio_at) && !hasOutbound()
-             && radio_apply_ready) {
-    uint32_t rx_us = _prefs.rx_ps_rx_us;
-    uint32_t sleep_us = _prefs.rx_ps_sleep_us;
-    bool timing_ok = true;
-    if (_prefs.rx_powersaving_enabled && _prefs.rx_ps_level != 0) {
-      uint32_t preamble = _prefs.rx_ps_preamble ? _prefs.rx_ps_preamble
-                                                : rxPowerSavingPreambleForParams(pending_sf, pending_bw);
-      timing_ok = CommonCLI::calculateRxPowerSavingLevel(
-          _prefs.rx_ps_level, pending_sf, pending_bw, preamble, &rx_us, &sleep_us);
-    }
-    uint32_t timings[2] = {rx_us, sleep_us};
-    const uint32_t* applied_timings = _prefs.rx_powersaving_enabled
-        && radio_driver.supportsRxPowerSaving() ? timings : NULL;
-    if (timing_ok && _cli.radioProfiles().applyPrimary(
-          pending_freq, pending_bw, pending_sf, pending_cr, true, pending_preamble, applied_timings) == mesh::RadioParamApplyResult::APPLIED) {
-      set_radio_at = 0;
-      active_cr = pending_cr;
-      temp_radio_applied = true;
-      radio_apply_retry_at = 0;
-      radio_apply_failures = 0;
-      MESH_DEBUG_PRINTLN("Temp radio params");
-    } else {
-      // A failed setParams() may have applied only a prefix of the tuple.
-      // Ensure expiry restores the complete saved configuration.
-      saved_radio_apply_pending = true;
-      radio_apply_failed = true;
-    }
-  }
-
-  if (saved_radio_apply_pending && !temp_radio_applied && !hasOutbound()
-      && radio_apply_ready && !radio_apply_failed) {
-    if (applySavedRadioParams()) {
-      saved_radio_apply_pending = false;
-      radio_apply_retry_at = 0;
-      radio_apply_failures = 0;
-    } else {
-      radio_apply_failed = true;
-    }
-  }
-  if (radio_apply_failed) {
-    radio_apply_retry_at = futureMillis(nextRadioApplyRetryDelay(radio_apply_failures));
-  }
+  servicePendingPrimaryRadioSettings();
 
 #ifdef WITH_WEBCONFIG
   if (_webconfig) {
@@ -4222,7 +4289,8 @@ void MyMesh::loop() {
         || (!bridge->isRunning() && !bridge->isStopping()));
 #endif
     _webconfig->tick(millis());
-    if (!_webconfig->isRunning() && !_webconfig->isStopping()) {
+    if (!_webconfig->isRunning() && !_webconfig->isStopping()
+        && !_webconfig->isStartPending()) {
       delete _webconfig;
       _webconfig = nullptr;
     }
@@ -4510,7 +4578,7 @@ mesh::powerdiag::Mask MyMesh::pendingWorkReason() const {
   using mesh::powerdiag::Reason;
   if (!canIdleDualRadio()) return mask(Reason::DualRadio);
   if (hasPendingOtaApply()) return mask(Reason::Ota);
-  if (_cli.hasPendingTxPower()) return mask(Reason::Scheduled);
+  if (_cli.hasPendingRadioSettings()) return mask(Reason::Scheduled);
 #if defined(ESP32_PLATFORM)
   if (mesh::wifi::networkPower().foregroundActive()) return mask(Reason::Network);
 #endif

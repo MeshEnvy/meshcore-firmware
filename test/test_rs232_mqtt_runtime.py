@@ -43,6 +43,7 @@ class RS232MQTTRuntimeTests(unittest.TestCase):
             "bool startSharedEspNowBridgeIfReady()", "bool isEspNowBridgeRunning()",
             "bool setEspNowBridgeState(bool enable)", "bool restartEspNowBridge()",
             "bool isMqttBridgeRunning()", "bool requestMqttBridgeStop()", "bool isMqttBridgeStopping()",
+            "bool isMqttBridgeStartPending()",
             "bool setMqttBridgeState(bool enable)",
             "bool restartMqttBridge()", "bool setBridgeState(bool enable)", "bool restartBridge()",
         ))
@@ -141,7 +142,7 @@ class RS232MQTTRuntimeTests(unittest.TestCase):
             "bool rs232BridgeEnabled() const", "bool isBridgeRunning() const override",
             "bool isRs232BridgeRunning()", "bool setRs232BridgeState(bool enable)",
             "bool restartRs232Bridge()", "bool isMqttBridgeRunning()", "bool requestMqttBridgeStop()",
-            "bool isMqttBridgeStopping()", "bool setBridgeState(bool enable)",
+            "bool isMqttBridgeStopping()", "bool isMqttBridgeStartPending()", "bool setBridgeState(bool enable)",
             "bool restartBridge()"))
         code = (ROOT / "test/fixtures/rs232_mqtt_runtime.cpp").read_text(encoding="ascii")
         code = code[:code.index("int main() {")]
@@ -225,10 +226,10 @@ class RS232MQTTRuntimeTests(unittest.TestCase):
   assert(!mesh.bridge && !mesh.isMqttBridgeRunning() && !mesh.bridgesPreventSleep());
   cli.set("rs232.enabled on", reply); mesh.mqtt_bridge->fail_starts = 1;
   cli.set("mqtt.enabled on", reply);
-  assert(strstr(reply, "setting saved") && !mesh.isMqttBridgeRunning());
+  assert(!strcmp(reply, "OK") && !mesh.isMqttBridgeRunning() && mesh.isMqttBridgeStartPending());
   assert(mesh.isRs232BridgeRunning() && mesh.bridgesPreventSleep());
-  cli.set("mqtt.enabled on", reply);
-  assert(strcmp(reply, "OK") == 0 && mesh.isMqttBridgeRunning());
+  mesh.serviceBridges(); // Automatic start retries without another CLI attempt.
+  assert(mesh.isMqttBridgeRunning() && !mesh.isMqttBridgeStartPending());
 }'''
         with tempfile.TemporaryDirectory(prefix="rs232-mqtt-only-") as directory:
             work = Path(directory)

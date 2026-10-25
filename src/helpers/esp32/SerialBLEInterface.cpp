@@ -1584,8 +1584,13 @@ size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
                               ADVERT_RESTART_DELAY)) {
     if (pServer->getConnectedCount() == 0) {
       BLE_DEBUG_PRINTLN("SerialBLEInterface -> re-starting advertising");
+#if defined(MESH_USE_NIMBLE_ARDUINO)
+      _adv_restart_pending = !pServer->getAdvertising()->start();
+      if (_adv_restart_pending) _adv_restart_started = now;
+#else
       pServer->getAdvertising()->start();  // re-Start advertising
       _adv_restart_pending = false;
+#endif
     } else {
       // A disconnect can take longer than the normal restart delay. Keep the
       // restart armed instead of losing it while the controller still reports

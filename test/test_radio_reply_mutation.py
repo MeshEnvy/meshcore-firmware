@@ -36,6 +36,7 @@ struct Mesh {
 };
 }
 struct Profiles {
+  void servicePendingTuning() {}
   bool pending = false, accepted = false;
   unsigned completions = 0;
   bool finishReplyMutation(bool delivered) {
@@ -44,7 +45,9 @@ struct Profiles {
 };
 struct CLI {
   Profiles profiles;
+  void servicePendingRxSettings() {}
   void servicePendingTxPower() {}
+  void servicePendingLocalRadioSettings() {}
   struct NoMorseReply {
     void complete(const void*) {}
     void fail(const void*) {}
@@ -63,9 +66,15 @@ struct Manager {
 };
 struct MyMesh : mesh::Mesh {
   CLI _cli;
+  void servicePendingRxSettings() {}
   void servicePendingTxPower() {}
+  void servicePendingLocalRadioSettings() {}
   Manager manager; Manager* _mgr = &manager;
   mesh::TempRadioReplyBarrier temp_radio_reply_barrier;
+  mesh::TempRadioReplyBarrier _primary_radio_reply;
+  bool _primary_radio_blocked = false, _primary_radio_reply_admission = false;
+  void finishPrimaryRadioReply(bool) {}
+  void queueSavedRadioApply() {}
   bool radio_reply_secondary = false, primary_radio_mutation_starts_temp = false;
   uint32_t radio_reply_deadline = 0;
   mesh::Packet* pending_battery_alert_packet = nullptr;
@@ -78,6 +87,8 @@ struct MyMesh : mesh::Mesh {
   void cancelOutboundRadioRetry(const mesh::Packet* p) { assert(p == outbound); ++cancellations; }
   void releasePacket(mesh::Packet*) { ++released; }
   bool scheduleNormalRadio() { ++normal_schedules; return true; }
+  void processScheduledRadioSettings(bool) {}
+  void servicePendingPrimaryRadioSettings(bool) {}
   void onSendComplete(mesh::Packet*) override;
   void onSendFail(mesh::Packet*) override;
   void onRadioProfileCopyQueued(mesh::Packet*, const mesh::Packet*, uint8_t) override;

@@ -245,6 +245,7 @@ class MyMesh : public Base {
 public:
   bool isUDPBridgeNetworkEnabled() const { return true; }
   bool isMqttBridgeRunning() const { return false; }
+  bool isMqttBridgeStartPending() const { return false; }
 @ACCESS@:
 @METHOD@
 public:
@@ -303,6 +304,7 @@ struct {
  bool isUDPBridgeConfigured()const{return configured;}
  bool setUDPBridgeNetworkState(bool enabled){paused=!enabled;events.push_back(enabled?5:1);if(enabled)WiFi.mode(WIFI_STA);return true;}
  bool isMqttBridgeRunning()const{return mqtt;}
+ bool isMqttBridgeStartPending()const{return false;}
  bool setMqttBridgeState(bool value){mqtt=value;return true;}
  bool isWebConfigActive()const{return web;}
  bool isWebConfigStopping()const{return false;}

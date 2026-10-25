@@ -113,6 +113,8 @@ struct TxRole : mesh::Mesh {
   uint8_t tracker_packet_hash[MAX_HASH_SIZE] = {};
   uint32_t futureMillis(uint32_t delay) const { return millis() + delay; }
   void finishRadioReply(bool) {}
+  void processScheduledRadioSettings(bool) {}
+  void servicePendingPrimaryRadioSettings(bool) {}
   void onSendComplete(mesh::Packet*) override;
 };
 @CALLBACK@
@@ -225,12 +227,12 @@ int main() {
                     f'mesh::powerdiag::Mask {name}::pendingWorkReason() const')
                 # Include pending intent during hardware-failure backoff too:
                 # nRF52's event-driven sleep has no guaranteed timer wake.
-                self.assertIn('_cli.hasPendingTxPower()', pending)
-                self.assertLess(pending.index('_cli.hasPendingTxPower()'),
+                self.assertIn('_cli.hasPendingRadioSettings()', pending)
+                self.assertLess(pending.index('_cli.hasPendingRadioSettings()'),
                                 pending.index('radio_apply_backoff')
                                 if 'radio_apply_backoff' in pending else len(pending))
                 recovery = extract_braced(header, 'bool canRecoverUsbLogging() const')
-                self.assertIn('!_cli.hasPendingTxPower()', recovery)
+                self.assertIn('!_cli.hasPendingRadioSettings()', recovery)
                 self.assertIn('_cli.loop();', extract_braced(source, f'void {name}::loop('))
 
 

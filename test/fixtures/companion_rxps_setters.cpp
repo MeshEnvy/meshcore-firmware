@@ -10,6 +10,7 @@
 #include <helpers/CompanionHardwareCommandCompat.h>
 #include <helpers/radiolib/RXPowerSaving.h>
 
+namespace mesh {enum class RadioParamApplyResult {APPLIED,BUSY,FAILED};}
 struct Prefs {
   uint8_t rx_powersaving_enabled = 0, rx_ps_level = 8, rx_ps_preamble = 16, sf = 7;
   uint32_t rx_ps_rx_us = 3000, rx_ps_sleep_us = 4000;
@@ -26,6 +27,9 @@ struct Driver {
   unsigned calls = 0;
   uint32_t rx = 3000, sleep = 4000;
   std::deque<bool> results;
+  mesh::RadioParamApplyResult trySetRxPowerSaving(bool enable,uint32_t rx,uint32_t sleep) {
+    return setRxPowerSaving(enable,rx,sleep)?mesh::RadioParamApplyResult::APPLIED:mesh::RadioParamApplyResult::FAILED;
+  }
   bool supportsRxPowerSaving() const { return supported; }
   bool setRxPowerSaving(bool enable, uint32_t receive, uint32_t rest) {
     ++calls;
@@ -53,6 +57,7 @@ struct MyMesh {
   Serial serial;
   Serial* _serial = &serial;
   bool _radio_available = true, storage_accepts = true, saved_radio_apply_pending = false;
+  bool _primary_radio_blocked=false;
   unsigned saves = 0;
   uint32_t radio_apply_retry_at = 0;
   uint8_t radio_apply_failures = 0;
@@ -60,6 +65,7 @@ struct MyMesh {
   char reply_buf[160] = {};
   MyMesh() { radio_driver = Driver(); }
   bool savePrefs() { ++saves; if (!storage_accepts) return false; durable = _prefs; return true; }
+  void queueSavedRadioApply();
   bool applyAndSaveRxPowerSaving(const char*, char*);
   bool handleLocalControlCommand(const char*, char*, size_t);
   bool handleCommand(const char*, uint32_t, char*);

@@ -59,6 +59,11 @@ public:
    */
   virtual bool setRxBoostedGainMode(bool) { return false; }
   virtual bool supportsRxBoostedGainMode() const { return false; }
+  mesh::RadioParamApplyResult trySetRxBoostedGainMode(bool) { return mesh::RadioParamApplyResult::FAILED; }
+  mesh::RadioParamApplyResult trySetRxPowerSaving(bool enabled, uint32_t, uint32_t) {
+    return enabled ? mesh::RadioParamApplyResult::FAILED : mesh::RadioParamApplyResult::APPLIED;
+  }
+  mesh::RadioParamApplyResult trySetRxPowerSavingRfRxDisabled(bool) { return mesh::RadioParamApplyResult::FAILED; }
   virtual bool getRxBoostedGainMode() const { return false; }
 
   // ESP-NOW has no LoRa RX power-saving watchdog or noise-floor calibration.

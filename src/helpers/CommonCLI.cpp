@@ -174,6 +174,7 @@ void CommonCLI::loop() {
 #endif
   if (!mesh::morseTimingActive(_callbacks->getProfileRadio())) {
     servicePendingTxPower();
+    servicePendingRxSettings();
     _radio_profiles.loop();
     loopManagement();
 #if MESH_ENABLE_TX_BEACONS
@@ -245,6 +246,77 @@ void CommonCLI::applyAndSaveTxPower(int8_t power, char* reply) {
     if (restored == Result::FAILED && !_tx_power_retry_at) _tx_power_retry_at = 1;
   }
   mesh::cli::formatError(reply, 160, "TX save unconfirmed; reboot may differ");
+}
+
+mesh::RadioParamApplyResult CommonCLI::applyRxSetting(uint8_t setting) {
+  using Result = mesh::RadioParamApplyResult;
+  const mesh::Radio* radio = _callbacks->getProfileRadio();
+  if (mesh::morseTimingActive(radio) || (radio && radio->isCarrierWaveActive())) return Result::BUSY;
+  switch (setting) {
+    case RxGain:
+      return _callbacks->trySetRxBoostedGain(_prefs->rx_boosted_gain != 0);
+    case RxPowerSaving:
+      return _callbacks->trySetRxPowerSaving(_prefs->rx_powersaving_enabled != 0,
+          _prefs->rx_ps_rx_us, _prefs->rx_ps_sleep_us);
+#if defined(USE_LR2021)
+    case RxSideDetectors: {
+      uint8_t count = 0;
+      if (!mesh::lr2021::storedSideDetectorCount(_prefs->extra_sf, count)) return Result::FAILED;
+      return _callbacks->tryConfigSideDetectors(_prefs->extra_sf, count, _prefs->bw);
+    }
+#endif
+    case RxRfRx:
+      return _callbacks->trySetRxPowerSavingRfRxDisabled(
+          (_rx_settings_pending & RxRfRxDisabled) != 0);
+    default: return Result::FAILED;
+  }
+}
+
+void CommonCLI::servicePendingRxSettings() {
+  if (!(_rx_settings_pending & RxPendingMask) || (_rx_settings_retry_at
+      && static_cast<int32_t>(millis() - _rx_settings_retry_at) < 0)) return;
+  bool failed = false;
+  for (uint8_t setting = RxGain; setting <= RxRfRx; setting <<= 1) {
+    if (!(_rx_settings_pending & setting)) continue;
+    const auto result = applyRxSetting(setting);
+    if (result == mesh::RadioParamApplyResult::APPLIED) _rx_settings_pending &= ~setting;
+    failed |= result == mesh::RadioParamApplyResult::FAILED;
+  }
+  _rx_settings_retry_at = failed ? millis() + 1000 : 0;
+  if (failed && !_rx_settings_retry_at) _rx_settings_retry_at = 1;
+}
+
+bool CommonCLI::saveRxSetting(uint8_t setting, mesh::RadioParamApplyResult result, char* reply) {
+  using Result = mesh::RadioParamApplyResult;
+  if (result == Result::FAILED) {
+    mesh::cli::formatError(reply, 160, "RX setting rejected");
+    return false;
+  }
+  if (!trySavePrefs()) {
+    mesh::cli::formatError(reply, 160, "RX save unconfirmed; reboot may differ");
+    return false;
+  }
+  _rx_settings_pending &= ~setting;
+  if (result == Result::BUSY) _rx_settings_pending |= setting;
+  _rx_settings_retry_at = 0;
+  strcpy(reply, result == Result::BUSY ? "OK - saved; pending" : "OK");
+  return true;
+}
+
+void CommonCLI::restoreRxSetting(uint8_t setting, mesh::RadioParamApplyResult result,
+                                  uint8_t previous_pending, uint32_t previous_retry_at) {
+  _rx_settings_pending = previous_pending;
+  _rx_settings_retry_at = previous_retry_at;
+  if (result == mesh::RadioParamApplyResult::BUSY) return;
+  // Hardware errors can be partial writes. Repair only from the old accepted
+  // target, including when the rejected request never reached persistence.
+  const auto restored = applyRxSetting(setting);
+  _rx_settings_pending &= ~setting;
+  if (restored != mesh::RadioParamApplyResult::APPLIED) _rx_settings_pending |= setting;
+  _rx_settings_retry_at = restored == mesh::RadioParamApplyResult::FAILED ? millis() + 1000
+      : restored == mesh::RadioParamApplyResult::BUSY ? 0 : previous_retry_at;
+  if (restored == mesh::RadioParamApplyResult::FAILED && !_rx_settings_retry_at)
+    _rx_settings_retry_at = 1;
 }
 
 // Old fork firmware persisted the (since removed) NodePrefs MQTT fields to /com_prefs
@@ -3577,7 +3649,8 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
 #if defined(WITH_MQTT_BRIDGE) && defined(LIGHTWEIGHT_WIFI_OTA)
       else {
         // Keep WiFi up, but release MQTT/TLS heap while the browser uploader runs.
-        const bool mqtt_paused = _callbacks->isMqttBridgeRunning();
+        const bool mqtt_paused = _callbacks->isMqttBridgeRunning()
+            || _callbacks->isMqttBridgeStartPending();
         _wifi_ota_resume_mqtt = _wifi_ota_resume_mqtt || mqtt_paused;
         if (mqtt_paused) _callbacks->setMqttBridgeState(false);
       }
@@ -4296,10 +4369,6 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       mesh::cli::formatError(reply, 160, "usage set logging.output off|usb|wifi|both");
       return;
     }
-    if (wifi_enabled && _callbacks->isMqttBridgeStopping()) {
-      mesh::cli::formatError(reply, 160, "MQTT is stopping; retry when mqtt.stopping is off");
-      return;
-    }
     const uint8_t previous_usb = _prefs->usb_logging_enabled;
     const uint8_t previous_bridge = _prefs->bridge_enabled;
     _prefs->usb_logging_enabled = usb_enabled ? 1 : 0;
@@ -4372,10 +4441,6 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       mesh::cli::formatError(reply, 160, "use set mqtt.enabled on|off");
     } else {
       const bool enable = strcmp(value, "on") == 0;
-      if (enable && _callbacks->isMqttBridgeStopping()) {
-        mesh::cli::formatError(reply, 160, "MQTT is stopping; retry when mqtt.stopping is off");
-        return;
-      }
       const uint8_t previous = _prefs->bridge_enabled;
       _prefs->bridge_enabled = enable ? 1 : 0;
       // A cooperative stop cannot be cancelled safely once signalled. Save
@@ -4712,13 +4777,23 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       strcpy(reply, "Error, must be on or off");
     }
   } else if (memcmp(config, "radio.rxgain ", 13) == 0) {
-    bool enabled = memcmp(&config[13], "on", 2) == 0;
-    if (_callbacks->setRxBoostedGain(enabled)) {
-      _prefs->rx_boosted_gain = enabled;
-      savePrefs();
-      strcpy(reply, "OK");
-    } else {
+    const char* value = &config[13];
+    if (strcmp(value, "on") != 0 && strcmp(value, "off") != 0) {
+      mesh::cli::formatError(reply, 160, "state must be on or off");
+      return;
+    }
+    if (!_callbacks->supportsRxBoostedGain()) {
       mesh::cli::formatError(reply, 160, "unsupported");
+      return;
+    }
+    const uint8_t previous = _prefs->rx_boosted_gain;
+    const uint8_t previous_pending = _rx_settings_pending;
+    const uint32_t previous_retry_at = _rx_settings_retry_at;
+    _prefs->rx_boosted_gain = strcmp(value, "on") == 0;
+    const auto result = applyRxSetting(RxGain);
+    if (!saveRxSetting(RxGain, result, reply)) {
+      _prefs->rx_boosted_gain = previous;
+      restoreRxSetting(RxGain, result, previous_pending, previous_retry_at);
     }
   } else if (memcmp(config, "radio.fem.rxgain ", 17) == 0) {
     const auto* radio = _callbacks->getProfileRadio();
@@ -4790,10 +4865,30 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       return;
     }
 
-    if (!_callbacks->setRxPowerSavingRfRxDisabled(disabled)) {
+    if (!_callbacks->supportsRxPowerSavingRfRxDisable()) {
       mesh::cli::formatError(reply, 160, "unsupported");
+      return;
+    }
+    // With no outstanding target, snapshot the actual runtime setting. Its
+    // accepted desired value shares the high bit of the pending mask.
+    if (!(_rx_settings_pending & RxRfRx)) {
+      _rx_settings_pending &= ~RxRfRxDisabled;
+      if (_callbacks->isRxPowerSavingRfRxDisabled()) _rx_settings_pending |= RxRfRxDisabled;
+    }
+    const uint8_t previous_pending = _rx_settings_pending;
+    const uint32_t previous_retry_at = _rx_settings_retry_at;
+    _rx_settings_pending &= ~RxRfRxDisabled;
+    if (disabled) _rx_settings_pending |= RxRfRxDisabled;
+    const auto result = applyRxSetting(RxRfRx);
+    if (result == mesh::RadioParamApplyResult::FAILED) {
+      restoreRxSetting(RxRfRx, result, previous_pending, previous_retry_at);
+      mesh::cli::formatError(reply, 160, "RX setting rejected");
     } else {
-      sprintf(reply, "OK - radio.rxps.rfrx_disabled %s", disabled ? "on" : "off");
+      _rx_settings_pending &= ~RxRfRx;
+      if (result == mesh::RadioParamApplyResult::BUSY) _rx_settings_pending |= RxRfRx;
+      _rx_settings_retry_at = 0;
+      sprintf(reply, "OK - radio.rxps.rfrx_disabled %s%s", disabled ? "on" : "off",
+              result == mesh::RadioParamApplyResult::BUSY ? "; pending" : "");
     }
   } else if (memcmp(config, "radio.rxps ", 11) == 0) { // RX PowerSaving
     const char* value = &config[11];
@@ -4806,9 +4901,7 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     bool preamble_overridden = false;
     bool manual_timings_requested = false;
 
-    ensureRxPowerSavingDefaults(&_prefs->rx_ps_rx_us, &_prefs->rx_ps_sleep_us);
-    rx_us = _prefs->rx_ps_rx_us;
-    sleep_us = _prefs->rx_ps_sleep_us;
+    ensureRxPowerSavingDefaults(&rx_us, &sleep_us);
 
     mesh::cli::RxPowerSavingArguments parsed = {};
     if (!mesh::cli::parseRxPowerSavingArgumentsStrict(value, parsed)) {
@@ -4816,14 +4909,10 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       return;
     }
     using mesh::cli::RxPowerSavingArgumentMode;
-#ifdef WRAPPER_CLASS
-    if (!WRAPPER_CLASS::SupportsRxPowerSaving) {
-      if (parsed.mode != RxPowerSavingArgumentMode::Off) {
-        strcpy(reply, "ERROR: RX powersaving unsupported");
-        return;
-      }
+    if (!_callbacks->supportsRxPowerSaving() && parsed.mode != RxPowerSavingArgumentMode::Off) {
+      strcpy(reply, "ERROR: RX powersaving unsupported");
+      return;
     }
-#endif
     if (parsed.mode == RxPowerSavingArgumentMode::Off) {
       enable = 0;
     } else if (parsed.mode == RxPowerSavingArgumentMode::Manual) {
@@ -4879,11 +4968,11 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       return;
     }
 
-    if (!_callbacks->setRxPowerSaving(enable, rx_us, sleep_us)) {
-      strcpy(reply, "ERROR: RX powersaving unsupported");
-      return;
-    }
-
+    const RxPowerSavingConfig previous(_prefs->rx_powersaving_enabled,
+        _prefs->rx_ps_rx_us, _prefs->rx_ps_sleep_us,
+        _prefs->rx_ps_level, _prefs->rx_ps_preamble);
+    const uint8_t previous_pending = _rx_settings_pending;
+    const uint32_t previous_retry_at = _rx_settings_retry_at;
     _prefs->rx_powersaving_enabled = enable;
     _prefs->rx_ps_rx_us = rx_us;
     _prefs->rx_ps_sleep_us = sleep_us;
@@ -4897,7 +4986,16 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       _prefs->rx_ps_level = 0;
       _prefs->rx_ps_preamble = 0;
     }
-    savePrefs();
+    const auto result = applyRxSetting(RxPowerSaving);
+    if (!saveRxSetting(RxPowerSaving, result, reply)) {
+      _prefs->rx_powersaving_enabled = previous.enabled;
+      _prefs->rx_ps_rx_us = previous.rx_us;
+      _prefs->rx_ps_sleep_us = previous.sleep_us;
+      _prefs->rx_ps_level = previous.level;
+      _prefs->rx_ps_preamble = previous.preamble;
+      restoreRxSetting(RxPowerSaving, result, previous_pending, previous_retry_at);
+      return;
+    }
     if (level_requested) {
       sprintf(reply, "OK - level %lu,%s,%lu,%lu,preamble=%lu",
               (unsigned long)level,
@@ -4910,6 +5008,10 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     } else {
       sprintf(reply, "OK - %s,%lu,%lu", enable ? "on" : "off",
               (unsigned long)rx_us, (unsigned long)sleep_us);
+    }
+    if (result == mesh::RadioParamApplyResult::BUSY) {
+      const size_t used = strlen(reply);
+      if (used < 160) snprintf(reply + used, 160 - used, "; saved; pending");
     }
   } else if (strcmp(config, "powersaving on") == 0
              || strcmp(config, "powersaving off") == 0) {
@@ -5679,21 +5781,34 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     }
   } else if (strcmp(config, "extra.sf") == 0 || memcmp(config, "extra.sf ", 9) == 0) {
 #if defined(USE_LR2021)
+    const auto* radio = _callbacks->getProfileRadio();
+    const auto* profiles = radio ? radio->profiles() : nullptr;
+    if (profiles && profiles->enabled()) {
+      mesh::cli::formatError(reply, 160, "extra SFs unavailable with dual radio");
+      return;
+    }
     uint8_t sideDetSFs[mesh::lr2021::STORED_SIDE_DETECTOR_BYTES] = {};
     uint8_t num = 0;
     const char* value = config[8] == '\0' ? "" : &config[9];
     if (strcmp(value, "none") == 0 || strcmp(value, "off") == 0) value = "";
     if (!mesh::lr2021::parseSideDetectorSFList(value, sideDetSFs, num)
         || !mesh::lr2021::validateSideDetectorSFs(
-            sideDetSFs, num, _prefs->sf, _prefs->bw)) {
+            sideDetSFs, num, _prefs->sf, _prefs->bw)
+        || (profiles && !mesh::lr2021::validateSideDetectorSFs(
+            sideDetSFs, num, profiles->primary.sf, profiles->primary.bw))) {
       strcpy(reply, "Invalid extra SF config");
     } else {
-      if (_callbacks->configSideDetectors(sideDetSFs, num, _prefs->bw)) {
-        memcpy(_prefs->extra_sf, sideDetSFs, sizeof(_prefs->extra_sf));
-        savePrefs();
+      uint8_t previous[sizeof(_prefs->extra_sf)];
+      memcpy(previous, _prefs->extra_sf, sizeof(previous));
+      const uint8_t previous_pending = _rx_settings_pending;
+      const uint32_t previous_retry_at = _rx_settings_retry_at;
+      memcpy(_prefs->extra_sf, sideDetSFs, sizeof(_prefs->extra_sf));
+      const auto result = applyRxSetting(RxSideDetectors);
+      if (!saveRxSetting(RxSideDetectors, result, reply)) {
+        memcpy(_prefs->extra_sf, previous, sizeof(previous));
+        restoreRxSetting(RxSideDetectors, result, previous_pending, previous_retry_at);
+      } else if (result == mesh::RadioParamApplyResult::APPLIED) {
         strcpy(reply, num == 0 ? "OK - extra SFs cleared" : "OK - extra SFs set");
-      } else {
-        strcpy(reply, "Invalid extra SF config");
       }
     }
 #else

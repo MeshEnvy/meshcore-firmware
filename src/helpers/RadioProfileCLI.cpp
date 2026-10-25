@@ -369,7 +369,7 @@ __attribute__((noinline)) bool RadioProfileCLI::handleFastSettings(const char* k
   if (hasReplyMutation() || fast_hold_) {
     cli::formatError(reply, capacity, "radio settings held; retry after recovery"); return true;
   }
-  RadioSwitchTuning next = current;
+  RadioSwitchTuning next = fast_pending_ ? fast_saved_ : current;
   if (spi) {
     // Single-digit selections remain strict; 9 labels the 8888888 Hz clock.
     if (!args[1] && strchr("02489", args[0])) next.spi_mhz = args[0] - '0';
@@ -389,8 +389,11 @@ __attribute__((noinline)) bool RadioProfileCLI::handleFastSettings(const char* k
   }
   const auto result = radio_->trySetSwitchTuning(next, commitFastSettings, this);
   if (result == RadioParamApplyResult::APPLIED) snprintf(reply, capacity, "OK - %s=%s (saved)", key, args);
-  else cli::formatError(reply, capacity, result == RadioParamApplyResult::BUSY
-      ? "radio busy; retry" : "radio tuning could not be applied/saved");
+  else if (result == RadioParamApplyResult::BUSY && saveFastSettings(next)) {
+    fast_pending_ = true;
+    fast_retry_ms_ = 0;
+    snprintf(reply, capacity, "OK - saved; pending");
+  } else cli::formatError(reply, capacity, "radio tuning could not be applied/saved");
   return true;
 }
 #endif
@@ -474,11 +477,22 @@ void RadioProfileCLI::begin(FILESYSTEM* fs, Radio* radio, RTCClock* rtc, bool in
 bool RadioProfileCLI::savePrimaryPreamble(uint16_t symbols) {
   if (symbols && (symbols < 8 || symbols > RadioProfiles::MaxPreamble)) return false;
   if (!radio_ || !radio_->profiles()) return symbols == 0;
-  if (symbols == primary_preamble_) return true;
+  if (symbols == primary_preamble_ && !primary_preamble_dirty_) return true;
   if (hasReplyMutation()) return false;
   if (!save(saved_, symbols, cross_)) return false;
   primary_preamble_ = symbols;
+  primary_preamble_dirty_ = false;
+  primary_preamble_retry_ms_ = 0;
   return true;
+}
+
+bool RadioProfileCLI::restorePrimaryPreamble(uint16_t symbols) {
+  if (symbols && (symbols < 8 || symbols > RadioProfiles::MaxPreamble)) return false;
+  if (savePrimaryPreamble(symbols)) return true;
+  primary_preamble_ = symbols;
+  primary_preamble_dirty_ = true;
+  primary_preamble_retry_ms_ = 0;
+  return false;
 }
 
 bool RadioProfileCLI::acceptsPrimary(float freq, float bw, uint8_t sf, uint8_t cr, uint16_t preamble) const {
@@ -761,16 +775,29 @@ bool RadioProfileCLI::applyReplyMutation() {
   return true;
 }
 
-void RadioProfileCLI::loop() {
-  const uint32_t now = millis();
+void RadioProfileCLI::servicePendingTuning() {
+  if (primary_preamble_dirty_ && (!primary_preamble_retry_ms_
+      || (int32_t)(millis() - primary_preamble_retry_ms_) >= 0)
+      && !savePrimaryPreamble(primary_preamble_)) {
+    primary_preamble_retry_ms_ = millis() + 1000;
+    if (!primary_preamble_retry_ms_) primary_preamble_retry_ms_ = 1;
+  }
 #if MESH_RADIO_SWITCH_TUNING
-  if (fast_pending_ && radio_ && (int32_t)(now - fast_retry_ms_) >= 0) {
+  const uint32_t now = millis();
+  if (fast_pending_ && radio_ && (!fast_retry_ms_ || (int32_t)(now - fast_retry_ms_) >= 0)) {
     // A saved setting may fail RX verification as well as be temporarily busy.
     // Avoid repeatedly applying and rolling it back at the main-loop rate.
-    fast_pending_ = radio_->trySetSwitchTuning(fast_saved_) != RadioParamApplyResult::APPLIED;
-    fast_retry_ms_ = now + 1000;
+    const auto result = radio_->trySetSwitchTuning(fast_saved_);
+    fast_pending_ = result != RadioParamApplyResult::APPLIED;
+    fast_retry_ms_ = result == RadioParamApplyResult::FAILED ? now + 1000 : 0;
+    if (result == RadioParamApplyResult::FAILED && !fast_retry_ms_) fast_retry_ms_ = 1;
   }
 #endif
+}
+
+void RadioProfileCLI::loop() {
+  const uint32_t now = millis();
+  servicePendingTuning();
   if (!radio_ || !radio_->profiles()) return;
   const uint32_t elapsed = now - last_ms_;
   last_ms_ = now;

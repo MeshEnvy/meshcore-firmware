@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 HARNESS = r'''
 #include <helpers/RadioProfileCLI.h>
+#include <helpers/TempRadioReplyBarrier.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/radiolib/RXPowerSaving.h>
 #include <helpers/esp32/PowerTestControls.h>
@@ -78,6 +79,21 @@ template<typename... Args> bool handleMorseCommand(Args&&...) { return false; }
 }
 @COMMAND_FILTER@
 struct MyMesh : CompanionFleetFixture {
+  mesh::TempRadioReplyBarrier _primary_radio_reply;
+  bool _primary_radio_blocked=false,_primary_radio_reply_admission=false;
+
+  enum class RadioSettingResult {Saved,RadioRejected,SaveFailed,SaveUnconfirmed};
+  bool _radio_available=true,saved_radio_apply_pending=false;
+  uint32_t radio_apply_retry_at=0;
+  uint8_t radio_apply_failures=0;
+  void queueSavedRadioApply();
+  RadioSettingResult applyAndSaveRadioParams(float,float,uint8_t,uint8_t,uint8_t,uint16_t,bool=false);
+  bool isValidClientRepeatFreq(uint32_t) const {return true;}
+  mesh::RadioParamApplyResult tryApplyRadioParams(float f,float bw,uint8_t sf,uint8_t cr) {
+    radio.p.primary.freq=f;radio.p.primary.bw=bw;radio.p.primary.sf=sf;radio.p.primary.cr=cr;
+    return mesh::RadioParamApplyResult::APPLIED;
+  }
+  bool applySavedRadioParams() {return tryApplyRadioParams(_prefs.freq,_prefs.bw,_prefs.sf,_prefs.cr)==mesh::RadioParamApplyResult::APPLIED;}
   struct NoMorseReply {} _morse_reply;
   uint8_t self_id = 0; // Signing is unreachable in this radio-only fixture.
   CompanionNodePrefs _prefs;
@@ -274,7 +290,8 @@ def production_primary_radio_harness():
     replacements = {
         '@SAVE_PREFS@': extract_braced(header, 'bool savePrefs()'),
         '@COMMAND_FILTER@': extract_braced(companion, 'static bool isCompanionRadioPrefsCommand('),
-        '@DISPATCH@': dispatch,
+        '@DISPATCH@': extract_braced(companion, 'void MyMesh::queueSavedRadioApply(') + '\n'
+            + extract_braced(companion, 'MyMesh::RadioSettingResult MyMesh::applyAndSaveRadioParams(') + '\n' + dispatch,
         '@COMPANION_SANITIZE@': boot_checks(companion, '_prefs.airtime_factor'),
         '@INFRA_SANITIZE@': boot_checks(infra, '_prefs->airtime_factor'),
         '@INFRA_SETTER@': extract_braced(infra, 'if (memcmp(config, "dutycycle ", 10) == 0)'),

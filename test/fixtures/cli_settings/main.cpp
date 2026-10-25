@@ -10,7 +10,11 @@
 // This fixture isolates the actual CommonCLI setting branches and callbacks.
 namespace mesh {
 enum class RadioParamApplyResult : uint8_t { APPLIED, BUSY, FAILED };
-struct Radio { bool isCarrierWaveActive() const { return false; } };
+struct Radio {
+  bool isCarrierWaveActive() const { return false; }
+  const RadioProfiles* profiles() const { return nullptr; }
+};
+inline bool morseTimingActive(const Radio*) { return false; }
 struct RadioProfileCLI {
   static bool parseSuffix(const char* input, unsigned fields, char* legacy,
                           size_t size, uint16_t& preamble) {
@@ -52,7 +56,7 @@ struct Prefs {
   uint8_t path_hash_mode=0, multi_acks=0, rx_ps_level=0, rx_ps_preamble=0;
   int8_t tx_power_dbm=10;
   uint32_t rx_ps_rx_us=1000, rx_ps_sleep_us=1000;
-  bool cad_enabled=false, rx_boosted_gain=false;
+  bool cad_enabled=false, rx_boosted_gain=false, rx_powersaving_enabled=false;
   uint8_t extra_sf[4]={};
   uint8_t flood_max=16, flood_max_advert=16, flood_max_unscoped=16;
 };
@@ -70,7 +74,20 @@ struct Callbacks {
   bool isTxPowerApplied(int8_t value) const { return power == value; }
   const mesh::Radio* getProfileRadio() const { return nullptr; }
   bool setRxBoostedGain(bool value) { ++gain_calls; if (!accept) return false; gain=value; return true; }
+  bool supportsRxBoostedGain() const { return true; }
+  mesh::RadioParamApplyResult trySetRxBoostedGain(bool value) {
+    return setRxBoostedGain(value) ? mesh::RadioParamApplyResult::APPLIED : mesh::RadioParamApplyResult::FAILED;
+  }
+  mesh::RadioParamApplyResult trySetRxPowerSaving(bool, uint32_t, uint32_t) {
+    return mesh::RadioParamApplyResult::FAILED;
+  }
+  mesh::RadioParamApplyResult trySetRxPowerSavingRfRxDisabled(bool) {
+    return mesh::RadioParamApplyResult::FAILED;
+  }
   bool configSideDetectors(const uint8_t*,uint8_t,float) { return accept; }
+  mesh::RadioParamApplyResult tryConfigSideDetectors(const uint8_t* sfs,uint8_t count,float bw) {
+    return configSideDetectors(sfs,count,bw) ? mesh::RadioParamApplyResult::APPLIED : mesh::RadioParamApplyResult::FAILED;
+  }
 };
 struct Board { unsigned n_cad_busy=0; };
 bool isValidLoRaBandwidth(float bw) { return bw==125 || bw==62.5f; }
@@ -89,10 +106,17 @@ public:
   Board* _board=&board;
   bool _tx_power_pending=false;
   uint32_t _tx_power_retry_at=0;
+  enum RxSetting : uint8_t { RxGain=1, RxPowerSaving=2, RxSideDetectors=4, RxRfRx=8,
+                            RxPendingMask=15, RxRfRxDisabled=128 };
+  uint8_t _rx_settings_pending=0;
+  uint32_t _rx_settings_retry_at=0;
   void savePrefs() { callbacks.savePrefs(); }
   bool trySavePrefs() { savePrefs(); return true; }
   void applyAndSaveTxPower(int8_t power, char* reply);
   void servicePendingTxPower();
+  mesh::RadioParamApplyResult applyRxSetting(uint8_t);
+  bool saveRxSetting(uint8_t, mesh::RadioParamApplyResult, char*);
+  void restoreRxSetting(uint8_t, mesh::RadioParamApplyResult, uint8_t, uint32_t);
   bool savePrimaryRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, uint16_t) {
     prefs.freq=freq; prefs.bw=bw; prefs.sf=sf; prefs.cr=cr;
     prefs.tx_power_dbm=mesh::clampLoRaTxPower(prefs.tx_power_dbm,freq);
@@ -119,6 +143,7 @@ public:
 };
 
 @TX_METHODS@
+@RX_METHODS@
 
 struct Case { const char *key, *value; double expected; };
 int main() {

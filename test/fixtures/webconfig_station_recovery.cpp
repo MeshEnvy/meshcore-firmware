@@ -6,6 +6,7 @@
 #include <string>
 #include <helpers/RoomWebMailbox.h>
 #include <helpers/WiFiReconnectPolicy.h>
+#include <helpers/WebConfigBatch.h>
 #include <helpers/WiFiNetworkPowerPolicy.h>
 #define MESH_MANAGEMENT_PASSWORD_HOST_TEST
 #include <helpers/esp32/ManagementPassword.h>
@@ -102,7 +103,7 @@ public:
   char _wifi_ssid[32] = {}, _wifi_password[65] = {};
   uint8_t _wifi_power_save = 0;
   Mode _mode = MODE_OFF;
-  bool _stopping = false, _retry_saved_wifi_in_setup = false;
+  bool _stopping = false, _retry_saved_wifi_in_setup = false, _start_retryable = false;
   bool _setup_reconnect_in_progress = false, _board_cmds_probed = false;
   bool _was_setup_ap = false, _initial_setup = false;
   bool foreground = false;

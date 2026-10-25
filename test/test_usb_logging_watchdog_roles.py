@@ -45,9 +45,12 @@ struct SerialInterface {
  bool isPassthroughMode() const{return passthrough;}
 };
 struct RoleMesh {
+ int8_t rf_rx_disable_pending=-1;
+ struct {bool pending=false;bool hasPendingTuning() const{return pending;}} _radio_profiles;
  struct {
    bool pending=false;
    bool hasPendingTxPower() const{return pending;}
+   bool hasPendingRadioSettings() const{return pending;}
  } _cli;
  uint32_t dirty_contacts_expiry=0, _ota_update_at=0, set_radio_at=0,
      _scheduled_reboot_at=0;
@@ -199,10 +202,12 @@ class UsbLoggingWatchdogRoleTests(unittest.TestCase):
         callback = method((directory / 'main.cpp').read_text(),
                           'static bool usbLoggingRecoverySafe(void*)')
         role_checks = r'''
-   the_mesh.command_radio_apply_pending=true;assert(!usbLoggingRecoverySafe(nullptr));
-   the_mesh.command_radio_apply_pending=false;
    the_mesh.tx_power_apply_pending=true;assert(!usbLoggingRecoverySafe(nullptr));
    the_mesh.tx_power_apply_pending=false;
+   the_mesh.rf_rx_disable_pending=1;assert(!usbLoggingRecoverySafe(nullptr));
+   the_mesh.rf_rx_disable_pending=-1;
+   the_mesh._radio_profiles.pending=true;assert(!usbLoggingRecoverySafe(nullptr));
+   the_mesh._radio_profiles.pending=false;
    for(auto slot : {&the_mesh._delayed_replies.request, &the_mesh._delayed_replies.trace}){
      slot->phase=mesh::CompanionDelayedReplies::AwaitRadio;
      assert(!usbLoggingRecoverySafe(nullptr));

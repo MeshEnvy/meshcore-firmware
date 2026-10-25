@@ -172,10 +172,11 @@ struct CommonCLI {
   Callbacks callbacks; Callbacks* _callbacks=&callbacks;
   UserGpio _user_gpio;
   struct Profiles { unsigned loops=0; void loop() { ++loops; } } _radio_profiles;
-  unsigned management=0, tx_services=0;
+  unsigned management=0, tx_services=0, rx_services=0;
   void loopBatteryForwarding(bool = false) {}
   void loopManagement() { ++management; }
   void servicePendingTxPower() { ++tx_services; }
+  void servicePendingRxSettings() { ++rx_services; }
   void loop();
 };
 @LOOP@
@@ -187,10 +188,12 @@ int main() {
     const unsigned ordinary=mode==1 || mode==2 ? 0:1;
     assert(cli._radio_profiles.loops==ordinary && cli.management==ordinary);
     assert(cli.tx_services==ordinary);
+    assert(cli.rx_services==ordinary);
     radio_driver.tx=radio_driver.rx=false;
     cli.loop();
     assert(cli._radio_profiles.loops==ordinary+1 && cli.management==ordinary+1);
     assert(cli.tx_services==ordinary+1);
+    assert(cli.rx_services==ordinary+1);
     assert(cli._user_gpio.loops==2 && cli.callbacks.completed==1);
   }
 }

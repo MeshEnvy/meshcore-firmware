@@ -428,6 +428,7 @@ struct MQTTBridge {
   std::atomic<bool> _stop_requested{false}, _stop_acked{false};
   std::atomic<bool> _network_suspended{true};
   bool _initialized = true, resources_owned = true;
+  bool _start_requested = false; uint32_t _start_retry_at = 0;
   bool _slots_setup_done = true, _staged_raw_valid = true;
   bool _ntp_estimate_requested = true, _ntp_estimate_done = true, _ntp_estimate_ok = true;
   uint32_t _ntp_estimate_epoch = 123;
@@ -441,6 +442,7 @@ struct MQTTBridge {
     mesh::wifi::networkPower().setSuspended(true);
   }
   void cancelNtpRefresh() { ++cancels; }
+  void begin() { assert(false); }
   void requestStop();
   void end();
   void finishStopped();

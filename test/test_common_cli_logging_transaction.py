@@ -22,10 +22,11 @@ namespace mesh {
 void setUsbLoggingEnabled(bool value) { live_usb = value; ++usb_calls; }
 }
 struct Callbacks {
-  bool live_wifi = false, apply_ok = true, stopping = false;
+  bool live_wifi = false, apply_ok = true, stopping = false, pending = false;
   unsigned calls = 0;
   bool setMqttBridgeState(bool value) {
     ++calls;
+    if (apply_ok && value && stopping) { pending = true; return true; }
     if (apply_ok) live_wifi = value;
     return apply_ok;
   }
@@ -91,15 +92,17 @@ int main() {
   assert(cli.persisted.usb_logging_enabled && cli.persisted.bridge_enabled);
   assert(live_usb && !cli.callbacks.live_wifi);
   assert(strstr(reply, "saved, but MQTT runtime change failed"));
-  // A restart during cleanup must not save ON or change either live output.
+  // A restart during cleanup saves intent without interrupting the old worker.
   cli.callbacks.stopping = true;
+  cli.callbacks.apply_ok = true;
   cli.prefs = cli.persisted = {0, 0};
   live_usb = false;
   const unsigned before_saves = cli.saves, before_calls = cli.callbacks.calls;
   cli.set("logging.output both", reply);
-  assert(strstr(reply, "MQTT is stopping"));
-  assert(cli.saves == before_saves && cli.callbacks.calls == before_calls);
-  assert(!cli.prefs.bridge_enabled && !cli.persisted.bridge_enabled && !live_usb);
+  assert(strstr(reply, "(saved)"));
+  assert(cli.saves == before_saves + 1 && cli.callbacks.calls == before_calls + 1);
+  assert(cli.prefs.bridge_enabled && cli.persisted.bridge_enabled && live_usb);
+  assert(cli.callbacks.pending && !cli.callbacks.live_wifi);
 #endif
 }
 '''

@@ -26,7 +26,7 @@ template<typename T> T nextResult(std::deque<T>& results,T fallback) {
 }
 struct Prefs {
   float freq=915,bw=250;
-  uint8_t sf=7,cr=5,rx_boosted_gain=0;
+  uint8_t sf=7,cr=5,rx_boosted_gain=0,rx_ps_level=0,rx_ps_preamble=0;
   bool radio_fem_rxgain=false,radio_fem_txgain=false,cad_enabled=false;
   bool rx_powersaving_enabled=false;
   uint32_t rx_ps_rx_us=1000,rx_ps_sleep_us=2000;
@@ -42,9 +42,16 @@ struct Board {
 } board;
 struct Driver {
   bool gain=false,supported=true,hardware_present=true;
+  bool rxps_supported=false,rxps_enabled=false;
   int power=0;
   unsigned gain_calls=0,power_calls=0;
   std::deque<bool> gain_results,power_results;
+  Apply trySetRxBoostedGainMode(bool enabled){return setRxBoostedGainMode(enabled)?Apply::APPLIED:Apply::FAILED;}
+  Apply trySetTxPower(int8_t power){return setTxPower(power)?Apply::APPLIED:Apply::FAILED;}
+  Apply trySetRxPowerSaving(bool enabled,uint32_t,uint32_t){
+    assert(hardware_present);rxps_enabled=enabled;return Apply::APPLIED;
+  }
+  Apply trySetRxPowerSavingRfRxDisabled(bool){return Apply::APPLIED;}
   bool supportsRxBoostedGainMode(){return supported;}
   bool setRxBoostedGainMode(bool value){
     assert(hardware_present);
@@ -61,18 +68,26 @@ struct Driver {
     if(ok)power=value;
     return ok;
   }
-  bool supportsRxPowerSaving(){return false;}
+  bool supportsRxPowerSaving(){return rxps_supported;}
   bool setRxPowerSaving(bool,uint32_t,uint32_t){assert(hardware_present);return true;}
   void setCADScanTimeoutMillis(int){}
 } radio_driver;
+bool recalcRxPowerSavingFromLevel(uint8_t,uint8_t,float,uint8_t,uint32_t*,uint32_t*) {return true;}
 struct Radio {
+  struct {struct {uint8_t sf=7;float bw=250;} primary;} p;
+  auto* profiles() {return &p;}
+  bool isCarrierWaveActive() const{return false;}
+  bool isMorseTxActive() const{return false;}
+  bool isMorseRxActive() const{return false;}
   void setCADEnabled(bool){}
   void recalibrateNoiseFloor(){}
 } radio;
 struct Clock { uint32_t getMillis(){return now_ms;} } clock_source;
 @RETRY_DELAY@
 struct MyMesh {
+  int8_t rf_rx_disable_pending=-1;uint32_t rf_rx_retry_at=0;
   Prefs _prefs;
+  bool _primary_radio_blocked=false;
   Radio* _radio=&radio;
   Clock* _ms=&clock_source;
   bool _radio_available=true,saved_radio_apply_pending=false;
@@ -97,13 +112,17 @@ struct MyMesh {
     return result;
   }
   bool savePrefs(){++saves;return false;}
+  struct {void servicePendingTuning(){}} _radio_profiles;
+  void servicePendingTxPower(){}
+  void queueSavedRadioApply();
+  void servicePendingLocalRadioSettings();
   void configureRadioFromPrefs();
   bool applySavedRadioParams();
   bool applyAndSaveRxBoostedGain(bool);
 #if COMPANION_FEATURE_TEMP_RADIO
   void serviceTempRadio();
 #endif
-  void recover(){@RECOVERY@}
+  void recover(){servicePendingLocalRadioSettings();}
 };
 @METHODS@
 
@@ -168,6 +187,20 @@ static void checkStartupAndRetry(){
     m.saved_radio_apply_pending=true;m.recover();
     assert(!m.saved_radio_apply_pending && !radio_driver.gain_calls);
   }
+  {
+    // Accepting RXPS off while unavailable must survive both configuration
+    // passes. A tuple with no RXPS timings does not disable the cached mode.
+    MyMesh m;m.saved_radio_apply_pending=true;m._radio_available=false;
+    radio_driver.hardware_present=false;
+    radio_driver.rxps_supported=true;radio_driver.rxps_enabled=true;
+    m.configureRadioFromPrefs();
+    assert(m.saved_radio_apply_pending && radio_driver.rxps_enabled);
+    m._radio_available=true;radio_driver.hardware_present=true;
+    m.configureRadioFromPrefs();
+    assert(m.saved_radio_apply_pending && radio_driver.rxps_enabled);
+    m.recover();
+    assert(!m.saved_radio_apply_pending && !radio_driver.rxps_enabled && !m.saves);
+  }
 }
 
 #if COMPANION_FEATURE_TEMP_RADIO
@@ -211,6 +244,8 @@ static void checkTempRadioRestoration(){
     assert(radio_driver.gain==bool(m._prefs.rx_boosted_gain));
     assert(!m._temp_radio_applied && !m._temp_radio_revert_at);
     assert(!m._temp_radio_retry_at && !m._temp_radio_failures);
+    assert(m.saved_radio_apply_pending==rollback_pending);
+    m.recover();
     assert(!m.saved_radio_apply_pending && m.live_freq==m._prefs.freq);
     assert(m.saves==unsigned(rollback_pending)); // Restoring never saves settings.
   }
@@ -218,8 +253,21 @@ static void checkTempRadioRestoration(){
     MyMesh m;m._temp_radio_applied=true;m._temp_radio_revert_at=now_ms;
     m.saved_radio_apply_pending=true;radio_driver.supported=false;
     radio_driver.gain_results={false};m.serviceTempRadio();
-    assert(!m._temp_radio_revert_at && !m.saved_radio_apply_pending);
+    assert(!m._temp_radio_revert_at && m.saved_radio_apply_pending);
+    m.recover();assert(!m.saved_radio_apply_pending);
     assert(!radio_driver.gain_calls);
+  }
+  {
+    // A pending RXPS-off setting is not fulfilled by restoring only the
+    // TempRadio tuple, power and gain. The durable service still owns it.
+    MyMesh m;m._temp_radio_applied=true;m._temp_radio_revert_at=now_ms;
+    m.saved_radio_apply_pending=true;
+    radio_driver.rxps_supported=true;radio_driver.rxps_enabled=true;
+    m.serviceTempRadio();
+    assert(!m._temp_radio_applied && m.saved_radio_apply_pending);
+    assert(radio_driver.rxps_enabled);
+    m.recover();
+    assert(!m.saved_radio_apply_pending && !radio_driver.rxps_enabled && !m.saves);
   }
   {
     MyMesh m;m._temp_radio_applied=true;m._temp_radio_revert_at=now_ms;
@@ -247,6 +295,8 @@ class CompanionRadioGainRestoreTests(unittest.TestCase):
             'void MyMesh::configureRadioFromPrefs(',
             'bool MyMesh::applySavedRadioParams(',
             'bool MyMesh::applyAndSaveRxBoostedGain(',
+            'void MyMesh::queueSavedRadioApply(',
+            'void MyMesh::servicePendingLocalRadioSettings(',
         ))
         methods += '\n#if COMPANION_FEATURE_TEMP_RADIO\n'
         methods += extract_braced(text, 'void MyMesh::serviceTempRadio(')
@@ -254,7 +304,6 @@ class CompanionRadioGainRestoreTests(unittest.TestCase):
         replacements = {
             '@METHODS@': methods,
             '@RETRY_DELAY@': extract_braced(text, 'static uint32_t nextRadioApplyRetryDelay('),
-            '@RECOVERY@': extract_braced(text, 'if (!command_radio_apply_pending && saved_radio_apply_pending && !hasOutbound()'),
         }
         harness = HARNESS
         for marker, value in replacements.items():

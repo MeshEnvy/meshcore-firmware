@@ -1273,13 +1273,19 @@ supported features and restores the board's default clock. These commands do
 not change the chosen SPI controller or the pins and do not adjust CPU clock,
 RX power saving, channel settings, or whether `radio2` is enabled.
 
-Changes require local USB or BLE access. A busy radio rejects a change without
-saving it. An accepted change restarts receive safely and verifies it before
+Changes require local USB or BLE access. Valid changes made while the radio
+is busy are saved once and applied automatically at a safe gap, including
+between queued transmissions. Separate feature changes compose with the latest
+accepted policy. `OK - saved; pending` means no repeat command is needed.
+Unsupported settings and storage failures remain errors.
+
+An immediately applied change restarts receive safely and verifies it before
 saving; a receive or storage failure restores the prior policy. Switching
 measurements restart after a policy change, so check `get radio2.timing` again
 after its timing test completes. Packet and error history remains available.
-If a saved policy cannot be applied during boot, its application retries at
-most once per second; the aggregate getter reports `pending saved policy`.
+The aggregate getter reports `pending saved policy` until the saved target is
+applied. Hardware failures retry with a delay; a temporary radio owner retains
+control until it finishes.
 
 ## Power saving and diagnostics
 

@@ -75,6 +75,7 @@ struct MQTTBridge{
  std::atomic<bool>_network_suspended{false};
  bool _network_espnow_restore_pending=false;
  bool _wifi_event_registered=false,_manage_wifi=true,_ntp_sync_pending=false;
+ bool _wifi_credentials_changed=false;
  int _wifi_reconnect_backoff_attempt=0;
  std::atomic<bool>_ntp_synced{true},_stop_requested{false},_stop_acked{false};
  struct{void noteGotIp(){}}_ntp_reconnect_latch;
@@ -169,6 +170,23 @@ int main(int argc,char** argv){
   race_ap=true;assert(!bridge.initializeWiFiInTask());
   assert(sdk_mode==WIFI_AP_STA&&event_registers==0&&reconnect_writes==0&&station_begins==0);
   race_ap=false;sdk_mode=WIFI_STA;assert(bridge.initializeWiFiInTask());assert(event_registers==1);
+ }else if(scenario=="changed_credentials"){
+  // A different saved tuple must replace an old, still-connected station.
+  bridge._wifi_credentials_changed=true;
+  assert(bridge.initializeWiFiInTask());
+  assert(station_disconnects==1&&station_begins==1&&!bridge._wifi_credentials_changed);
+  WiFi.state=WL_CONNECTED;
+  assert(bridge.initializeWiFiInTask());
+  assert(station_disconnects==1&&station_begins==1);
+  // A setup/OTA owner defers that reconnect without consuming the intent.
+  sdk_mode=WIFI_AP_STA;WiFi.state=WL_CONNECTED;bridge._wifi_credentials_changed=true;
+  assert(!bridge.initializeWiFiInTask()&&bridge._wifi_credentials_changed);
+  assert(!bridge.handleWiFiConnection(20000)&&bridge._wifi_credentials_changed);
+  assert(station_disconnects==1&&station_begins==1);
+  sdk_mode=WIFI_STA;
+  now_ms=20000;
+  bridge.handleWiFiConnection(20000);
+  assert(!bridge._wifi_credentials_changed&&station_disconnects==2&&station_begins==2);
  }else if(scenario=="recovery"||scenario=="companion_recovery"){
   bridge._manage_wifi=scenario!="companion_recovery";
   for(int mode:{WIFI_AP,WIFI_AP_STA}){

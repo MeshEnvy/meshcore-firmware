@@ -265,6 +265,10 @@ public:
   bool startSetupMode(char reply[]);   // open SoftAP + DNS captive portal
   bool startLanMode(char reply[]);     // bind to existing STA connection
   bool startAutoMode(char reply[]);    // use saved WiFi, or setup AP when absent
+  // Accept a start through asynchronous teardown or a transient SDK failure.
+  bool requestStart(bool force_ap, char reply[]);
+  void requestRestart();              // coalesce saved credential changes
+  bool isStartPending() const { return _start_mode != MODE_OFF; }
   bool reloadStandaloneWiFi();
   void requestStop();                  // stop listening and detach this session
   // Release HTTP/DNS for the updater without delayed teardown taking its
@@ -332,6 +336,10 @@ private:
   SemaphoreHandle_t _mux;
   Mode _mode = MODE_OFF;
   bool _stopping = false;
+  Mode _start_mode = MODE_OFF;
+  uint32_t _start_retry_at = 0;
+  uint32_t _start_retry_delay = 5000;
+  bool _start_retryable = false;
   bool _keep_wifi_on_stop = false;
   bool _was_setup_ap = false;
   bool _initial_setup = false;
@@ -421,6 +429,7 @@ private:
   void noteNetworkActivity();
   void refreshNetworkPowerHold(uint32_t now);
   bool beginSavedStation(uint32_t now);
+  void serviceStartRetry(uint32_t now);
   void registerRoutes();
   typedef void (WebConfigServer::*RequestHandler)(AsyncWebServerRequest*);
   static void dispatchRequest(AsyncWebServerRequest* req, RequestHandler handler);

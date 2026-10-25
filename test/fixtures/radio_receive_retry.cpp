@@ -321,7 +321,7 @@ static void recoveryOwnershipAdmission() {
   for (bool between_checks : {false, true}) {
     RadioLibWrapper w; selectMode(w, mode);
     w._rx_ps_armed = mode == 1;
-    w._rx_boosted_gain_valid = w._cur_rx_boosted_gain = true;
+    w._rx_boosted_gain_valid = w._rx_boosted_gain_applied = w._cur_rx_boosted_gain = true;
     w._nf_refresh_requested = false; w._nf_last_calib = now_ms;
     assert(w._floor_estimator.add(-105, now_ms));
     const uint8_t payload[] = {0x18, 0x27, 0x36, 0x45, 0x54};

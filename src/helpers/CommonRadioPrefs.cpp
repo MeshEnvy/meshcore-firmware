@@ -202,11 +202,16 @@ void CommonRadioPrefs::formatRxPowerSavingStatus(char* reply, size_t reply_size)
   RXPowerSavingCLI::get(config, status, sf, bw, reply, reply_size, wire_preamble);
 }
 
+bool CommonRadioPrefs::isValidBandwidth(float bandwidth) {
+  return isValidLoRaBandwidth(bandwidth);
+}
+
 #if defined(NRF52_PLATFORM)
 // Keep shared radio parsing out of the Companion's larger command dispatcher.
 __attribute__((noinline))
 #endif
-bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timestamp, char* reply) {
+bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timestamp, char* reply,
+                                     bool allow_primary_set) {
   (void)sender_timestamp;
   if (command == nullptr || reply == nullptr) return false;
 
@@ -222,7 +227,7 @@ bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timest
     sprintf(reply, "> %s,%s,%d,%d", freq, bw, (uint32_t)getSpreadFactor(), (uint32_t)getCodingRate());
     return true;
   }
-  if (startsWith(command, "set radio ")) {
+  if (allow_primary_set && startsWith(command, "set radio ")) {
     const char* args = command + strlen("set radio ");
     const size_t args_len = boundedLength(args, RADIO_ARGS_CAPACITY);
     if (args_len >= RADIO_ARGS_CAPACITY) {

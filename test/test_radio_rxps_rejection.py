@@ -27,11 +27,24 @@ struct NodePrefs {
 struct Callbacks {
   RadioLibWrapper& radio_driver;
   bool setRxPowerSaving(bool, uint32_t, uint32_t);
+  bool supportsRxPowerSaving() const { return radio_driver.supportsRxPowerSaving(); }
 };
 struct CommonCLI {
   NodePrefs* _prefs;
   Callbacks* _callbacks;
   unsigned saves = 0;
+  static constexpr uint8_t RxPowerSaving = 2;
+  uint8_t _rx_settings_pending = 0;
+  uint32_t _rx_settings_retry_at = 0;
+  mesh::RadioParamApplyResult applyRxSetting(uint8_t) {
+    return _callbacks->radio_driver.trySetRxPowerSaving(_prefs->rx_powersaving_enabled,
+        _prefs->rx_ps_rx_us, _prefs->rx_ps_sleep_us);
+  }
+  bool saveRxSetting(uint8_t, mesh::RadioParamApplyResult result, char*) {
+    if (result == mesh::RadioParamApplyResult::FAILED) return false;
+    ++saves; return true;
+  }
+  void restoreRxSetting(uint8_t, mesh::RadioParamApplyResult, uint8_t, uint32_t) {}
   void savePrefs() { ++saves; }
   bool calculateRxPowerSavingLevel(uint32_t,uint8_t,float,uint32_t,uint32_t*,uint32_t*);
   void set(const char*, char*);
@@ -196,6 +209,7 @@ class RadioRxpsRejectionTest(unittest.TestCase):
                  ('void', 'serviceProfileScan'), ('bool', 'setRxPowerSaving'),
                  ('void', 'recalibrateNoiseFloor'), ('bool', 'validateProfile')]
         names += [('mesh::RadioParamApplyResult', name) for name in (
+            'trySetRxPowerSaving',
             'tuneProfile', 'prepareTransmitProfile', 'tryRestoreCodingRate',
             'trySetParams', 'trySetPrimaryParams')]
         methods = '\n'.join(method(source, f'{kind} RadioLibWrapper::{name}(')
@@ -220,6 +234,7 @@ class RadioRxpsRejectionTest(unittest.TestCase):
                                   '_rx_ps_armed=supported && _rx_ps_enabled;')
         harness = harness.replace('  void recalibrateNoiseFloor() { _noise_floor_valid=false; }',
             '  void recalibrateNoiseFloor();\n  bool setRxPowerSaving(bool,uint32_t,uint32_t);\n'
+            '  mesh::RadioParamApplyResult trySetRxPowerSaving(bool,uint32_t,uint32_t);\n'
             + method(header, 'bool isCalibratingNoiseFloor() const').replace(' override', ''))
         harness = harness.replace('bool validateProfile(const mesh::RadioProfileParams& p) const { return mesh::RadioProfiles::valid(p); }',
                                   'bool validateProfile(const mesh::RadioProfileParams&) const;')
@@ -229,16 +244,17 @@ class RadioRxpsRejectionTest(unittest.TestCase):
                               .replace('MyMesh::', 'Callbacks::'))
         cases = cases.replace('@CALCULATOR@', method(common, 'bool CommonCLI::calculateRxPowerSavingLevel('))
         cases = cases.replace('@CLI@', method(common, 'if (memcmp(config, "radio.rxps ", 11) == 0)'))
-        setter = method(source, 'bool RadioLibWrapper::setRxPowerSaving(')
-        guard = '  if (enabled && !supportsRxPowerSaving()) return false;\n'
+        setter = method(source, 'mesh::RadioParamApplyResult RadioLibWrapper::trySetRxPowerSaving(')
+        guard = '|| !supportsRxPowerSaving()'
         if setter.count(guard) != 1:
             raise AssertionError('expected actual early capability rejection')
         suspended = method(setter, 'if (_profile_rxps_suspended)')
-        if suspended.count('return true;') != 1:
+        if suspended.count('return Result::APPLIED;') != 1:
             raise AssertionError('expected actual accepted deferred branch')
         legacy = setter.replace(guard, '', 1).replace(suspended,
-            suspended.replace('return true;', 'return !enabled || supportsRxPowerSaving();')
-            + '\n  ' + guard.strip(), 1)
+            suspended.replace('return Result::APPLIED;',
+                'return !enabled || supportsRxPowerSaving() ? Result::APPLIED : Result::FAILED;')
+            + '\n  if (enabled && !supportsRxPowerSaving()) return Result::FAILED;', 1)
         sanitize = [] if not sys.platform.startswith('linux') else [
             '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
             '-fno-omit-frame-pointer', '-fno-pie', '-no-pie']
@@ -296,8 +312,10 @@ class RadioRxpsRejectionTest(unittest.TestCase):
     def test_original_suspended_branch_has_intended_semantic_failure(self):
         # Outside-scan rejection is a healthy control for the historical code.
         self.check_case('reject-outside', 'legacy')
-        for case in ('reject-inside', 'cli-inside'):
-            self.check_case(case, 'legacy', fails=True)
+        self.check_case('reject-inside', 'legacy', fails=True)
+        # The CLI now checks runtime capability before driver admission, so it
+        # independently prevents this historical driver's deferred-state bug.
+        self.check_case('cli-inside', 'legacy')
         self.check_case('reject-restoration', 'legacy', fails=True,
                         diagnostic='rejected RXPS lost calibration request or sleep fence')
 

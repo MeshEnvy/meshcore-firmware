@@ -15,6 +15,7 @@ HARNESS = r'''
 #include <cstdio>
 #include <string>
 #include <helpers/radiolib/RXPowerSaving.h>
+namespace mesh { enum class RadioParamApplyResult : uint8_t { APPLIED, BUSY, FAILED }; }
 
 #define MESH_ENABLE_TX_BEACONS 1
 #define MESH_DEBUG_PRINTLN(...) ((void)0)
@@ -29,6 +30,7 @@ struct RadioLibWrapper {
   bool _rx_ps_enabled = true, _rx_ps_armed = false;
   bool _rx_ps_continuous_fallback = false, _nf_calib_active = false;
   bool _profile_rxps_suspended = false;
+  bool _profile_repair_required = false;
   bool _profile_saved_rxps = false, _beacon_owned = false, _cw_active = false;
   uint32_t _rx_ps_rx_us = 50000, _rx_ps_sleep_us = 50000;
   uint32_t _rx_ps_eff_rx_us = 0, _rx_ps_eff_sleep_us = 0;
@@ -72,6 +74,7 @@ struct RadioLibWrapper {
   int startReceivePowerSaving();
   void stopReceiveDutyCycle();
   bool setRxPowerSaving(bool, uint32_t, uint32_t);
+  mesh::RadioParamApplyResult trySetRxPowerSaving(bool, uint32_t, uint32_t);
   RxPowerSavingStatus getRxPowerSavingStatus() const;
   @RESET_STATS@
 };
@@ -98,6 +101,26 @@ static void exhaust(RadioLibWrapper& radio) {
 }
 
 int main() {
+  {
+    using Result = mesh::RadioParamApplyResult;
+    RadioLibWrapper radio;
+    assert(radio.trySetRxPowerSaving(true, 50000, 50000) == Result::APPLIED);
+    assert(!radio.begin_calls && !radio.end_calls); // Same accepted timings do not re-arm RX.
+    radio.reconfigure_result = 2;
+    assert(radio.trySetRxPowerSaving(true, 70000, 90000) == Result::BUSY);
+    assert(radio._rx_ps_rx_us == 50000 && !radio.end_calls);
+    radio.reconfigure_result = 3;
+    assert(radio.trySetRxPowerSaving(true, 70000, 90000) == Result::FAILED);
+    assert(radio._rx_ps_rx_us == 50000 && !radio.end_calls);
+    radio.supported = false;
+    const unsigned before = radio.begin_calls;
+    assert(radio.trySetRxPowerSaving(true, 70000, 90000) == Result::FAILED);
+    assert(radio.trySetRxPowerSaving(true, 0, 90000) == Result::FAILED);
+    assert(radio.begin_calls == before);
+    radio.supported = true; radio._cw_active = true;
+    assert(radio.trySetRxPowerSaving(true, 50000, 50000) == Result::BUSY);
+    assert(radio.begin_calls == before);
+  }
   {
     RadioLibWrapper radio;
     exhaust(radio);
@@ -214,6 +237,7 @@ def production_source():
         "int RadioLibWrapper::startReceivePowerSaving()",
         "void RadioLibWrapper::stopReceiveDutyCycle()",
         "bool RadioLibWrapper::setRxPowerSaving(",
+        "mesh::RadioParamApplyResult RadioLibWrapper::trySetRxPowerSaving(",
         "RxPowerSavingStatus RadioLibWrapper::getRxPowerSavingStatus()"))
     return HARNESS.replace("@METHODS@", methods).replace(
         "@RESET_STATS@", body(header, "void resetStats()"))

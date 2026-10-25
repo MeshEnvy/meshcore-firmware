@@ -13,6 +13,7 @@ SOURCE = ROOT / 'examples/companion_radio/MyMesh.cpp'
 
 HARNESS = r'''
 #include <cassert>
+#include <helpers/TempRadioReplyBarrier.h>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -24,6 +25,8 @@ HARNESS = r'''
 #include <algorithm>
 #include <helpers/CLICommandUtils.h>
 #include <helpers/radiolib/RXPowerSaving.h>
+namespace mesh { enum class RadioParamApplyResult { APPLIED, BUSY, FAILED }; }
+using Apply=mesh::RadioParamApplyResult;
 using std::min;
 using std::isfinite;
 #define constrain(value,lo,hi) ((value)<(lo)?(lo):((value)>(hi)?(hi):(value)))
@@ -74,6 +77,18 @@ struct Driver {
   uint32_t rx=3000,sleep=4000;
   unsigned calls=0,gain_calls=0;
   std::deque<bool> results,gain_results;
+  std::deque<Apply> rx_accepted,gain_accepted;
+  Apply trySetRxPowerSaving(bool enable,uint32_t rx,uint32_t sleep) {
+    if(!rx_accepted.empty()) { const auto result=rx_accepted.front();rx_accepted.pop_front();if(result!=Apply::APPLIED){++calls;return result;} }
+    return setRxPowerSaving(enable,rx,sleep)?Apply::APPLIED:Apply::FAILED;
+  }
+  Apply trySetRxBoostedGainMode(bool enable) {
+    if(!gain_accepted.empty()) { const auto result=gain_accepted.front();gain_accepted.pop_front();if(result!=Apply::APPLIED){++gain_calls;return result;} }
+    return setRxBoostedGainMode(enable)?Apply::APPLIED:Apply::FAILED;
+  }
+  Apply trySetTxPower(int8_t) {return Apply::APPLIED;}
+  Apply trySetRxPowerSavingRfRxDisabled(bool) {return Apply::APPLIED;}
+
   bool supportsRxBoostedGainMode() const { return gain_supported; }
   bool supportsRxPowerSaving() const { return supported; }
   bool setRxPowerSaving(bool enable,uint32_t r,uint32_t s) {
@@ -92,7 +107,34 @@ struct Driver {
 } radio_driver;
 @PARSERS@
 struct Clock { uint32_t getMillis() const { return 100; } } clock_source;
+struct CommonRadioPrefs {static bool isValidBandwidth(float){return true;}};
 struct MyMesh {
+  mesh::TempRadioReplyBarrier _primary_radio_reply;
+  bool _primary_radio_blocked=false,_primary_radio_reply_admission=false;
+
+  int8_t rf_rx_disable_pending=-1;uint32_t rf_rx_retry_at=0;
+  struct {
+    bool acceptsPrimary(float,float,uint8_t,uint8_t,uint16_t) const {return true;}
+    uint16_t primaryPreamble() const {return 0;}
+    bool savePrimaryPreamble(uint16_t) {return true;}
+    bool restorePrimaryPreamble(uint16_t) {return true;}
+    void servicePendingTuning() {}
+  } _radio_profiles;
+  struct {
+    struct {struct {uint8_t sf=7;float bw=250;} primary;} p;
+    auto* profiles() {return &p;}
+    bool isCarrierWaveActive() const {return false;}
+    bool isMorseTxActive() const {return false;}
+    bool isMorseRxActive() const {return false;}
+  } radio;
+  decltype(radio)* _radio=&radio;
+  enum class RadioSettingResult {Saved,RadioRejected,SaveFailed,SaveUnconfirmed};
+  RadioSettingResult applyAndSaveRadioParams(float,float,uint8_t,uint8_t,uint8_t,uint16_t,bool=false);
+  bool isValidClientRepeatFreq(uint32_t) const {return true;}
+  Apply tryApplyRadioParams(float,float,uint8_t,uint8_t) {return Apply::APPLIED;}
+  void queueSavedRadioApply();
+  void servicePendingTxPower() {}
+  void servicePendingLocalRadioSettings();
   Prefs _prefs,durable;
   double durable_lat=10,durable_lon=20;
   bool storage_accepts=true,_radio_available=true;
@@ -140,7 +182,7 @@ struct MyMesh {
   bool millisHasNowPassed(uint32_t) const { return true; }
   uint32_t futureMillis(uint32_t delay) const { return delay+100; }
   bool applySavedRadioParams() { return true; }
-  void recover() { @RECOVERY@ }
+  void recover() { servicePendingLocalRadioSettings(); }
   void expectOriginal() const {
     assert(!memcmp(&_prefs,&durable,sizeof(Prefs)));
     assert(!strcmp(_prefs.node_name,"original"));
@@ -292,6 +334,21 @@ int main() {
     assert(!m.applyAndSaveRxPowerSaving("10000 20000",reply));++checks;
     assert(m.saves==0);m.expectOriginal();
   }
+  for(bool gain:{false,true}) {
+    MyMesh m;char reply[160]={};
+    if(gain)radio_driver.gain_accepted={Apply::BUSY};else radio_driver.rx_accepted={Apply::BUSY};
+    assert(gain?m.applyAndSaveRxBoostedGain(true):m.applyAndSaveRxPowerSaving("10000 20000",reply));++checks;
+    assert(m.saves==1 && m.saved_radio_apply_pending);
+    assert(gain?bool(m.durable.rx_boosted_gain):bool(m.durable.rx_powersaving_enabled));
+    m.recover();assert(!m.saved_radio_apply_pending && m.saves==1);
+    assert(gain?radio_driver.boosted_gain:radio_driver.rxps);
+    // A failed BUSY replacement leaves the first desired target intact.
+    m.saved_radio_apply_pending=true;m.radio_apply_retry_at=500;m.storage_accepts=false;
+    if(gain)radio_driver.gain_accepted={Apply::BUSY};else radio_driver.rx_accepted={Apply::BUSY};
+    assert(!(gain?m.applyAndSaveRxBoostedGain(false):m.applyAndSaveRxPowerSaving("off",reply)));++checks;
+    assert(m.saved_radio_apply_pending && m.radio_apply_retry_at==500 && m.saves==2);
+    assert(gain?bool(m._prefs.rx_boosted_gain):bool(m._prefs.rx_powersaving_enabled));
+  }
   // Boosted gain uses the actual setter and the shared saved-radio recovery.
   // Cover both directions, rejected saves, busy restoration, and unsupported radios.
   for(bool initial:{false,true})for(bool save_ok:{false,true}) {
@@ -329,7 +386,7 @@ int main() {
   {
     MyMesh m;radio_driver.gain_results={false};
     assert(!m.applyAndSaveRxBoostedGain(true));++checks;
-    assert(m.saves==0 && !radio_driver.boosted_gain && !m.saved_radio_apply_pending);
+    assert(m.saves==0 && !radio_driver.boosted_gain && m.saved_radio_apply_pending);
     m.expectOriginal();
   }
   {
@@ -342,7 +399,7 @@ int main() {
   for(bool save_ok:{false,true}) {
     MyMesh m;m._radio_available=false;m.storage_accepts=save_ok;
     assert(m.applyAndSaveRxBoostedGain(true)==save_ok);++checks;
-    assert(m.saves==1 && radio_driver.gain_calls==0 && !m.saved_radio_apply_pending);
+    assert(m.saves==1 && radio_driver.gain_calls==0 && m.saved_radio_apply_pending==save_ok);
     assert(m._prefs.rx_boosted_gain==save_ok && m.durable.rx_boosted_gain==save_ok);
   }
   for(bool initial:{false,true})for(bool save_ok:{false,true}) {
@@ -399,12 +456,14 @@ class CompanionPrefsTransactionTests(unittest.TestCase):
                 'bool MyMesh::applyAndSaveRxPowerSaving(',
                 'bool MyMesh::applyAndSaveRxBoostedGain(',
                 'bool MyMesh::applyAndSavePowerSaving(',
+                'void MyMesh::queueSavedRadioApply(',
+                'void MyMesh::servicePendingLocalRadioSettings(',
+                'MyMesh::RadioSettingResult MyMesh::applyAndSaveRadioParams(',
             )),
             '@FRAMES@': ' else '.join(extract_braced(text, f'if (cmd_frame[0] == {cmd})') for cmd in frames),
             '@WEB@': ' else '.join(extract_braced(text,f'if ({expr})') for expr in web),
             '@TERMINAL@': ' else '.join(extract_braced(text,f'if ({expr})') for expr in terminal),
             '@GPS@': extract_braced(text,'if (gps_value)'),
-            '@RECOVERY@': extract_braced(text,'if (!command_radio_apply_pending && saved_radio_apply_pending && !hasOutbound()'),
         }
         harness = HARNESS
         for marker,value in replacements.items():

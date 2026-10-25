@@ -7,6 +7,7 @@
 #include <vector>
 #include <helpers/CompanionRadioDiagnostics.h>
 #include <helpers/radiolib/RXPowerSaving.h>
+namespace mesh { enum class RadioParamApplyResult : uint8_t { APPLIED, BUSY, FAILED }; }
 
 constexpr int RADIOLIB_NC=-1;
 constexpr int RADIOLIB_ERR_NONE=0;
@@ -55,6 +56,9 @@ public:
   bool isInRecvMode() const;
   virtual bool supportsRxPowerSavingRfRxDisable() const {return false;}
   virtual bool setRxPowerSavingRfRxDisabled(bool) {return false;}
+  virtual mesh::RadioParamApplyResult trySetRxPowerSavingRfRxDisabled(bool) {
+    return mesh::RadioParamApplyResult::FAILED;
+  }
   virtual bool isRxPowerSavingRfRxDisabled() const {return false;}
   uint32_t getRxPsWatchdogSoftCount() const {return n_wd_soft;}
   uint32_t getRxPsWatchdogHardCount() const {return n_wd_hard;}
@@ -162,6 +166,17 @@ static void radio2_suspended_rxps() {
 #endif
 }
 int main() {
+  {
+    Driver driver;
+    char reply[80] = "untouched";
+    const auto before = driver.physical.flag_writes;
+    assert(!mesh::companion::handleRadioDiagnosticsCommand<false>(driver, true,
+        "set radio.rxps.rfrx_disabled on", reply, sizeof(reply), []() {}));
+    assert(driver.physical.flag_writes == before && !strcmp(reply, "untouched"));
+    assert(mesh::companion::handleRadioDiagnosticsCommand<false>(driver, true,
+        "get rxps.wd", reply, sizeof(reply), []() {}));
+    assert(strncmp(reply, "> soft=", 7) == 0);
+  }
   backend_guards();radio2_suspended_rxps();Harness h;char reply[160];
   bounds(h,"get rxps.wd","> soft=11,hard=13");
 #if defined(SX126X_RXEN) && SX126X_RXEN != -1

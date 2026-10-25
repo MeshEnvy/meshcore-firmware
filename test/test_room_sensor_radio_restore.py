@@ -22,6 +22,8 @@ HARNESS = r'''
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <cstring>
+#include <helpers/radiolib/LR2021SideDetectorConfig.h>
 // Negative controls must fail without opening a Windows CRT abort dialog.
 #undef assert
 #define assert(condition) do { if (!(condition)) { \
@@ -48,11 +50,20 @@ struct Driver {
   bool _profile_repair_required = false, _profile_refresh_required = false;
   bool _rx_hold_continuous = false;
   bool _dbm_valid = true, _dbm_applied = true, _rx_boosted_gain_valid = false;
+  bool _rx_boosted_gain_applied = false;
   int8_t _cur_dbm = 7;
   bool _cur_rx_boosted_gain = false;
   unsigned power_commands = 0, gain_commands = 0;
+  unsigned side_commands = 0;
+  uint8_t side_sfs[4] = {};
+  struct Profiles {
+    bool active = false;
+    bool enabled() const { return active; }
+  } profile_state;
+  const Profiles* profiles() const { return &profile_state; }
   std::deque<int16_t> power_results;
   std::deque<bool> gain_results;
+  std::deque<bool> side_results;
   Chip* _radio = &chip;
   bool hasPendingRadioInterrupt() { return pending_irq; }
   bool claimRadioInterrupt() { const bool pending = pending_irq; pending_irq = false; return pending; }
@@ -64,19 +75,30 @@ struct Driver {
   int16_t applyCachedTxPower(int8_t) {
     ++power_commands; return next(power_results, int16_t(0));
   }
-#if ROOM_ROLE
   bool supportsRxBoostedGainMode() { return supported; }
   bool applyRxBoostedGainMode(bool) {
     assert(supported); ++gain_commands; return next(gain_results, true);
   }
   bool setRxBoostedGainMode(bool);
-#endif
+  Apply trySetRxBoostedGainMode(bool);
   bool supportsRxPowerSaving() { return true; }
   uint8_t beginReconfigure();
   void endReconfigure(bool);
   bool setTxPower(int8_t);
   bool isTxPowerValid(int8_t) const { return true; }
   mesh::RadioParamApplyResult trySetTxPower(int8_t);
+  bool configSideDetectors(const uint8_t* sfs, uint8_t count, float) {
+    ++side_commands;
+    const uint8_t resume = beginReconfigure();
+    if (resume > 1) return false;
+    const bool accepted = next(side_results, true);
+    if (accepted) {
+      memset(side_sfs, 0, sizeof(side_sfs));
+      if (count) memcpy(side_sfs, sfs, count);
+    }
+    endReconfigure(resume);
+    return accepted;
+  }
 } radio_driver;
 @WRAPPER_METHODS@
 struct Prefs {
@@ -86,6 +108,7 @@ struct Prefs {
   bool rx_boosted_gain = true, rx_powersaving_enabled = false;
   uint8_t rx_ps_level = 0, rx_ps_preamble = 32;
   uint32_t rx_ps_rx_us = 1234, rx_ps_sleep_us = 5678;
+  uint8_t extra_sf[4] = {10, 0, 0, 0};
 };
 struct Profiles {
   float live_freq = 906.5f, live_bw = 125;
@@ -126,6 +149,8 @@ struct @CLASS@ {
   bool saved_radio_apply_pending = false, temp_radio_applied = false, outbound = false;
   uint32_t set_radio_at = 0, revert_radio_at = 0, radio_apply_retry_at = 0;
   uint8_t radio_apply_failures = 0;
+  unsigned saves = 0;
+  void savePrefs() { ++saves; }
   float pending_freq = 916.5f, pending_bw = 125;
   uint8_t pending_sf = 8, pending_cr = 7, pending_preamble = 16;
   @CLASS@() { now_ms = 100; radio_driver = Driver(); }
@@ -135,7 +160,7 @@ struct @CLASS@ {
   uint32_t rxPowerSavingPreambleForParams(uint8_t, float) { return 32; }
   bool applySavedRadioParams();
   void startup() { @STARTUP@ }
-  void service() { @SERVICE@ }
+  void service(bool tx_gap = false) { @SERVICE@ }
 };
 @APPLY@
 using Node = @CLASS@;
@@ -145,7 +170,7 @@ static void restored(const Node& node) {
   assert(node._cli.profiles.live_sf == node._prefs.sf);
   assert(node.active_cr == node._prefs.cr);
   assert(radio_driver._cur_dbm == node._prefs.tx_power_dbm);
-#if ROOM_ROLE
+#if 1
   if (radio_driver.supported)
     assert(radio_driver._cur_rx_boosted_gain == node._prefs.rx_boosted_gain);
 #endif
@@ -155,12 +180,10 @@ static unsigned calls(const Node& node) {
 }
 static void startupAndRetry() {
   for (unsigned fault = 0; fault < 3; ++fault) {
-#if !ROOM_ROLE
-    if (fault == 0) continue; // Sensor has no RX-gain feature.
-#endif
+
     Node node;
     node._prefs.rx_powersaving_enabled = true;
-#if ROOM_ROLE
+#if 1
     if (fault == 0) radio_driver.gain_results = {false, false, true};
 #endif
     if (fault == 1) node._cli.profiles.results = {Apply::BUSY, Apply::FAILED, Apply::APPLIED};
@@ -221,12 +244,10 @@ static void receiveBetweenTupleAndPower() {
 }
 static void tempRadioRestoration() {
   for (bool pending : {false, true}) for (unsigned fault = 0; fault < 3; ++fault) {
-#if !ROOM_ROLE
-    if (fault == 0) continue;
-#endif
+
     Node node; node.saved_radio_apply_pending = pending;
     node.temp_radio_applied = true; node.revert_radio_at = now_ms - 1;
-#if ROOM_ROLE
+#if 1
     if (fault == 0) radio_driver.gain_results = {false, true};
 #endif
     if (fault == 1) node._cli.profiles.results = {Apply::BUSY, Apply::APPLIED};
@@ -255,7 +276,48 @@ static void tempRadioRestoration() {
   }
 }
 int main() {
+#if defined(USE_LR2021)
+  {
+    Node node; node.startup();
+    assert(!node.saved_radio_apply_pending && radio_driver.side_sfs[0] == 10);
+    assert(radio_driver.side_commands == 1);
+  }
+  {
+    Node node; radio_driver.side_results = {false, true}; node.startup();
+    assert(node.saved_radio_apply_pending && "startup must retain incomplete saved radio work");
+    node.service(); assert(!node.saved_radio_apply_pending && radio_driver.side_sfs[0] == 10);
+  }
+  {
+    Node node; node._prefs.extra_sf[0] = radio_driver.side_sfs[0] = 7;
+    node.startup();
+    assert(!node.saved_radio_apply_pending && !node._prefs.extra_sf[0]);
+    assert(!radio_driver.side_sfs[0] && node.saves == 1 && radio_driver.side_commands == 2);
+  }
+  {
+    Node node; radio_driver.profile_state.active = true; node.startup();
+    assert(!node.saved_radio_apply_pending && !radio_driver.side_commands);
+    assert(node._prefs.extra_sf[0] == 10); // Retain saved intent while dual radio disables it.
+  }
+#endif
   startupAndRetry(); receiveBetweenTupleAndPower(); tempRadioRestoration();
+  {
+    Node node;
+    node.outbound = true;
+    node.set_radio_at = now_ms - 1;
+    node.revert_radio_at = now_ms + 10000;
+    node.service(true);
+    assert(!calls(node) && !node.temp_radio_applied && node.set_radio_at);
+    node.outbound = false; node.service();
+    assert(node.temp_radio_applied && !node.set_radio_at);
+  }
+  {
+    Node node;
+    node.outbound = true;
+    node.saved_radio_apply_pending = true;
+    node.service(); assert(!calls(node));
+    node.service(true); // A queued next packet cannot starve the completed-TX gap.
+    assert(!node.saved_radio_apply_pending); restored(node);
+  }
   std::puts("PASS: production saved radio startup/retry/TempRadio restoration");
 }
 '''
@@ -273,6 +335,10 @@ def harness(role, mutation=None):
         checked = "&& !radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain)) return false;"
         assert checked in apply
         apply = apply.replace(checked, ") (void)radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);")
+    elif mutation == "unchecked-side":
+        checked = "&& !radio_driver.configSideDetectors(_prefs.extra_sf, extra_sf_count, _prefs.bw)) return false;"
+        assert checked in apply
+        apply = apply.replace(checked, ") (void)radio_driver.configSideDetectors(_prefs.extra_sf, extra_sf_count, _prefs.bw);")
     begin = body(source, f"void {name}::begin(")
     start = begin.index("  saved_radio_apply_pending = !applySavedRadioParams();")
     startup = begin[start:begin.index("  const bool fem_gain_changed", start)]
@@ -284,8 +350,8 @@ def harness(role, mutation=None):
                   "void RadioLibWrapper::endReconfigure(bool resume_rx)",
                   "bool RadioLibWrapper::setTxPower(int8_t dbm)",
                   "mesh::RadioParamApplyResult RadioLibWrapper::trySetTxPower(int8_t dbm)"]
-    if role == "room":
-        signatures.append("bool RadioLibWrapper::setRxBoostedGainMode(bool enabled)")
+    signatures.extend(["bool RadioLibWrapper::setRxBoostedGainMode(bool enabled)",
+                       "mesh::RadioParamApplyResult RadioLibWrapper::trySetRxBoostedGainMode(bool enabled)"])
     methods = "\n".join(body(wrapper, signature) for signature in signatures)
     methods = methods.replace("RadioLibWrapper::", "Driver::")
     values = {
@@ -300,7 +366,7 @@ def harness(role, mutation=None):
 
 
 class RoomSensorRadioRestoreTests(unittest.TestCase):
-    def run_case(self, role, mutation=None):
+    def run_case(self, role, mutation=None, lr2021=False):
         compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
         self.assertIsNotNone(compiler)
         with tempfile.TemporaryDirectory(prefix="room-sensor-radio-restore-") as folder:
@@ -310,6 +376,8 @@ class RoomSensorRadioRestoreTests(unittest.TestCase):
             flags = [] if os.name == "nt" else ["-fsanitize=address,undefined", "-fno-pie", "-no-pie"]
             built = subprocess.run([compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror",
                                     f"-DROOM_ROLE={int(role == 'room')}", *flags,
+                                    *(["-DUSE_LR2021=1"] if lr2021 else []),
+                                    "-I", str(ROOT / "src"),
                                     str(cpp), "-o", str(binary)],
                                    capture_output=True, text=True, timeout=45)
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
@@ -333,6 +401,12 @@ class RoomSensorRadioRestoreTests(unittest.TestCase):
 
     def test_old_unchecked_room_gain_cannot_complete(self):
         self.run_case("room", "unchecked-gain")
+
+    def test_lr2021_saved_detectors_restore_or_keep_recovery_pending(self):
+        for role in ROLES:
+            with self.subTest(role=role):
+                self.run_case(role, lr2021=True)
+                self.run_case(role, "unchecked-side", lr2021=True)
 
 
 if __name__ == "__main__":

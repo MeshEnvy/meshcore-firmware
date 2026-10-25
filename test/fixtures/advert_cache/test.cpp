@@ -73,7 +73,9 @@ public:
   uint8_t dirty_contacts_failures=0;
   bool(*save_filter)(const ContactInfo&)=nullptr;
   bool _radio_available=false, _iter_started=false;
-  bool command_radio_apply_pending=false, saved_radio_apply_pending=false;
+  bool saved_radio_apply_pending=false, tx_power_apply_pending=false;
+  int8_t rf_rx_disable_pending=-1;
+  struct {bool hasPendingTuning() const{return false;}} _radio_profiles;
   uint32_t _scheduled_reboot_at=0, radio_apply_retry_at=0;
   uint32_t emergency_client_repeat_send_at=0;
   void* sign_data=nullptr;

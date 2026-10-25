@@ -109,6 +109,7 @@ protected:
   bool _cur_rx_boosted_gain;
   bool _params_valid, _dbm_valid, _rx_boosted_gain_valid;
   bool _dbm_applied = false;
+  bool _rx_boosted_gain_applied = false;
   mesh::RadioProfiles _profiles;
   uint8_t _active_profile = 0;
   uint16_t _physical_preamble = 0;
@@ -543,6 +544,7 @@ public:
   void onSendFinished() override;
   bool isInRecvMode() const override;
   bool setRxPowerSaving(bool enabled, uint32_t rx_us, uint32_t sleep_us) override;
+  mesh::RadioParamApplyResult trySetRxPowerSaving(bool enabled, uint32_t rx_us, uint32_t sleep_us);
   bool supportsRxPowerSaving() const override { return SupportsRxPowerSaving; }
   RxPowerSavingStatus getRxPowerSavingStatus() const;
   virtual uint32_t rxPowerSavingTransitionUs() const { return rxPowerSavingDefaultTransitionUs(); }
@@ -555,6 +557,9 @@ public:
   }
   virtual bool supportsRxPowerSavingRfRxDisable() const { return false; }
   virtual bool setRxPowerSavingRfRxDisabled(bool) { return false; }
+  virtual mesh::RadioParamApplyResult trySetRxPowerSavingRfRxDisabled(bool) {
+    return mesh::RadioParamApplyResult::FAILED;
+  }
   virtual bool isRxPowerSavingRfRxDisabled() const { return false; }
   bool isChannelActive();
 
@@ -681,10 +686,14 @@ public:
   float packetScore(float snr, int packet_len) override { return packetScoreInt(snr, 10, packet_len); }  // assume sf=10
 
   bool setRxBoostedGainMode(bool enabled);
+  mesh::RadioParamApplyResult trySetRxBoostedGainMode(bool enabled);
   virtual bool supportsRxBoostedGainMode() const { return false; }
   virtual bool getRxBoostedGainMode() const { return false; }
 
   virtual bool configSideDetectors(const uint8_t sideDetSFs[], uint8_t num, float bw) { return false; }
+  virtual mesh::RadioParamApplyResult tryConfigSideDetectors(const uint8_t*, uint8_t, float) {
+    return mesh::RadioParamApplyResult::FAILED;
+  }
 };
 
 /**

@@ -49,6 +49,17 @@ report a storage error if saving fails, and restore their previous values.
 Settings that also change GPS or radio power-saving state restore that state;
 a busy radio rollback remains pending for recovery instead of reporting success.
 
+Valid local radio frequency, bandwidth, spreading-factor, coding-rate, boosted
+RX gain and RX power-saving changes no longer require a reboot or repeated
+requests when the radio is busy. The saved change applies automatically at a
+safe gap; a later accepted change replaces the target. An app disconnect does
+not cancel a saved change. Temporary radio operations finish before the saved
+settings are restored. Invalid values and failed saves still report errors.
+A remote frequency or tuple change waits for its exact LoRa reply copies to
+finish before retuning. It is rejected during a TempRadio lease. If saving or
+restoring the saved preamble fails, the old runtime target is retained and its
+storage repair retries automatically; the command reports an unconfirmed save.
+
 | Capability | ESP32 full | nRF52 full |
 | --- | --- | --- |
 | USB Binary Companion | Yes | Yes |
@@ -426,6 +437,12 @@ set wifi.powersave max
 start webconfig
 stop webconfig
 ```
+
+Changing saved WiFi credentials schedules an automatic reconnect for active
+services. WebConfig and MQTT keep an accepted start request while an earlier
+stop finishes or a temporary startup failure clears. A later explicit off or
+stop cancels that request. Hardware and ownership conflicts still report an
+error. Bluetooth advertising also retries a failed restart automatically.
 
 ESP32 WiFi Companions with WebConfig, including Full Companion, expose a
 **CLI** tab at the node's LAN address. It defaults to on; use `get wifi.cli`,

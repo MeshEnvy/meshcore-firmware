@@ -383,7 +383,7 @@ int main() {
 #include <cstdio>
 #include <cstring>
 struct Callbacks {
-  bool active = true, allow_stop = true, mqtt = true, espnow = true;
+  bool active = true, allow_stop = true, mqtt = true, espnow = true, mqtt_pending = false;
   int stops = 0, bridge_stops = 0, bridge_starts = 0;
   int espnow_stops = 0, espnow_starts = 0;
   bool isWebConfigActive() const { return active; }
@@ -393,10 +393,11 @@ struct Callbacks {
     active = false; strcpy(reply, "WebConfig stopped"); return true;
   }
   bool isMqttBridgeRunning() const { return mqtt; }
+  bool isMqttBridgeStartPending() const { return mqtt_pending; }
   bool isEspNowBridgeRunning() const { return espnow; }
   bool setMqttBridgeState(bool enabled) {
     if (enabled) ++bridge_starts; else ++bridge_stops;
-    mqtt = enabled; return true;
+    mqtt = enabled; mqtt_pending = false; return true;
   }
   bool setEspNowBridgeState(bool enabled) {
     if (enabled) ++espnow_starts; else ++espnow_stops;
@@ -474,6 +475,12 @@ int main() {
   cli.run("start ota ap", reply.text);
   cli.run("stop ota", reply.text);
   assert(callbacks.bridge_starts == 0 && callbacks.espnow_starts == 1);
+  // A pending-only start is paused before OTA and resumed only after stop.
+  callbacks.active = false; callbacks.mqtt = false; callbacks.mqtt_pending = true;
+  cli.run("start ota", reply.text);
+  assert(!callbacks.mqtt_pending && !callbacks.mqtt && callbacks.bridge_stops == 2);
+  cli.run("stop ota", reply.text);
+  assert(callbacks.mqtt && callbacks.bridge_starts == 1);
   assert(reply.guard == 123);
 }
 '''

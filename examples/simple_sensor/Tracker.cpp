@@ -83,7 +83,7 @@ bool SensorMesh::trackerNeedsRadio() const {
       || board.isRadioTestActive() || mesh::isUsbLoggingWatchdogArmed()
       || isAnyTempRadioActive() || hasPendingOtaApply() || isDualRadioActive()
       || set_radio_at || revert_radio_at || saved_radio_apply_pending
-      || _cli.hasActiveUserGpioTimer() || _cli.hasPendingTxPower()
+      || _cli.hasActiveUserGpioTimer() || _cli.hasPendingRadioSettings()
       || hasOutbound() || _mgr->getOutboundTotal() != 0)
     return true;
   uint32_t delay;
@@ -272,6 +272,9 @@ void SensorMesh::onSendComplete(mesh::Packet* packet) {
   mesh::Mesh::onSendComplete(packet);
   _cli.servicePendingTxPower();
   _cli.morseReply().complete(packet);
+  _cli.servicePendingRxSettings();
+  _cli.radioProfiles().servicePendingTuning();
+  servicePendingPrimaryRadioSettings(true);
   if (!tracker_pending || !packet || packet->getPayloadType() != PAYLOAD_TYPE_REQ) return;
   uint8_t hash[MAX_HASH_SIZE];
   packet->calculatePacketHash(hash);

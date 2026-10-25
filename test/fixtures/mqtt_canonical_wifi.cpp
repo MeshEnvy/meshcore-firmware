@@ -18,7 +18,9 @@ void beginStation(const char* ssid, const char* password) {
 }}
 @WEB_POLICY@
 enum { WIFI_OFF, WIFI_STA, WIFI_PS_NONE, WIFI_PS_MAX_MODEM, WIFI_PS_MIN_MODEM };
-struct { int getMode() { return WIFI_STA; } } WiFi;
+struct { unsigned disconnects = 0; int getMode() { return WIFI_STA; }
+  void disconnect() { ++disconnects; } } WiFi;
+uint32_t millis() { return 1000; }
 using wifi_ps_type_t = int;
 using wifi_mode_t = int;
 using esp_err_t = int;
@@ -79,6 +81,9 @@ struct MQTTBridge {
   MQTTPrefs* _obs;
   MQTTNodeInfo _node_info;
   bool _manage_wifi = true, _wifi_configured = false, _initialized = false;
+  bool _wifi_credentials_changed = false, _start_requested = false;
+  uint32_t _last_wifi_reconnect_attempt = 0;
+  uint8_t _wifi_reconnect_backoff_attempt = 0;
   char _wifi_ssid[32] = {}, _wifi_password[65] = {};
   uint8_t _wifi_power_save = 0;
   std::atomic<bool> _stop_requested{false};
@@ -167,6 +172,15 @@ int main() {
   // Saved changes affect a new boot/restart, never a live worker snapshot.
   assert(WebConfigServer::saveStandaloneWiFi("changed", "new-password", 0));
   assert_selected(portal, "portal", "password");
+  // The same stopped bridge keeps the old verified tuple until begin snapshots
+  // the latest settings, and retains changed intent through failed allocations.
+  assert(portal.prepareWiFiCredentials());
+  assert(portal._wifi_credentials_changed);
+  assert(portal.prepareWiFiCredentials() && portal._wifi_credentials_changed);
+  const auto old_disconnects = WiFi.disconnects;
+  portal.beginWiFiStation();
+  assert(!portal._wifi_credentials_changed && WiFi.disconnects == old_disconnects + 1);
+  assert_selected(portal, "changed", "new-password");
   MQTTBridge reboot(obs); reboot.begin();
   assert(reboot._wifi_power_save == 0); assert_selected(reboot, "changed", "new-password");
   std::string raw(64, 'A');

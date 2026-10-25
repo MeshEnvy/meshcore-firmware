@@ -197,6 +197,7 @@ struct MQTTBridge {
   void* _identity = this;
   bool _slots_setup_done = true;
   bool _wifi_status_initialized = true, _manage_wifi = false;
+  bool _wifi_credentials_changed = false;
   wl_status_t _last_wifi_status = WL_CONNECTED;
   unsigned long _last_wifi_check = 0, _last_wifi_reconnect_attempt = 0;
   uint8_t _wifi_reconnect_backoff_attempt = 0, _wifi_power_save = 1;

@@ -73,7 +73,7 @@ public:
   void loop();
   bool canRecoverUsbLogging() const {
     return dirty_contacts_expiry == 0 && !hasOutbound() && !isAnyTempRadioActive()
-        && !hasPendingOtaApply() && !saved_radio_apply_pending && !_cli.hasPendingTxPower()
+        && !hasPendingOtaApply() && !saved_radio_apply_pending && !_cli.hasPendingRadioSettings()
         && set_radio_at == 0;
   }
   void handleCommand(uint32_t sender_timestamp, char* command, char* reply,
@@ -120,6 +120,16 @@ public:
   bool isTxPowerApplied(int8_t power_dbm) const override;
 #endif
   bool setRxPowerSaving(bool enable, uint32_t rx_us, uint32_t sleep_us) override;
+  bool supportsRxPowerSaving() const override;
+  mesh::RadioParamApplyResult trySetRxPowerSaving(bool enable, uint32_t rx_us, uint32_t sleep_us) override;
+  bool supportsRxPowerSavingRfRxDisable() const override;
+  mesh::RadioParamApplyResult trySetRxPowerSavingRfRxDisabled(bool disabled) override;
+  bool isRxPowerSavingRfRxDisabled() const override;
+  bool supportsRxBoostedGain() const override;
+  mesh::RadioParamApplyResult trySetRxBoostedGain(bool enable) override;
+#if defined(USE_LR2021)
+  mesh::RadioParamApplyResult tryConfigSideDetectors(const uint8_t sideDetSFs[], uint8_t num, float bw) override;
+#endif
   void recalibrateNoiseFloor() override { _radio->recalibrateNoiseFloor(); }
   void getRxPsWatchdogCounts(uint32_t* soft, uint32_t* hard) override;
   void formatNeighborsReply(char *reply) override {
@@ -303,6 +313,7 @@ private:
   uint8_t radio_apply_failures;
 
   bool applySavedRadioParams();
+  void servicePendingPrimaryRadioSettings(bool tx_gap = false);
   bool isMillisTimerDue(unsigned long timestamp) const;
   uint32_t limitSleepToMillisTimer(unsigned long timestamp,
                                    uint32_t sleep_ms) const;

@@ -449,9 +449,10 @@ target-default builds use `none`. A saved setting takes precedence after an
 upgrade.
 
 The WiFi `set` commands work on MQTT observers and on FULL standalone
-ESP32 repeater/room-server builds. On a standalone build, changing the SSID or
-password stops an active WebConfig session; run `start webconfig` again to use
-the new credentials. `set wifi.pwd` with no value selects an open network.
+ESP32 repeater/room-server builds. Changing the SSID or password automatically
+restarts an active WebConfig session after its requests drain and reconnects
+enabled MQTT with the latest saved credentials. An explicit WebUI or WiFi off
+command cancels pending starts. `set wifi.pwd` with no value selects an open network.
 Standalone WiFi also accepts an exact 64-character hexadecimal WPA/WPA2 PSK;
 ordinary passphrases remain limited to 63 characters. Other 64-character values
 and all longer values are rejected. MQTT observer WiFi passwords retain their
@@ -1871,7 +1872,12 @@ node after the save succeeds. See [regulator recovery and hardware checks](power
 existing Companion apps. On dual-radio builds, use `get radio2` and
 `get radio.timing` for profile and timing diagnostics.
 
-**Note:** Requires reboot to apply. If RXPS is enabled and the saved minimum
+**Note:** Companion USB, BLE and WebConfig changes apply automatically when
+the radio is free. A busy radio keeps the saved target across disconnects.
+Infrastructure retains its reboot-to-apply behavior. Companion LoRa CLI waits
+for the exact reply copies to drain before applying; active TempRadio leases
+reject this permanent change.
+If RXPS is enabled and the saved minimum
 level/preamble cannot safely cover the new radio timing, the command reply
 reports the effective level and preamble, or `RXPS continuous-fast` when no
 level through 10 is safe. Slower settings recalculate from the saved RXPS
@@ -2055,7 +2061,9 @@ preamble. LoRa OTA treats v1.17.1.5 as that capability boundary.
 
 **Default:** `869.618`
 
-**Note:** Requires reboot to apply
+**Note:** Companion local changes apply automatically when the radio is free.
+Infrastructure requires a reboot to apply. Companion LoRa CLI applies after
+its exact reply copies drain; an active TempRadio lease rejects the change.
 
 **Connections:** USB, browser/TCP/Ethernet CLI, Companion binary command
 `0x42` (USB/BLE/TCP), and authorized LoRa CLI. `set freq` saves the frequency;
@@ -2080,7 +2088,9 @@ roles also clamp transmit power to the board's limit for that frequency. Like
 Station G2/G3 targets default to `off`.
 
 **Notes:**
-- The saved setting is applied immediately and persists across reboots.
+- The saved setting is applied when the radio is free and persists across reboots.
+  A busy radio keeps the change pending and applies it automatically; do not
+  repeat the command. Unsupported hardware and failed saves remain errors.
 - Periodic AGC resets restore the saved runtime setting; they do not replace it
   with the target's compile-time default.
 - Existing installations retain their previously saved value after an upgrade.
@@ -2160,7 +2170,9 @@ Station G2/G3 targets default to `off`.
   Radio-change replies and the Full Companion terminal status report any
   effective level/preamble adjustment. Effective preamble 64 or 128 appears
   only when the active tuple's physical wire preamble has that length.
-- The selected mode is applied immediately, persisted, and restored after reboot.
+- The selected mode is persisted and applied when the radio is free. Busy
+  requests apply automatically without another command and survive reboot.
+  The runtime-only RXEN diagnostic also waits for a safe gap but is not saved.
 
 ---
 

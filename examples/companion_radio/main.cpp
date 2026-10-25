@@ -2625,7 +2625,7 @@ void halt() {
     }
     if (companionWiFiBackgroundSuspended()) return;
 #ifdef WITH_WEBCONFIG
-    if (the_mesh.isWebConfigActiveOrStopping()) return;
+    if (the_mesh.isWebConfigWiFiTransitionActive()) return;
 #endif
     // Retain the pending reload until the operator's OTA/setup AP closes.
     if (!mesh::wifi::stationMutationAllowed()) return;

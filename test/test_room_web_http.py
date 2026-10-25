@@ -166,6 +166,10 @@ struct WebConfigServer {
   struct Terminal { bool running = false; struct { bool pending = false; } queue; };
   Terminal* _terminal = nullptr;
   bool _stopping = false, _stop_warned = false, _board_cmds_probed = true;
+  int _start_mode = MODE_OFF;
+  uint32_t _start_retry_at = 0, _start_retry_delay = 5000;
+  bool _start_retryable = false;
+  void serviceStartRetry(uint32_t) {}
   uint32_t _handler_refs = 0, _stop_warn_at = 0, _last_activity = 0;
   uint32_t _network_activity_until = 0;
   std::mutex mutex;

@@ -9,7 +9,7 @@ namespace mesh { namespace companion {
 
 // The radio owns RXEN admission and receiver restoration. This command adapter
 // does not stop RX, change preferences, or bypass an unread packet/other owner.
-template<typename Driver, typename ClearStats>
+template<bool AllowRfRxSet = true, typename Driver, typename ClearStats>
 bool handleRadioDiagnosticsCommand(Driver& driver, bool radio_available,
                                    const char* command, char* reply,
                                    size_t capacity, ClearStats clear_stats) {
@@ -39,6 +39,7 @@ bool handleRadioDiagnosticsCommand(Driver& driver, bool radio_available,
     }
     return true;
   }
+  if (!AllowRfRxSet) return false;
   static const char set_key[] = "set radio.rxps.rfrx_disabled";
   if (strncmp(command, set_key, sizeof(set_key) - 1) != 0
       || (command[sizeof(set_key) - 1] != 0

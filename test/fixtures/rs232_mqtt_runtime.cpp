@@ -132,6 +132,7 @@ class MQTTBridge : public AbstractBridge {
   bool running = false;
   bool stopping = false;
   bool network_suspended = false;
+  bool start_pending = false;
 public:
   inline static unsigned live = 0, fail_starts = 0;
   unsigned begins = 0, ends = 0, loops = 0, sent = 0, received = 0;
@@ -143,13 +144,16 @@ public:
   void setBuildDate(const char*) {}
   void setStatsSources(void*, void*, void*, void*) {}
   void begin() override {
+    if (stopping) { start_pending = true; return; }
     assert(filters); ++begins;
-    if (fail_starts) { --fail_starts; return; }
+    if (fail_starts) { --fail_starts; start_pending = true; return; }
     running = true;
+    start_pending = false;
     network_suspended = false;
   }
-  void end() override { ++ends; running = stopping = network_suspended = false; }
-  void requestStop() { stopping = running; }
+  void end() override { ++ends; running = stopping = network_suspended = start_pending = false; }
+  void requestStop() { start_pending = false; stopping = running; }
+  bool isStartPending() const { return start_pending; }
   bool isStopping() const { return stopping; }
   bool isRunning() const override { return running; }
   bool isNetworkSuspended() const { return network_suspended; }
@@ -159,7 +163,8 @@ public:
   }
   void loop() override {
     ++loops;
-    if (stopping) { ++ends; running = stopping = network_suspended = false; }
+    if (stopping) { ++ends; running = stopping = network_suspended = false; return; }
+    if (start_pending) begin();
   }
   void sendPacket(mesh::Packet* p) override { if (allow(p)) ++sent; }
   void onPacketReceived(mesh::Packet* p) { if (allow(p)) ++received; }
@@ -205,6 +210,7 @@ struct Callbacks {
   virtual bool setMqttBridgeState(bool) = 0;
   virtual bool requestMqttBridgeStop() = 0;
   virtual bool isMqttBridgeStopping() = 0;
+  virtual bool isMqttBridgeStartPending() = 0;
   virtual bool restartMqttBridge() = 0;
 };
 class MyMesh : public Callbacks {
@@ -418,10 +424,11 @@ int main() {
   expect_get(cli, "mqtt.stopping", "> on");
   const unsigned stopping_saves = cli.saves;
   cli.set("mqtt.enabled on", reply);
-  assert(strstr(reply, "MQTT is stopping") && !mesh._prefs.bridge_enabled);
-  assert(cli.saves == stopping_saves && !mesh.setMqttBridgeState(true));
+  assert(!strcmp(reply, "OK") && mesh._prefs.bridge_enabled);
+  assert(cli.saves == stopping_saves + 1 && mesh.isMqttBridgeStartPending());
   cli.set("mqtt.enabled off", reply); // a repeated request is accepted
   assert(strcmp(reply, "OK") == 0 && mesh.isMqttBridgeStopping());
+  assert(!mesh.isMqttBridgeStartPending());
   assert(mesh.isRs232BridgeRunning() && mesh.bridgesPreventSleep());
   const unsigned uart_tx_before = mesh.bridge->sent;
   mesh.routeRx(&packet); mesh.serviceBridges();

@@ -373,7 +373,7 @@ void finalizeHMAC(const uint8_t* key,size_t size,void* out,size_t n){{SHA256Base
    'void MyMesh::checkRxInactivityWatchdog()', 'void MyMesh::setTempRadioTiming(',
    'void MyMesh::updateAdvertTimer()', 'void MyMesh::updateFloodAdvertTimer()',
    'void MyMesh::queueSavedRadioApply()', 'bool MyMesh::applySavedRadioParams()',
-   'void MyMesh::refreshScheduledRadioState()', 'void MyMesh::processScheduledRadioSettings()',
+   'void MyMesh::refreshScheduledRadioState()', 'void MyMesh::processScheduledRadioSettings(bool tx_gap)',
    'void MyMesh::applyTempRadioParams(', 'bool MyMesh::scheduleNormalRadio()',
    'void MyMesh::clearScheduledRadioSetting(', 'int MyMesh::findFreeScheduledRadioSlot() const',
    'int MyMesh::countScheduledRadioSettings(', 'bool MyMesh::scheduledRadioConflicts(',

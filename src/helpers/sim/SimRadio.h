@@ -87,6 +87,11 @@ public:
   void resetStats() { n_recv = n_sent = n_recv_errors = 0; }
   bool setRxBoostedGainMode(bool /*enabled*/) { return false; }
   bool supportsRxBoostedGainMode() const { return false; }
+  mesh::RadioParamApplyResult trySetRxBoostedGainMode(bool) { return mesh::RadioParamApplyResult::FAILED; }
+  mesh::RadioParamApplyResult trySetRxPowerSaving(bool enabled, uint32_t, uint32_t) {
+    return enabled ? mesh::RadioParamApplyResult::FAILED : mesh::RadioParamApplyResult::APPLIED;
+  }
+  mesh::RadioParamApplyResult trySetRxPowerSavingRfRxDisabled(bool) { return mesh::RadioParamApplyResult::FAILED; }
   bool getRxBoostedGainMode() const { return false; }
   uint32_t getRxPsWatchdogSoftCount() const { return 0; }
   uint32_t getRxPsWatchdogHardCount() const { return 0; }

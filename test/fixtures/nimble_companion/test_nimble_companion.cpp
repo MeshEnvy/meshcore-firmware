@@ -101,6 +101,36 @@ static void authenticate(SerialBLEInterface& interface, NimBLEConnInfo& info) {
   interface.checkRecvFrame(discarded);
 }
 
+static void test_advertising_restart_retries_and_disable_cancels() {
+  reset(); SerialBLEInterface interface;
+  assert(interface.begin("MeshCore-", "retry", 123456));
+  interface.enable();
+  NimBLEConnInfo info; authenticate(interface, info);
+  auto* server = NimBLEDevice::server.get();
+  server->connected = false;
+  server->callbacks->onDisconnect(server, info, 0);
+  uint8_t frame[MAX_FRAME_SIZE]; interface.checkRecvFrame(frame);
+  failure = "advertise";
+  const auto attempts = std::count(calls.begin(), calls.end(), "advertise");
+  test_millis += 1000; interface.checkRecvFrame(frame);
+  assert(!server->advertising.active);
+  assert(std::count(calls.begin(), calls.end(), "advertise") == attempts + 1);
+  for (unsigned i = 0; i < 100; ++i) interface.checkRecvFrame(frame);
+  assert(std::count(calls.begin(), calls.end(), "advertise") == attempts + 1);
+  failure.clear(); test_millis += 999; interface.checkRecvFrame(frame);
+  assert(!server->advertising.active);
+  ++test_millis; interface.checkRecvFrame(frame);
+  assert(server->advertising.active);
+  assert(std::count(calls.begin(), calls.end(), "advertise") == attempts + 2);
+  authenticate(interface, info);
+  server->connected = false; server->callbacks->onDisconnect(server, info, 0);
+  interface.checkRecvFrame(frame); interface.disable();
+  const auto before_off = std::count(calls.begin(), calls.end(), "advertise");
+  test_millis += 10000; interface.checkRecvFrame(frame);
+  assert(std::count(calls.begin(), calls.end(), "advertise") == before_off);
+  NimBLEDevice::deinit(true);
+}
+
 static void test_authentication_and_bond_lifecycle() {
   for (unsigned missing = 0; missing < 3; ++missing) {
     reset(); SerialBLEInterface interface;
@@ -493,6 +523,7 @@ int main() {
   test_identity_modes();
   test_pairing_wake_for_random_and_saved_pins();
   test_startup_failures();
+  test_advertising_restart_retries_and_disable_cancels();
   test_authentication_and_bond_lifecycle();
   test_connection_parameters_only_on_current_authenticated_transition();
   test_real_transport_frames();

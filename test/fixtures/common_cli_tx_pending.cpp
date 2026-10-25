@@ -82,7 +82,8 @@ public:
   uint32_t _tx_power_retry_at = 0;
   bool _common_save_result_known = false;
   bool _common_save_succeeded = false;
-  struct Profiles { void loop() {} } _radio_profiles;
+  struct Profiles { void loop() {} void servicePendingTuning() {} } _radio_profiles;
+  Profiles& radioProfiles() { return _radio_profiles; }
   struct MorseReply { void complete(const void*) {} } _morse_reply;
   MorseReply& morseReply() { return _morse_reply; }
   CommonCLI() { callbacks.owner = this; }
@@ -91,6 +92,7 @@ public:
   void loop();
   void applyAndSaveTxPower(int8_t, char*);
   void servicePendingTxPower();
+  void servicePendingRxSettings() {}
   bool trySavePrefs(PrefsSaveRouting::Scope scope = PrefsSaveRouting::Scope::Common);
   void command(const char* text, char* reply) {
     if (!strncmp(text, "set ", 4)) {

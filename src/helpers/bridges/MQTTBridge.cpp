@@ -188,6 +188,12 @@ static bool mqttStationWiFiMutationAllowed() {
 
 void MQTTBridge::beginWiFiStation() {
   if (!mqttStationWiFiMutationAllowed()) return;
+  if (_wifi_credentials_changed) {
+    WiFi.disconnect();
+    _wifi_credentials_changed = false;
+    _last_wifi_reconnect_attempt = millis();
+    _wifi_reconnect_backoff_attempt = 0;
+  }
   mesh::wifi::beginStation(_wifi_ssid, _wifi_password);
 }
 
@@ -209,6 +215,10 @@ bool MQTTBridge::prepareWiFiCredentials() {
   } else if (state != mesh::wifi::CredentialState::Ready) {
     return _wifi_configured = false;
   }
+  // Only begin(), after the old worker's stop barrier, replaces this snapshot.
+  // Keep a changed tuple armed across allocation failures until Core 0 joins it.
+  if (_wifi_ssid[0] && (strcmp(_wifi_ssid, credentials.ssid)
+      || strcmp(_wifi_password, credentials.password))) _wifi_credentials_changed = true;
   memcpy(_wifi_ssid, credentials.ssid, sizeof(_wifi_ssid));
   memcpy(_wifi_password, credentials.password, sizeof(_wifi_password));
   _wifi_power_save = credentials.power_save;
@@ -1043,8 +1053,12 @@ void MQTTBridge::releaseRuntimeBuffers() {
 // ---------------------------------------------------------------------------
 void MQTTBridge::begin() {
 #if defined(ESP32)
-  if (mesh::wireless::control().blocked(mesh::wireless::WiFi)) return;
+  if (mesh::wireless::control().blocked(mesh::wireless::WiFi)) {
+    _start_requested = false;
+    return;
+  }
 #endif
+  _start_requested = true;
   MQTT_DEBUG_PRINTLN("Initializing MQTT Bridge...");
 
   // Idempotent start: a second begin() would re-run allocation and re-create
@@ -1053,6 +1067,7 @@ void MQTTBridge::begin() {
     MQTT_DEBUG_PRINTLN("MQTT Bridge running or stopping - begin() ignored");
     return;
   }
+  _start_retry_at = millis() + 5000;
 
   cancelNtpRefresh();
   _ntp_refresh_retry_at = 0;
@@ -1131,6 +1146,7 @@ void MQTTBridge::begin() {
 #endif
   if (!wifi_configured) {
     MQTT_DEBUG_PRINTLN("MQTT Bridge initialization skipped - WiFi credentials not configured");
+    _start_requested = false;
     return;
   }
 
@@ -1341,6 +1357,8 @@ void MQTTBridge::begin() {
 // requestStop() - signal only; worker retains ownership until acknowledgment
 // ---------------------------------------------------------------------------
 void MQTTBridge::requestStop() {
+  _start_requested = false;
+  _start_retry_at = 0;
   // A repeated request must not clear an acknowledgment or restart its budget.
   if (!_initialized || _lifecycle.isStopInProgress()) return;
 
@@ -1382,6 +1400,8 @@ void MQTTBridge::requestStop() {
 // end() - synchronous barrier for OTA and other ownership transfers
 // ---------------------------------------------------------------------------
 void MQTTBridge::end() {
+  _start_requested = false;
+  _start_retry_at = 0;
   MQTT_DEBUG_PRINTLN("Stopping MQTT Bridge...");
   if (!_initialized) return;
   requestStop();  // Joins an existing request without re-delivering its signal.
@@ -1401,6 +1421,12 @@ void MQTTBridge::end() {
   }
 #endif
   finishStopped();
+}
+
+void MQTTBridge::requestRestart() {
+  requestStop();
+  _start_requested = true;
+  _start_retry_at = millis() + 1000;
 }
 
 void MQTTBridge::finishStopped() {
@@ -1601,7 +1627,7 @@ bool MQTTBridge::initializeWiFiInTask() {
   // the MQTT task's first DNS lookup (getaddrinfo fails until WiFi/DNS recovers).
   // When already connected, the deferred slot setup still fires in mqttTaskLoop()
   // because _ntp_synced persists across end() (only _slots_setup_done is reset).
-  if (WiFi.status() != WL_CONNECTED) {
+  if (WiFi.status() != WL_CONNECTED || (_manage_wifi && _wifi_credentials_changed)) {
     if (_manage_wifi) {
       beginWiFiStation();
     }
@@ -3592,6 +3618,7 @@ bool MQTTBridge::handleWiFiConnection(unsigned long now) {
   // An AP can start after this worker initialized. Defer channel enforcement,
   // reconnect/disconnect and radio power changes until that owner releases it.
   if (!mqttStationWiFiMutationAllowed()) return false;
+  if (_manage_wifi && _wifi_credentials_changed) beginWiFiStation();
 #endif
   wl_status_t current_wifi_status = WiFi.status();
 #ifdef ESP_PLATFORM
@@ -3781,8 +3808,6 @@ bool MQTTBridge::isSlotReady(int index, char* reason_buf, size_t reason_size) co
 // loop() - Core 1 stop reaping on ESP32; cooperative processing elsewhere
 // ---------------------------------------------------------------------------
 void MQTTBridge::loop() {
-  if (!_initialized) return;
-
   #ifdef ESP_PLATFORM
   // Poll only: a slow TLS teardown must not stall radio/UART forwarding or
   // force-delete the worker. Only end(), the synchronous OTA barrier, owns
@@ -3791,9 +3816,16 @@ void MQTTBridge::loop() {
       && _stop_acked.load(std::memory_order_acquire)) {
     _lifecycle.onTaskStopped();
     finishStopped();
+    return;  // Let the owner refresh committed credentials before a restart.
   }
+  if (!_initialized && _start_requested
+      && int32_t(millis() - _start_retry_at) >= 0) begin();
   return;
   #else
+  if (!_initialized) {
+    if (_start_requested && int32_t(millis() - _start_retry_at) >= 0) begin();
+    return;
+  }
   unsigned long now = millis();
   const bool wifi_just_connected = handleWiFiConnection(now);
   if (wifi_just_connected

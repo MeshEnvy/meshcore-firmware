@@ -72,6 +72,9 @@ class MQTTAccessPointOwnershipTest(unittest.TestCase):
     def test_cold_start_and_repeated_restart_register_events_once(self):
         self.run_fixture("cold_and_restart")
 
+    def test_changed_credentials_replace_connected_station_after_ownership_release(self):
+        self.run_fixture("changed_credentials")
+
     def test_sdk_read_and_station_enable_failures_defer_and_retry(self):
         self.run_fixture("failures")
 

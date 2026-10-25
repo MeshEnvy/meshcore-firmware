@@ -45,11 +45,25 @@ struct NodePrefs {
 };
 struct Callbacks {
  unsigned calls=0;
+ bool supportsRxPowerSaving() const { return false; }
  bool setRxPowerSaving(bool on,uint32_t,uint32_t){++calls;return !on;}
 };
 struct CommonCLI {
  NodePrefs* _prefs; Callbacks* _callbacks; unsigned saves=0;
  CommonCLI(NodePrefs& p,Callbacks& c):_prefs(&p),_callbacks(&c){}
+ static constexpr uint8_t RxPowerSaving = 2;
+ uint8_t _rx_settings_pending = 0;
+ uint32_t _rx_settings_retry_at = 0;
+ mesh::RadioParamApplyResult applyRxSetting(uint8_t) {
+   return _callbacks->setRxPowerSaving(_prefs->rx_powersaving_enabled,
+       _prefs->rx_ps_rx_us, _prefs->rx_ps_sleep_us)
+       ? mesh::RadioParamApplyResult::APPLIED : mesh::RadioParamApplyResult::FAILED;
+ }
+ bool saveRxSetting(uint8_t, mesh::RadioParamApplyResult result, char*) {
+   if (result == mesh::RadioParamApplyResult::FAILED) return false;
+   ++saves; return true;
+ }
+ void restoreRxSetting(uint8_t, mesh::RadioParamApplyResult, uint8_t, uint32_t) {}
  static bool calculateRxPowerSavingLevel(uint32_t,uint8_t,float,uint32_t,uint32_t*,uint32_t*);
  static bool recalculateRxPowerSavingFromLevel(NodePrefs*);
  void savePrefs(){++saves;}
@@ -177,7 +191,7 @@ int main() {
         common = (ROOT / 'src/helpers/CommonCLI.cpp').read_text()
         setter = body(common, 'if (memcmp(config, "radio.rxps ", 11) == 0)')
         if mutate:
-            guard = body(setter, 'if (!WRAPPER_CLASS::SupportsRxPowerSaving)')
+            guard = body(setter, 'if (!_callbacks->supportsRxPowerSaving()')
             setter = setter.replace(guard, '', 1)
         code = HARNESS.replace('@SETTER@', setter)
         code = code.replace('@GETTER@', body(common, 'if (strcmp(config, "radio.rxps.config") == 0)'))

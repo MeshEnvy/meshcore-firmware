@@ -26,6 +26,9 @@ HARNESS = r'''
 #include <helpers/radiolib/NoiseFloorEstimator.h>
 #include <helpers/radiolib/RXPowerSaving.h>
 #include <helpers/TelemetryHistoryConfig.h>
+#ifndef MESH_RECEIVE_HARNESS_HAS_DISPATCHER
+namespace mesh { enum class RadioParamApplyResult : uint8_t { APPLIED, BUSY, FAILED }; }
+#endif
 #define STATE_IDLE 0
 #define STATE_RX 1
 #define STATE_TX_WAIT 3
@@ -85,7 +88,8 @@ struct RadioLibWrapper {
   uint32_t _nf_published_at[2] = {}, _nf_published_generation[2] = {};
   uint8_t _nf_published_valid = 0;
   bool _cad_enabled = true, packet = false, busy = false, inject_arm_irq = false;
-  bool _rx_boosted_gain_valid = false, _cur_rx_boosted_gain = false, gain_apply_success = true;
+  bool _rx_boosted_gain_valid = false, _rx_boosted_gain_applied = false;
+  bool _cur_rx_boosted_gain = false, gain_apply_success = true, physical_gain = false;
   bool _wd_last_busy = false;
   uint8_t _startrx_fails = 0, _rx_mode_failures = 0;
   uint32_t _rx_retry_at = 0;
@@ -125,10 +129,13 @@ struct RadioLibWrapper {
   unsigned long getEstAirtimeFor(int) { return 10; }
   void stopReceiveDutyCycle() { ++stops; _rx_ps_armed = false; }
   void doResetAGC() { ++agc_resets; }
-  bool applyRxBoostedGainMode(bool) { ++gain_changes; return gain_apply_success; }
+  bool applyRxBoostedGainMode(bool enabled) {
+    ++gain_changes; physical_gain = enabled; return gain_apply_success;
+  }
   uint8_t beginReconfigure() { return 0; } // counted SPI/RX boundaries are separate
   void endReconfigure(bool) {}
   bool supportsRxPowerSaving() const { return true; }
+  bool supportsRxBoostedGainMode() const { return true; }
   int startReceiveMode() {
     ++arms;
     if (_nf_calib_active) ++calibration_arms;
@@ -146,7 +153,9 @@ struct RadioLibWrapper {
   bool isChannelActive();
   bool isReceivingPassive(int);
   bool setRxPowerSaving(bool, uint32_t, uint32_t);
+  mesh::RadioParamApplyResult trySetRxPowerSaving(bool, uint32_t, uint32_t);
   bool setRxBoostedGainMode(bool);
+  mesh::RadioParamApplyResult trySetRxBoostedGainMode(bool);
   void startRecv();
   void checkReceiveMode(uint32_t);
   void loop();
@@ -343,12 +352,33 @@ static void periodicRefreshContracts() {
 }
 
 static void agcAdmissionContracts() {
+  {
+    using Result = mesh::RadioParamApplyResult;
+    RadioLibWrapper w;
+    w._rx_boosted_gain_valid = w._rx_boosted_gain_applied = true;
+    w.gain_apply_success = false;
+    assert(w.trySetRxBoostedGainMode(true) == Result::FAILED);
+    assert(!w._rx_boosted_gain_applied && w._rx_boosted_gain_valid && !w._cur_rx_boosted_gain);
+    assert(w.physical_gain); // Failure deliberately models a partial chip write.
+    const auto failed_writes = w.gain_changes;
+    w.gain_apply_success = true;
+    assert(w.trySetRxBoostedGainMode(false) == Result::APPLIED);
+    assert(w._rx_boosted_gain_applied && w._rx_boosted_gain_valid && !w._cur_rx_boosted_gain);
+    assert(!w.physical_gain);
+    assert(w.gain_changes == failed_writes + 1);
+    const auto repaired_writes = w.gain_changes;
+    assert(w.trySetRxBoostedGainMode(false) == Result::APPLIED);
+    assert(w.gain_changes == repaired_writes); // Verified matching gain is a true no-op.
+    w._cw_active = true;
+    assert(w.trySetRxBoostedGainMode(false) == Result::BUSY);
+    assert(w.gain_changes == repaired_writes);
+  }
   unsigned cases = 0;
   for (unsigned mode : {0U, 1U, 2U}) for (unsigned owned : {0U, 1U, 2U, 3U, 4U}) {
     if (mode == 1 && owned == 1) continue; // known RXPS sleep has an explicit wake path
     RadioLibWrapper w; selectMode(w, mode);
     w._rx_ps_armed = mode == 1;
-    w._rx_boosted_gain_valid = w._cur_rx_boosted_gain = true;
+    w._rx_boosted_gain_valid = w._rx_boosted_gain_applied = w._cur_rx_boosted_gain = true;
     w._nf_last_calib = now_ms;
     w._nf_calib_deadline = now_ms + 800;
     w._nf_sample_from = now_ms + NF_CALIB_SETTLE_MS;
@@ -416,7 +446,7 @@ static void agcAdmissionContracts() {
   for (bool legacy : {false, true}) {
     RadioLibWrapper w; selectMode(w, mode);
     w._rx_ps_armed = mode == 1 && !active_window;
-    w._rx_boosted_gain_valid = w._cur_rx_boosted_gain = true;
+    w._rx_boosted_gain_valid = w._rx_boosted_gain_applied = w._cur_rx_boosted_gain = true;
     w._noise_floor_valid = primary; w._noise_floor_secondary_valid = secondary;
     w._nf_calib_active = active_window; w._nf_last_calib = now_ms;
     w._nf_calib_deadline = now_ms + 800;
@@ -702,6 +732,8 @@ def transition_harness(source=None):
     names = [('int16_t', 'performChannelScanWithTimeout'), ('bool', 'isPacketPendingOrReceiving'),
              ('bool', 'isChannelActive'), ('bool', 'isReceivingPassive'),
              ('bool', 'setRxPowerSaving'), ('bool', 'setRxBoostedGainMode'),
+             ('mesh::RadioParamApplyResult', 'trySetRxPowerSaving'),
+             ('mesh::RadioParamApplyResult', 'trySetRxBoostedGainMode'),
              ('void', 'startRecv'), ('void', 'checkReceiveMode'),
              ('void', 'loop'), ('void', 'triggerNoiseFloorCalibrate'),
              ('void', 'requestRestartRecv'), ('void', 'noiseFloorCalibCheck'),
@@ -886,6 +918,7 @@ int main() {
 #include <initializer_list>
 #include <helpers/CLICommandUtils.h>
 #include <helpers/radiolib/RXPowerSaving.h>
+namespace mesh { enum class RadioParamApplyResult : uint8_t { APPLIED, BUSY, FAILED }; }
 struct NodePrefs {
   uint8_t rx_powersaving_enabled = 1, rx_ps_level = 6, rx_ps_preamble = 32, sf = 8;
   uint32_t rx_ps_rx_us = 40000, rx_ps_sleep_us = 32000;
@@ -895,11 +928,25 @@ struct Callbacks {
   bool accept = true;
   unsigned calls = 0;
   bool setRxPowerSaving(bool, uint32_t, uint32_t) { ++calls; return accept; }
+  bool supportsRxPowerSaving() const { return true; }
 };
 struct CommonCLI {
   NodePrefs* _prefs;
   Callbacks* _callbacks;
   unsigned saves = 0;
+  static constexpr uint8_t RxPowerSaving = 2;
+  uint8_t _rx_settings_pending = 0;
+  uint32_t _rx_settings_retry_at = 0;
+  mesh::RadioParamApplyResult applyRxSetting(uint8_t) {
+    return _callbacks->setRxPowerSaving(_prefs->rx_powersaving_enabled,
+        _prefs->rx_ps_rx_us, _prefs->rx_ps_sleep_us)
+        ? mesh::RadioParamApplyResult::APPLIED : mesh::RadioParamApplyResult::FAILED;
+  }
+  bool saveRxSetting(uint8_t, mesh::RadioParamApplyResult result, char*) {
+    if (result == mesh::RadioParamApplyResult::FAILED) return false;
+    ++saves; return true;
+  }
+  void restoreRxSetting(uint8_t, mesh::RadioParamApplyResult, uint8_t, uint32_t) {}
   void savePrefs() { ++saves; }
   bool calculateRxPowerSavingLevel(uint32_t, uint8_t, float, uint32_t, uint32_t*, uint32_t*);
   void set(const char* config, char* reply);

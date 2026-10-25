@@ -86,7 +86,8 @@ struct RadioLibWrapper {
     bool _rx_ps_enabled = false, _rx_ps_armed = false, _rx_hold_continuous = false;
     bool _rx_ps_continuous_fallback = false, _nf_calib_active = false;
     bool _nf_refresh_requested = false;
-    bool _rx_boosted_gain_valid = true, _cur_rx_boosted_gain = true;
+    bool _rx_boosted_gain_valid = true, _rx_boosted_gain_applied = true;
+    bool _cur_rx_boosted_gain = true;
     bool _noise_floor_valid = true, _noise_floor_secondary_valid = true;
     bool _wd_last_busy = false;
     uint8_t _startrx_fails = 0, _irq_probe_failures = 0;

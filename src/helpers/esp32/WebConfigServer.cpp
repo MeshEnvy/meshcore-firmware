@@ -851,6 +851,7 @@ static bool scanSetupNetworks() {
 }
 
 bool WebConfigServer::startSetupMode(char reply[]) {
+  _start_retryable = false;
   if (mesh::wireless::control().blocked(mesh::wireless::WiFi)) {
     strcpy(reply, "Error: WiFi disabled; use set wifi on or set 2.4ghz on");
     return false;
@@ -944,6 +945,7 @@ bool WebConfigServer::startSetupMode(char reply[]) {
     if (!promote_lan) stopOwnedWiFiRadio();
     refreshNetworkPowerHold(millis());
     strcpy(reply, "Err: failed to start AP");
+    _start_retryable = true;
     return false;
   }
   delay(100);  // let the AP netif settle before reading its IP
@@ -1028,6 +1030,7 @@ bool WebConfigServer::beginSavedStation(uint32_t now) {
 }
 
 bool WebConfigServer::startAutoMode(char reply[]) {
+  _start_retryable = false;
   if (mesh::wireless::control().blocked(mesh::wireless::WiFi)) {
     strcpy(reply, "Error: WiFi disabled; use set wifi on or set 2.4ghz on");
     return false;
@@ -1042,6 +1045,7 @@ bool WebConfigServer::startAutoMode(char reply[]) {
   const bool manages_station = _owns_wifi || !_runtime_wifi_ownership_managed;
   if (manages_station && !beginSavedStation(millis())) {
     strcpy(reply, "Err: failed to reset WiFi station protocol");
+    _start_retryable = true;
     return false;
   }
   _mode = MODE_CONNECTING;
@@ -1051,6 +1055,56 @@ bool WebConfigServer::startAutoMode(char reply[]) {
   }
   snprintf(reply, 160, "WebConfig connecting to '%s'; use 'get webui' for its IP", _wifi_ssid);
   return true;
+}
+
+bool WebConfigServer::requestStart(bool force_ap, char reply[]) {
+  _start_retryable = false;
+  if (mesh::wireless::control().blocked(mesh::wireless::WiFi)) {
+    _start_mode = MODE_OFF;
+    strcpy(reply, "Error: WiFi disabled; use set wifi on or set 2.4ghz on");
+    return false;
+  }
+  if ((force_ap || !_wifi_ssid[0])
+      && !mesh::wifi::accessPointCompatibleWithLongRange()) {
+    _start_mode = MODE_OFF;
+    strcpy(reply, "Error: stop ESP-NOW before starting a setup AP");
+    return false;
+  }
+  const Mode requested = force_ap ? MODE_SETUP : MODE_CONNECTING;
+  if (!_stopping) {
+    if (force_ap ? startSetupMode(reply) : startAutoMode(reply)) {
+      _start_mode = MODE_OFF;
+      _start_retry_at = 0;
+      _start_retry_delay = 5000;
+      return true;
+    }
+    if (!_start_retryable) {
+      _start_mode = MODE_OFF;
+      return false;
+    }
+  }
+  _start_mode = requested;
+  _start_retry_at = WebConfigBatch::scheduleAt(millis(), _start_retry_delay);
+  if (_start_retry_delay < 60000) _start_retry_delay *= 2;
+  if (_start_retry_delay > 60000) _start_retry_delay = 60000;
+  strcpy(reply, "OK - WebConfig start pending; retrying automatically");
+  return true;
+}
+
+void WebConfigServer::requestRestart() {
+  if (!isRunning() && !isStartPending()) return;
+  requestStop();
+  _start_mode = MODE_CONNECTING;
+  _start_retry_delay = 5000;
+  _start_retry_at = WebConfigBatch::scheduleAt(millis(), 1000);
+}
+
+void WebConfigServer::serviceStartRetry(uint32_t now) {
+  if (!isStartPending() || _stopping
+      || !WebConfigBatch::deadlineReached(now, _start_retry_at)) return;
+  char reply[160];
+  requestStart(_start_mode == MODE_SETUP, reply);
+  mesh::usbDebugPort().println(reply);
 }
 
 bool WebConfigServer::prepareStationOwner() {
@@ -1121,6 +1175,9 @@ void WebConfigServer::createServer() {
 }
 
 void WebConfigServer::requestStop() {
+  _start_mode = MODE_OFF;
+  _start_retry_at = 0;
+  _start_retry_delay = 5000;
   if (_mode == MODE_OFF && !_stopping) return;
   detachRoutes();
   if (_server) _server->end();
@@ -1133,6 +1190,8 @@ void WebConfigServer::requestStop() {
 }
 
 bool WebConfigServer::stopForOTA(char reply[]) {
+  _start_mode = MODE_OFF;
+  _start_retry_at = 0;
   if (!isRunning() && !isStopping()) return true;
   // Keep a STA interface alive while removing our setup AP. Switching the
   // last interface off and immediately creating the OTA AP races ESP32 netif
@@ -1292,6 +1351,7 @@ void WebConfigServer::tick(uint32_t now) {
     }
     return;
   }
+  serviceStartRetry(now);
   if (_mode == MODE_OFF) return;
 
   if (!_board_cmds_probed) probeBoardCommands();
@@ -1345,6 +1405,10 @@ void WebConfigServer::tick(uint32_t now) {
       char ignored[160];
       if (startSetupMode(ignored)) {
         _retry_saved_wifi_in_setup = retry_saved_wifi;
+      } else if (_start_retryable) {
+        // Keep automatic recovery alive if the AP netif was temporarily busy.
+        _mode = MODE_CONNECTING;
+        _connect_deadline = WebConfigBatch::scheduleAt(millis(), 30000);
       }
       mesh::usbDebugPort().println(ignored);
     }

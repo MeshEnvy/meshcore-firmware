@@ -668,6 +668,9 @@ public:
   // Ownership barriers continue to use the synchronous state setter.
   virtual bool requestMqttBridgeStop() { return setMqttBridgeState(false); }
   virtual bool isMqttBridgeStopping() { return false; }
+#ifdef WITH_MQTT_BRIDGE
+  virtual bool isMqttBridgeStartPending() { return false; }
+#endif
   virtual bool setEspNowBridgeState(bool enable) { return setBridgeState(enable); }
   virtual bool setRs232BridgeState(bool enable) { return setBridgeState(enable); }
   virtual bool restartMqttBridge() { return restartBridge(); }
@@ -829,10 +832,20 @@ public:
   virtual bool setRxBoostedGain(bool enable) {
     return false; // CommonCLI reports unsupported if not overridden by wrapper
   };
+  virtual bool supportsRxBoostedGain() const { return false; }
+  virtual mesh::RadioParamApplyResult trySetRxBoostedGain(bool enable) {
+    return setRxBoostedGain(enable) ? mesh::RadioParamApplyResult::APPLIED
+                                  : mesh::RadioParamApplyResult::FAILED;
+  }
 
   #if defined(USE_LR2021)
   virtual bool configSideDetectors(const uint8_t sideDetSFs[], uint8_t num, float bw) {
     return false; // Override in wrapper
+  }
+  virtual mesh::RadioParamApplyResult tryConfigSideDetectors(
+      const uint8_t sideDetSFs[], uint8_t num, float bw) {
+    return configSideDetectors(sideDetSFs, num, bw) ? mesh::RadioParamApplyResult::APPLIED
+                                                 : mesh::RadioParamApplyResult::FAILED;
   }
   #endif
 
@@ -861,11 +874,21 @@ public:
   virtual bool setRxPowerSaving(bool enable, uint32_t rx_us, uint32_t sleep_us) {
     return !enable;
   };
+  virtual bool supportsRxPowerSaving() const { return false; }
+  virtual mesh::RadioParamApplyResult trySetRxPowerSaving(
+      bool enable, uint32_t rx_us, uint32_t sleep_us) {
+    return setRxPowerSaving(enable, rx_us, sleep_us) ? mesh::RadioParamApplyResult::APPLIED
+                                                  : mesh::RadioParamApplyResult::FAILED;
+  }
 
   virtual bool supportsRxPowerSavingRfRxDisable() const { return false; }
   virtual bool setRxPowerSavingRfRxDisabled(bool disabled) {
     (void)disabled;
     return false;
+  }
+  virtual mesh::RadioParamApplyResult trySetRxPowerSavingRfRxDisabled(bool disabled) {
+    return setRxPowerSavingRfRxDisabled(disabled) ? mesh::RadioParamApplyResult::APPLIED
+                                               : mesh::RadioParamApplyResult::FAILED;
   }
   virtual bool isRxPowerSavingRfRxDisabled() const { return false; }
 
@@ -950,6 +973,12 @@ class CommonCLI {
   bool _common_save_succeeded = false;
   bool _tx_power_pending = false;
   uint32_t _tx_power_retry_at = 0;
+  enum RxSetting : uint8_t {
+    RxGain = 1, RxPowerSaving = 2, RxSideDetectors = 4, RxRfRx = 8,
+    RxPendingMask = 15, RxRfRxDisabled = 128
+  };
+  uint8_t _rx_settings_pending = 0;
+  uint32_t _rx_settings_retry_at = 0;
   uint32_t _prefs_save_failures = 0;
   mesh::RadioProfileCLI _radio_profiles;
 #if MESH_ENABLE_TX_BEACONS
@@ -971,6 +1000,10 @@ class CommonCLI {
   bool trySavePrefs(
       PrefsSaveRouting::Scope scope = PrefsSaveRouting::Scope::Common);
   void applyAndSaveTxPower(int8_t power, char* reply);
+  mesh::RadioParamApplyResult applyRxSetting(uint8_t setting);
+  bool saveRxSetting(uint8_t setting, mesh::RadioParamApplyResult result, char* reply);
+  void restoreRxSetting(uint8_t setting, mesh::RadioParamApplyResult result,
+                        uint8_t previous_pending, uint32_t previous_retry_at);
   bool applyAndSaveAdcMultiplier(float multiplier, char* reply, size_t capacity);
   bool saveObserverPrefs();
   void loadPrefsInt(FILESYSTEM* _fs, const char* filename);
@@ -1063,6 +1096,11 @@ public:
   bool hasActiveUserGpioTimer() const;
   bool hasPendingTxPower() const { return _tx_power_pending; }
   void servicePendingTxPower();
+  bool hasPendingRadioSettings() const {
+    return _tx_power_pending || (_rx_settings_pending & RxPendingMask) != 0
+        || _radio_profiles.hasPendingTuning();
+  }
+  void servicePendingRxSettings();
   void handleCommand(uint32_t sender_timestamp, char* command, char* reply);
   mesh::MainBoard* getBoard() { return _board; }
   uint8_t buildAdvertData(uint8_t node_type, uint8_t* app_data);

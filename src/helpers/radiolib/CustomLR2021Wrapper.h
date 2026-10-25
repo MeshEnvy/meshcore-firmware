@@ -131,19 +131,24 @@ public:
   }
 
   bool configSideDetectors(const uint8_t* sideDetSFs, uint8_t num, float bw) override {
-    if (_profiles.enabled()) return false;
+    return tryConfigSideDetectors(sideDetSFs, num, bw) == mesh::RadioParamApplyResult::APPLIED;
+  }
+
+  mesh::RadioParamApplyResult tryConfigSideDetectors(const uint8_t* sideDetSFs, uint8_t num, float bw) override {
+    using Result = mesh::RadioParamApplyResult;
+    if (_profiles.enabled()) return Result::FAILED;
     const uint8_t primary_sf = getSpreadingFactor();
     float active_bw = _params_valid ? _cur_bw : ((CustomLR2021 *)_radio)->getBandwidthKhz();
     if (active_bw <= 0.0f) active_bw = bw;
     if (!mesh::lr2021::validateSideDetectorSFs(sideDetSFs, num, primary_sf, active_bw)) {
-      return false;
+      return Result::FAILED;
     }
 
     LR2021LoRaSideDetector_t tmp[mesh::lr2021::MAX_SIDE_DETECTORS] = {};
     buildSideDetectorConfig(sideDetSFs, num, active_bw, tmp);
 
     uint8_t resume_rx = beginReconfigure();
-    if (resume_rx > 1) return false;
+    if (resume_rx > 1) return resume_rx == 2 ? Result::BUSY : Result::FAILED;
 
     int16_t status = ((CustomLR2021 *)_radio)->setSideDetector(num > 0 ? tmp : nullptr, num);
     MESH_DEBUG_PRINTLN("setSideDetector() returned %d", status);
@@ -165,7 +170,7 @@ public:
     }
 
     endReconfigure(resume_rx);
-    return status == RADIOLIB_ERR_NONE;
+    return status == RADIOLIB_ERR_NONE ? Result::APPLIED : Result::FAILED;
   }
 
 protected:

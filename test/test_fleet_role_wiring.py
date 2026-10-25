@@ -65,7 +65,7 @@ struct CachedSensors {
     ++reads; lat = latitude; lon = longitude; return valid;
   }
 };
-struct Profiles {};
+struct Profiles {void servicePendingTuning(){}};
 struct Fleet {
   unsigned received = 0, serviced = 0;
   bool scoped = false;
@@ -88,6 +88,7 @@ struct Fleet {
 struct CLI {
   Fleet fleet;
   void servicePendingTxPower() {}
+  void servicePendingRxSettings() {}
   Profiles profiles;
   struct NoMorseReply {
     void complete(const void*) {}
@@ -144,6 +145,7 @@ class Room : public mesh::Mesh {
   void onGroupPacketRecv(mesh::Packet*);
   void serviceFleet();
 #if MESH_ENABLE_FLEET_CONTROL
+  void servicePendingPrimaryRadioSettings(bool) {}
   void onSendComplete(mesh::Packet*) override;
   void onSendFail(mesh::Packet*) override;
   void onRadioProfileCopyQueued(mesh::Packet*, const mesh::Packet*, uint8_t) override;

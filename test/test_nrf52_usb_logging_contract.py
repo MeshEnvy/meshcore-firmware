@@ -674,10 +674,8 @@ int main() {
         self.assertIn(
             "_delayed_replies.request.route == route", session_operations
         )
-        self.assertIn(
-            "command_radio_reply_route == route", session_operations
-        )
-        self.assertIn("cancelPendingRadioParamApply();", session_operations)
+        self.assertNotIn("cancelPendingRadioParamApply", session_operations)
+        self.assertNotIn("saved_radio_apply_pending = false", session_operations)
         self.assertIn("if (_cli_rescue)", session_operations)
         self.assertIn(
             "memset(cli_command, 0, sizeof(cli_command));",
@@ -712,16 +710,12 @@ int main() {
         self.assertIn("serial->writeFrameToRoute(reply.route,", service)
         self.assertNotRegex(service, r"serial->writeFrame\(")
         self.assertNotIn("_serial->writeFrame(out_frame, i);", pending_writer)
-        self.assertIn(
-            "command_radio_reply_route = _serial->captureReplyRoute();",
-            mesh_source,
-        )
-        self.assertIn(
-            "isReplyRouteAvailable(command_radio_reply_route)", mesh_source
-        )
-        self.assertIn(
-            "isReplyRouteWriteBusy(command_radio_reply_route)", mesh_source
-        )
+        # Settings now acknowledge a durable target immediately. A host
+        # reconnect must not discard it or route an unrelated late reply.
+        radio_setter = extract_braced(mesh_source, 'if (cmd_frame[0] == CMD_SET_RADIO_PARAMS)')
+        self.assertIn("applyAndSaveRadioParams(", radio_setter)
+        self.assertNotIn("captureReplyRoute", radio_setter)
+        self.assertNotIn("command_radio_reply_route", mesh_source)
 
         completion = source[
             source.index("static void completePrimaryUsbSessionReset(") :

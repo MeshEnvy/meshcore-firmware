@@ -258,7 +258,8 @@ int main() {
         frame = extract_braced(source, "} else if (mesh::companion::isRunCliFrame(")
         frame = frame.replace("} else if", "if", 1)
         methods = "\n".join((
-            extract_braced(source, "bool MyMesh::applyAndSaveRxPowerSaving("), entry, adapter,
+            extract_braced(source, "bool MyMesh::applyAndSaveRxPowerSaving("),
+            extract_braced(source, "void MyMesh::queueSavedRadioApply("), entry, adapter,
         ))
         constants = "\n".join(line for line in source.splitlines()
                               if line.startswith(("#define RESP_CODE_CLI_REPLY ",

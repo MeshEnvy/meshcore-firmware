@@ -34,7 +34,7 @@ struct Radio {bool watchdog=false,calibration=false;
 struct Cli {
  bool gpio=false,tx_pending=false;
  bool hasActiveUserGpioTimer()const{return gpio;}
- bool hasPendingTxPower()const{return tx_pending;}
+ bool hasPendingRadioSettings()const{return tx_pending;}
 };
 struct Manager {int queued=0;int getOutboundTotal()const{return queued;}};
 struct Clock {uint32_t now=100;uint32_t getCurrentTime()const{return now;}};

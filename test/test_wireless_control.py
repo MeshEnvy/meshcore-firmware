@@ -348,15 +348,16 @@ struct {
  void init(){active=true;}void end(){active=false;}
 } radio_driver;
 struct {
- bool web=true,stopping=false,bridge=true,network=false;
+ bool web=true,stopping=false,bridge=true,network=false,mqtt_pending=false;
  bool isWebConfigActive(){return web||stopping;}
  bool isWebConfigStopping(){return stopping;}
  bool hasWirelessNetworkClient(){return network;}
  bool isBridgeRunning(){return bridge;}
  bool setBridgeState(bool on){bridge=on;return true;}
  bool isMqttBridgeRunning(){return bridge;}
+ bool isMqttBridgeStartPending(){return mqtt_pending;}
  bool isEspNowBridgeRunning(){return bridge;}
- bool setMqttBridgeState(bool on){bridge=on;return true;}
+ bool setMqttBridgeState(bool on){bridge=on;mqtt_pending=false;return true;}
  bool setEspNowBridgeState(bool on){bridge=on;return true;}
  bool stopWebConfig(char*){web=false;stopping=true;return true;}
  bool startWebConfig(bool,char*){web=true;return true;}
@@ -382,6 +383,14 @@ int main(){
  InfrastructureWirelessBackend ota_backend;
  assert(ota_backend.set(mesh::wireless::WiFi,false)==Result::Done);
  assert(!board.ota);
+ // Failed startup is still requested WiFi work and must participate in off/on.
+ the_mesh.mqtt_pending=true;
+ assert(b.enabled()&mesh::wireless::WiFi);
+ InfrastructureWirelessBackend pending_backend;
+ assert(pending_backend.set(mesh::wireless::WiFi,false)==Result::Done);
+ assert(!the_mesh.mqtt_pending&&!the_mesh.bridge);
+ assert(pending_backend.set(mesh::wireless::WiFi,true)==Result::Done);
+ assert(the_mesh.bridge&&!the_mesh.web);
  the_mesh.web=the_mesh.bridge=true;
  // Individual WiFi off retains the ESP-NOW driver and stops both its own services.
  c.handle("set wifi off",reply,sizeof(reply),600,Independent);c.service(850);

@@ -554,6 +554,7 @@ bool RadioLibWrapper::restoreAfterDeepInit() {
   if (_beacon_owned) cacheBeaconRestoreParams();
 #endif
   _dbm_applied = false;
+  _rx_boosted_gain_applied = false;
   if (!radioDeepInit()) return false;
 
   _rx_ps_armed = false;
@@ -575,7 +576,8 @@ bool RadioLibWrapper::restoreAfterDeepInit() {
     restored = _dbm_applied && restored;
   }
   if (_rx_boosted_gain_valid) {
-    restored = applyRxBoostedGainMode(_cur_rx_boosted_gain) && restored;
+    _rx_boosted_gain_applied = applyRxBoostedGainMode(_cur_rx_boosted_gain);
+    restored = _rx_boosted_gain_applied && restored;
   }
   recalibrateNoiseFloor();
   if (restored) _profile_repair_required = false;
@@ -1426,11 +1428,25 @@ mesh::RadioParamApplyResult RadioLibWrapper::trySetPrimaryParams(const mesh::Rad
 }
 
 bool RadioLibWrapper::setRxBoostedGainMode(bool enabled) {
-  uint8_t resume_rx = beginReconfigure();
-  if (resume_rx > 1) return false;
+  return trySetRxBoostedGainMode(enabled) == mesh::RadioParamApplyResult::APPLIED;
+}
 
-  const bool gain_changed = !_rx_boosted_gain_valid || _cur_rx_boosted_gain != enabled;
+mesh::RadioParamApplyResult RadioLibWrapper::trySetRxBoostedGainMode(bool enabled) {
+  using Result = mesh::RadioParamApplyResult;
+  if (!supportsRxBoostedGainMode()) return Result::FAILED;
+#if MESH_ENABLE_TX_BEACONS
+  if (_beacon_owned) return Result::BUSY;
+#endif
+  if (_cw_active) return Result::BUSY;
+  if (_rx_boosted_gain_valid && _rx_boosted_gain_applied
+      && _cur_rx_boosted_gain == enabled && !_profile_repair_required) return Result::APPLIED;
+  const uint8_t resume_rx = beginReconfigure();
+  if (resume_rx > 1) return resume_rx == 2 ? Result::BUSY : Result::FAILED;
+
+  const bool gain_changed = !_rx_boosted_gain_valid || !_rx_boosted_gain_applied
+      || _cur_rx_boosted_gain != enabled;
   bool success = applyRxBoostedGainMode(enabled);
+  _rx_boosted_gain_applied = success;
   if (success) {
     _cur_rx_boosted_gain = enabled;
     _rx_boosted_gain_valid = true;
@@ -1438,7 +1454,7 @@ bool RadioLibWrapper::setRxBoostedGainMode(bool enabled) {
   }
 
   endReconfigure(resume_rx);
-  return success;
+  return success ? Result::APPLIED : Result::FAILED;
 }
 
 void RadioLibWrapper::idle() {
@@ -1565,7 +1581,7 @@ bool RadioLibWrapper::resetAGCIfIdle(bool refresh_floor) {
   doResetAGC();
   state = STATE_IDLE;   // trigger a startReceive()
   const bool gain_restored = !_rx_boosted_gain_valid
-      || applyRxBoostedGainMode(_cur_rx_boosted_gain);
+      || (_rx_boosted_gain_applied = applyRxBoostedGainMode(_cur_rx_boosted_gain));
 
   // Adaptive maintenance restores the same RF path. A valid, idle baseline
   // keeps its existing refresh deadline instead of spending another complete
@@ -2097,7 +2113,8 @@ mesh::MorseRxResult RadioLibWrapper::startMorseRx(float frequency_mhz,
   state = STATE_IDLE;
   _board->setRadioTestActive(true);
   if (prepareMorseReceiver(frequency_mhz) != RADIOLIB_ERR_NONE
-      || (_rx_boosted_gain_valid && !applyRxBoostedGainMode(_cur_rx_boosted_gain))
+      || (_rx_boosted_gain_valid
+          && !(_rx_boosted_gain_applied = applyRxBoostedGainMode(_cur_rx_boosted_gain)))
       || startMorseReceiver() != RADIOLIB_ERR_NONE) {
     if (allocated) delete receiver;
 #if defined(MESH_MORSE_HIL) && MESH_MORSE_HIL
@@ -2640,26 +2657,31 @@ bool RadioLibWrapper::getNoiseFloorWakeDelay(uint32_t now, uint32_t& delay_ms) c
 
 // RX PowerSaving
 bool RadioLibWrapper::setRxPowerSaving(bool enabled, uint32_t rx_us, uint32_t sleep_us) {
+  return trySetRxPowerSaving(enabled, rx_us, sleep_us) == mesh::RadioParamApplyResult::APPLIED;
+}
+
+mesh::RadioParamApplyResult RadioLibWrapper::trySetRxPowerSaving(bool enabled, uint32_t rx_us, uint32_t sleep_us) {
+  using Result = mesh::RadioParamApplyResult;
+  if (enabled && (!isValidRxPowerSavingPeriod(rx_us) || !isValidRxPowerSavingPeriod(sleep_us)
+      || !supportsRxPowerSaving())) return Result::FAILED;
 #if MESH_ENABLE_TX_BEACONS
-  if (_beacon_owned) return false;
+  if (_beacon_owned) return Result::BUSY;
 #endif
-  if (_cw_active) return false;
-  if (enabled && (!isValidRxPowerSavingPeriod(rx_us) || !isValidRxPowerSavingPeriod(sleep_us))) {
-    return false;
-  }
-  // A rejected request must not become the policy restored after radio2 ends.
-  if (enabled && !supportsRxPowerSaving()) return false;
+  if (_cw_active) return Result::BUSY;
   if (_profile_rxps_suspended) {
     _profile_saved_rxps = enabled;
     _rx_ps_rx_us = rx_us;
     _rx_ps_sleep_us = sleep_us;
     _rx_ps_arm_retry.reset();
     _rx_ps_last_error = RADIOLIB_ERR_NONE;
-    return true;
+    return Result::APPLIED;
   }
 
+  if (!_profile_repair_required && _rx_ps_enabled == enabled
+      && _rx_ps_rx_us == rx_us && _rx_ps_sleep_us == sleep_us) return Result::APPLIED;
+
   uint8_t resume_rx = beginReconfigure();
-  if (resume_rx > 1) return false;
+  if (resume_rx > 1) return resume_rx == 2 ? Result::BUSY : Result::FAILED;
 
   _rx_ps_enabled = enabled;
   _rx_ps_rx_us = rx_us;
@@ -2669,7 +2691,7 @@ bool RadioLibWrapper::setRxPowerSaving(bool enabled, uint32_t rx_us, uint32_t sl
   _rx_ps_continuous_fallback = enabled
       && rxPowerSavingUsesContinuousFallback(rx_us, sleep_us);
   endReconfigure(resume_rx);
-  return true;
+  return Result::APPLIED;
 }
 
 RxPowerSavingStatus RadioLibWrapper::getRxPowerSavingStatus() const {

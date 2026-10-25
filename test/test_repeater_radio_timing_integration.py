@@ -185,7 +185,7 @@ public:
   void updateFloodAdvertTimer();
   void queueSavedRadioApply();
   void refreshScheduledRadioState();
-  void processScheduledRadioSettings();
+  void processScheduledRadioSettings(bool tx_gap = false);
   void applyTempRadioParams(float, float, uint8_t, uint8_t, int, uint16_t = 0);
   bool scheduleNormalRadio();
   void clearScheduledRadioSetting(int, bool);
@@ -234,6 +234,16 @@ int main() {
     assert(!m.saved_radio_apply_pending && !m.scheduled_radio_retry_at);
     assert(radio_driver.active_gain == m._prefs.rx_boosted_gain);
     assert(radio_driver.active_power == m._prefs.tx_power_dbm);
+  }
+  { // Queue pressure must not postpone settings past a completed TX gap.
+    MyMesh m;
+    m.queueSavedRadioApply(); m.outbound = true;
+    m.processScheduledRadioSettings();
+    assert(m.saved_radio_apply_pending && m.scheduled_radio_retry_at);
+    assert(!m.scheduled_radio_retry_failures && !m.restores);
+    m.processScheduledRadioSettings(true);
+    assert(!m.saved_radio_apply_pending && !m.scheduled_radio_retry_at);
+    assert(m.restores == 1);
   }
   { // A later failed due entry must not undo an earlier durable change.
     MyMesh m;
@@ -575,7 +585,7 @@ int main() {
             "void MyMesh::queueSavedRadioApply()",
             "bool MyMesh::applySavedRadioParams()",
             "void MyMesh::refreshScheduledRadioState()",
-            "void MyMesh::processScheduledRadioSettings()",
+            "void MyMesh::processScheduledRadioSettings(bool tx_gap)",
             "void MyMesh::applyTempRadioParams(",
             "bool MyMesh::scheduleNormalRadio()",
             "void MyMesh::clearScheduledRadioSetting(",

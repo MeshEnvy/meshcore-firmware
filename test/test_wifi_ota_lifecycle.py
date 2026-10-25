@@ -198,6 +198,7 @@ struct MockMesh {
   bool web = false, mqtt = false, espnow = false;
   bool isWebConfigActive() const { return web; }
   bool isMqttBridgeRunning() const { return mqtt; }
+  bool isMqttBridgeStartPending() const { return false; }
   bool isEspNowBridgeRunning() const { return espnow; }
 } the_mesh;
 

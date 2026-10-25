@@ -220,16 +220,22 @@ public:
   }
 
   bool setRxPowerSavingRfRxDisabled(bool disabled) override {
+    return trySetRxPowerSavingRfRxDisabled(disabled) == mesh::RadioParamApplyResult::APPLIED;
+  }
+
+  mesh::RadioParamApplyResult trySetRxPowerSavingRfRxDisabled(bool disabled) override {
+    using Result = mesh::RadioParamApplyResult;
+    if (!supportsRxPowerSavingRfRxDisable()) return Result::FAILED;
 #if MESH_ENABLE_TX_BEACONS
-    if (isBeaconRadioOwned()) return false;
+    if (isBeaconRadioOwned()) return Result::BUSY;
 #endif
-    if (isCarrierWaveActive()) return false;
-    if (!supportsRxPowerSavingRfRxDisable()) return false;
+    if (isCarrierWaveActive()) return Result::BUSY;
+    if (isRxPowerSavingRfRxDisabled() == disabled) return Result::APPLIED;
 
     // Do not stop duty-cycle RX or change its policy before admission. A BUSY
     // sleep window, TX, or unread RX completion still owns the current mode.
     const uint8_t resume_rx = beginReconfigure();
-    if (resume_rx > 1) return false;
+    if (resume_rx > 1) return resume_rx == 2 ? Result::BUSY : Result::FAILED;
 
     const bool previous = isRxPowerSavingRfRxDisabled();
     ((CustomSX1262 *)_radio)->setRxPowerSavingRfRxDisabled(disabled);
@@ -238,9 +244,9 @@ public:
       // startRecv already retained its bounded retry/backoff. That retry must
       // use the old RXEN policy; never report a failed RX restoration as OK.
       ((CustomSX1262 *)_radio)->setRxPowerSavingRfRxDisabled(previous);
-      return false;
+      return Result::FAILED;
     }
-    return true;
+    return Result::APPLIED;
   }
 
   bool isRxPowerSavingRfRxDisabled() const override {

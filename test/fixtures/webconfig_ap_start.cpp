@@ -327,7 +327,7 @@ void serializeJson(DynamicJsonDocument& doc, AsyncResponseStream& response) {
 struct WebConfigServer {
   enum Mode { MODE_OFF, MODE_LAN, MODE_SETUP };
   Mode _mode = MODE_OFF;
-  bool _owns_wifi = true, _stopping = false;
+  bool _owns_wifi = true, _stopping = false, _start_retryable = false;
   bool _retry_saved_wifi_in_setup = true, _setup_reconnect_in_progress = true;
   bool _was_setup_ap = false, _initial_setup = false;
   bool _setup_provisioning_privilege = false;
@@ -394,6 +394,7 @@ int main() {
     WebConfigServer portal; char reply[160] = {};
     assert(!portal.startSetupMode(reply));
     assert(strstr(reply, "stop ESP-NOW") && WiFi.live_mode == WIFI_STA);
+    assert(!portal._start_retryable);
     assert(WiFi.sta_only_calls == 0 && WiFi.ap_calls == 0 && WiFi.scans == 0);
     mesh::wifi::setLongRangeOwner(owner, false);
   }
@@ -409,6 +410,7 @@ int main() {
     char reply[160] = {};
     const uint32_t started = millis();
     assert(!portal.startSetupMode(reply));
+    assert(portal._start_retryable);
     assert(millis() - started < 4500);
     assert(portal._mode == WebConfigServer::MODE_OFF && !portal._dns && portal.servers == 0);
     const unsigned prepared = fault != Fault::ModeSetterFailure

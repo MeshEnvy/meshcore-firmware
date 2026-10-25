@@ -158,7 +158,6 @@ static uint32_t nextRadioApplyRetryDelay(uint8_t& failure_count) {
   return delay_ms > 30000UL ? 30000UL : delay_ms;
 }
 
-static const uint32_t COMMAND_RADIO_APPLY_TIMEOUT_MS = 5000UL;
 
 #if RXPS_FIXED_ENABLED
 #if RXPS_FIXED_LEVEL < 1 || RXPS_FIXED_LEVEL > 10
@@ -1975,6 +1974,7 @@ bool MyMesh::sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pk
 
 void MyMesh::onRadioProfileCopyQueued(mesh::Packet* packet, const mesh::Packet* original, uint8_t priority) {
   mesh::Mesh::onRadioProfileCopyQueued(packet, original, priority);
+  _primary_radio_reply.trackCopy(original, packet);
   _morse_reply.copy(original, packet);
 #if MESH_ENABLE_FLEET_CONTROL
   if (original && original == _fleet_admission_original) _fleet_admission_copy = packet;
@@ -1983,19 +1983,25 @@ void MyMesh::onRadioProfileCopyQueued(mesh::Packet* packet, const mesh::Packet* 
 
 void MyMesh::onSendComplete(mesh::Packet* packet) {
   mesh::Mesh::onSendComplete(packet);
+  if (_primary_radio_reply.complete(packet) && !_primary_radio_reply.waiting())
+    finishPrimaryRadioReply(true);
   // Use the completed packet's idle gap before a busy queue starts another TX.
-  servicePendingTxPower();
+  servicePendingLocalRadioSettings();
   _morse_reply.complete(packet);
 }
 
 void MyMesh::onSendFail(mesh::Packet* packet) {
   mesh::Mesh::onSendFail(packet);
+  if (_primary_radio_reply.fail(packet)) finishPrimaryRadioReply(false);
+  else if (!_primary_radio_reply.waiting() && _primary_radio_reply.succeeded())
+    finishPrimaryRadioReply(true);
   _morse_reply.fail(packet);
 }
 
 bool MyMesh::allowDirectRetry(const mesh::Packet* packet, const uint8_t* next_hop_hash,
                               uint8_t next_hop_hash_len) const {
   return !_morse_reply.ownsReply(packet)
+      && !_primary_radio_reply.contains(packet)
       && mesh::Mesh::allowDirectRetry(packet, next_hop_hash, next_hop_hash_len);
 }
 
@@ -2174,6 +2180,7 @@ void MyMesh::onCLICommandRecv(const ContactInfo &from, mesh::Packet *pkt, uint32
                                const char *text, char* reply) {
   markConnectionActive(from); // in case this is from a server, and we have a connection
   if (from.isRemoteCLIAllowed()) {
+    _primary_radio_reply_admission = false;
     const uint32_t before = _morse_reply.generation();
     _morse_reply.beginCommand(from.id.pub_key);
     // A timestamp received over the radio must never grant local-console access.
@@ -2188,6 +2195,10 @@ void MyMesh::onCLICommandRecv(const ContactInfo &from, mesh::Packet *pkt, uint32
 }
 
 void MyMesh::onCLIReplyPrepared(const ContactInfo& from, mesh::Packet* reply) {
+  if (_primary_radio_reply_admission) {
+    _primary_radio_reply.prepare(reply);
+    if (reply) reply->radio_reply = true;
+  }
   if (!_morse_reply_admission || !_morse_reply.pending()
       || memcmp(from.id.pub_key, _morse_reply.actor(), PUB_KEY_SIZE) != 0) return;
   _morse_reply.prepareReply(reply);
@@ -2195,6 +2206,10 @@ void MyMesh::onCLIReplyPrepared(const ContactInfo& from, mesh::Packet* reply) {
 }
 
 void MyMesh::onCLIReplyQueued(const ContactInfo& from, mesh::Packet* reply, bool queued) {
+  if (_primary_radio_reply_admission) {
+    _primary_radio_reply.arm(queued ? reply : nullptr);
+    _primary_radio_reply_admission = false;
+  }
   if (!_morse_reply_admission) return;
   if (memcmp(from.id.pub_key, _morse_reply.actor(), PUB_KEY_SIZE) == 0)
     _morse_reply.armReply(reply, queued);
@@ -2883,14 +2898,6 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _radio_available = true;
   radio_apply_retry_at = 0;
   radio_apply_failures = 0;
-  command_radio_apply_pending = false;
-  command_radio_freq = 0.0f;
-  command_radio_bw = 0.0f;
-  command_radio_sf = 0;
-  command_radio_cr = 0;
-  command_radio_repeat = 0;
-  command_radio_apply_deadline = 0;
-  command_radio_reply_route = NULL;
   _scheduled_reboot_at = 0;
 #if COMPANION_FEATURE_TEMP_RADIO
   _temp_radio_set_at = 0;
@@ -3453,14 +3460,13 @@ void MyMesh::configureRadioFromPrefs() {
 #endif
 
   if (!_radio_available) {
-    saved_radio_apply_pending = false;
     board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain);
     board.setLoRaFemPaGainEnabled(_prefs.radio_fem_txgain);
     MESH_DEBUG_PRINTLN("Radio unavailable: companion services are running in recovery mode");
     return;
   }
 
-  saved_radio_apply_pending = !applySavedRadioParams();
+  saved_radio_apply_pending |= !_primary_radio_blocked && !applySavedRadioParams();
   radio_driver.setCADScanTimeoutMillis(_prefs.cad_scan_timeout_ms);
   _radio->setCADEnabled(_prefs.cad_enabled != 0);
   if (!saved_radio_apply_pending) {
@@ -3509,109 +3515,149 @@ bool MyMesh::applySavedRadioParams() {
       == mesh::RadioParamApplyResult::APPLIED;
 }
 
-void MyMesh::finishRadioParamApply(float freq, float bw, uint8_t sf,
-                                   uint8_t cr, uint8_t repeat,
-                                   BaseSerialInterface* route) {
-  const float previous_freq = _prefs.freq;
-  const float previous_bw = _prefs.bw;
-  const uint8_t previous_sf = _prefs.sf;
-  const uint8_t previous_cr = _prefs.cr;
-  const uint8_t previous_repeat = _prefs.client_repeat;
-  const uint32_t previous_rx_us = _prefs.rx_ps_rx_us;
-  const uint32_t previous_sleep_us = _prefs.rx_ps_sleep_us;
-  const bool previous_recovery_pending = saved_radio_apply_pending;
-  _prefs.sf = sf;
-  _prefs.cr = cr;
-  _prefs.freq = freq;
-  _prefs.bw = bw;
-  _prefs.client_repeat = repeat;
-  recalcRxPowerSavingFromLevel(_prefs.rx_ps_level, _prefs.sf, _prefs.bw,
-                               _prefs.rx_ps_preamble, &_prefs.rx_ps_rx_us,
-                               &_prefs.rx_ps_sleep_us);
-  if (!savePrefs()) {
-    _prefs.freq = previous_freq;
-    _prefs.bw = previous_bw;
-    _prefs.sf = previous_sf;
-    _prefs.cr = previous_cr;
-    _prefs.client_repeat = previous_repeat;
-    _prefs.rx_ps_rx_us = previous_rx_us;
-    _prefs.rx_ps_sleep_us = previous_sleep_us;
-    // Hardware accepted the candidate before this save. Restore the durable
-    // tuple now, or let the existing backed-off recovery finish once RX is
-    // idle. A failed save must never acknowledge a persistent radio change.
-    const bool restored = applySavedRadioParams();
-    saved_radio_apply_pending = !restored || previous_recovery_pending;
-    radio_apply_retry_at = 0;
-    radio_apply_failures = 0;
-    writeErrFrame(ERR_CODE_FILE_IO_ERROR, route);
-    return;
-  }
-
-  // Preserve any earlier saved-radio recovery while committing the tuple.
-  saved_radio_apply_pending = previous_recovery_pending;
-  radio_apply_retry_at = 0;
-  radio_apply_failures = 0;
-
-  MESH_DEBUG_PRINTLN("OK: CMD_SET_RADIO_PARAMS: f=%d, bw=%d, sf=%d, cr=%d",
-                     (uint32_t)(freq * 1000.0f), (uint32_t)(bw * 1000.0f),
-                     (uint32_t)sf, (uint32_t)cr);
-  writeOKFrame(route);
-}
-
-void MyMesh::deferRadioCommand() {
-  command_radio_reply_route = _serial->captureReplyRoute();
-  if (command_radio_reply_route == NULL) {
-    writeErrFrame(ERR_CODE_BAD_STATE);
-    return;
-  }
-  command_radio_apply_pending = true;
-  command_radio_apply_deadline = futureMillis(COMMAND_RADIO_APPLY_TIMEOUT_MS);
-}
-
-void MyMesh::cancelPendingRadioParamApply() {
-  if (!command_radio_apply_pending) return;
-
-  command_radio_apply_pending = false;
-  command_radio_apply_deadline = 0;
-  command_radio_reply_route = NULL;
-  // The requested tuple was not committed. Reassert the persisted tuple in
-  // case a failed hardware apply only restored part of the old configuration.
+__attribute__((noinline)) void MyMesh::queueSavedRadioApply() {
   saved_radio_apply_pending = true;
   radio_apply_retry_at = 0;
   radio_apply_failures = 0;
 }
 
-void MyMesh::servicePendingRadioParamApply() {
-  if (!command_radio_apply_pending) return;
-  if (!_serial || !_serial->isReplyRouteAvailable(command_radio_reply_route)) {
-    cancelPendingRadioParamApply();
-    return;
+void MyMesh::finishPrimaryRadioReply(bool delivered) {
+  _primary_radio_reply.clear();
+  if (delivered) {
+    _primary_radio_blocked = false;
+    queueSavedRadioApply();
+  }
+}
+
+MyMesh::RadioSettingResult MyMesh::applyAndSaveRadioParams(
+    float freq, float bw, uint8_t sf, uint8_t cr, uint8_t repeat, uint16_t preamble, bool remote) {
+#if COMPANION_FEATURE_TEMP_RADIO
+  // A permanent remote change cannot own the acknowledgement and a lease's
+  // restoration at once. Local changes retain the existing deferred behavior.
+  if (remote && (_temp_radio_applied || _temp_radio_set_at || _temp_radio_revert_at))
+    return RadioSettingResult::RadioRejected;
+#endif
+  if (freq < 150.0f || !CommonRadioPrefs::isValidBandwidth(bw)
+      || !_radio_profiles.acceptsPrimary(freq, bw, sf, cr, preamble)
+      || (repeat && !isValidClientRepeatFreq(uint32_t(freq * 1000.0f))))
+    return RadioSettingResult::RadioRejected;
+  uint32_t rx_us = _prefs.rx_ps_rx_us, sleep_us = _prefs.rx_ps_sleep_us;
+  if (_prefs.rx_ps_level
+      && !recalcRxPowerSavingFromLevel(_prefs.rx_ps_level, sf, bw,
+          _prefs.rx_ps_preamble, &rx_us, &sleep_us)
+      && _prefs.rx_powersaving_enabled) return RadioSettingResult::RadioRejected;
+
+  const uint16_t previous_preamble = _radio_profiles.primaryPreamble();
+  if (!_radio_profiles.savePrimaryPreamble(preamble)) return RadioSettingResult::SaveFailed;
+  if (remote && _primary_radio_blocked && freq == _prefs.freq && bw == _prefs.bw
+      && sf == _prefs.sf && cr == _prefs.cr && repeat == _prefs.client_repeat
+      && preamble == previous_preamble) {
+    // Replaying an unconfirmed request sends a fresh acknowledgement without
+    // saving again. Only this response's exact copies can release its target.
+    _primary_radio_reply.clear();
+    _primary_radio_reply_admission = true;
+    return RadioSettingResult::Saved;
+  }
+  const auto result = _radio_available && !remote && !_primary_radio_blocked
+#if COMPANION_FEATURE_TEMP_RADIO
+      && !_temp_radio_applied && !_temp_radio_set_at && !_temp_radio_revert_at
+#endif
+      ? tryApplyRadioParams(freq, bw, sf, cr) : mesh::RadioParamApplyResult::BUSY;
+  if (result == mesh::RadioParamApplyResult::FAILED) {
+    const bool restored = _radio_profiles.restorePrimaryPreamble(previous_preamble);
+    queueSavedRadioApply();
+    return restored ? RadioSettingResult::RadioRejected : RadioSettingResult::SaveUnconfirmed;
   }
 
-  // Leave enough queue headroom for the eventual command response.
-  if (_serial->isReplyRouteWriteBusy(command_radio_reply_route)) return;
+  const float previous_freq = _prefs.freq, previous_bw = _prefs.bw;
+  const uint8_t previous_sf = _prefs.sf, previous_cr = _prefs.cr;
+  const uint8_t previous_repeat = _prefs.client_repeat;
+  const uint32_t previous_rx = _prefs.rx_ps_rx_us, previous_sleep = _prefs.rx_ps_sleep_us;
+  _prefs.freq = freq; _prefs.bw = bw; _prefs.sf = sf; _prefs.cr = cr;
+  _prefs.client_repeat = repeat;
+  _prefs.rx_ps_rx_us = rx_us; _prefs.rx_ps_sleep_us = sleep_us;
+  if (savePrefs()) {
+    _primary_radio_reply.clear();
+    _primary_radio_blocked = remote;
+    _primary_radio_reply_admission = remote;
+    if (result == mesh::RadioParamApplyResult::BUSY) queueSavedRadioApply();
+    return RadioSettingResult::Saved;
+  }
 
-  const bool expired = static_cast<int32_t>(static_cast<uint32_t>(
-      _ms->getMillis() - command_radio_apply_deadline)) >= 0;
-  mesh::RadioParamApplyResult result = tryApplyRadioParams(
-      command_radio_freq, command_radio_bw, command_radio_sf, command_radio_cr);
+  _prefs.freq = previous_freq; _prefs.bw = previous_bw;
+  _prefs.sf = previous_sf; _prefs.cr = previous_cr;
+  _prefs.client_repeat = previous_repeat;
+  _prefs.rx_ps_rx_us = previous_rx; _prefs.rx_ps_sleep_us = previous_sleep;
+  const bool preamble_restored = _radio_profiles.restorePrimaryPreamble(previous_preamble);
+  if ((result == mesh::RadioParamApplyResult::APPLIED && !applySavedRadioParams())
+      || !preamble_restored) queueSavedRadioApply();
+  return preamble_restored ? RadioSettingResult::SaveFailed : RadioSettingResult::SaveUnconfirmed;
+}
+
+bool MyMesh::applyRxPowerSavingRfRxDisabled(const char* value, char* reply, size_t capacity) {
+  if (strcmp(value, "on") && strcmp(value, "off")) {
+    mesh::cli::formatError(reply, capacity, "use set radio.rxps.rfrx_disabled on|off");
+  } else if (!radio_driver.supportsRxPowerSavingRfRxDisable()) {
+    mesh::cli::formatError(reply, capacity, "unsupported");
+  } else {
+    const bool disabled = !strcmp(value, "on");
+    const auto result = _radio_available
+        ? radio_driver.trySetRxPowerSavingRfRxDisabled(disabled) : mesh::RadioParamApplyResult::BUSY;
+    if (result == mesh::RadioParamApplyResult::FAILED) {
+      mesh::cli::formatError(reply, capacity, "RXEN change failed");
+    } else {
+      rf_rx_disable_pending = result == mesh::RadioParamApplyResult::BUSY ? int8_t(disabled) : -1;
+      rf_rx_retry_at = 0;
+      snprintf(reply, capacity, "OK");
+    }
+  }
+  return true;
+}
+
+void MyMesh::servicePendingLocalRadioSettings() {
+  _radio_profiles.servicePendingTuning();
+  servicePendingTxPower();
+  if (rf_rx_disable_pending >= 0 && _radio_available
+      && !(_radio && _radio->isCarrierWaveActive())
+      && (!rf_rx_retry_at || millisHasNowPassed(rf_rx_retry_at))) {
+    const auto result = radio_driver.trySetRxPowerSavingRfRxDisabled(rf_rx_disable_pending != 0);
+    if (result == mesh::RadioParamApplyResult::APPLIED) rf_rx_disable_pending = -1;
+    rf_rx_retry_at = result == mesh::RadioParamApplyResult::FAILED ? futureMillis(1000) : 0;
+    if (result == mesh::RadioParamApplyResult::FAILED && !rf_rx_retry_at) rf_rx_retry_at = 1;
+  }
+  if (!saved_radio_apply_pending || !_radio_available
+      || (_radio && (_radio->isCarrierWaveActive()
+          || _radio->isMorseTxActive() || _radio->isMorseRxActive()))
+#if COMPANION_FEATURE_TEMP_RADIO
+      || _temp_radio_applied || _temp_radio_set_at || _temp_radio_revert_at
+#endif
+      || (radio_apply_retry_at && !millisHasNowPassed(radio_apply_retry_at))) return;
+  // Driver admission preserves unread packets. This also runs in the idle
+  // gap before Dispatcher starts the next packet of a saturated TX queue.
+  const auto gain = radio_driver.supportsRxBoostedGainMode()
+      ? radio_driver.trySetRxBoostedGainMode(_prefs.rx_boosted_gain)
+      : mesh::RadioParamApplyResult::APPLIED;
+  const auto tuple = !_primary_radio_blocked && gain == mesh::RadioParamApplyResult::APPLIED
+      ? tryApplyRadioParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr) : gain;
+  const auto power = tuple == mesh::RadioParamApplyResult::APPLIED
+      ? radio_driver.trySetTxPower(_prefs.tx_power_dbm) : tuple;
+  uint32_t rx_us = _prefs.rx_ps_rx_us, sleep_us = _prefs.rx_ps_sleep_us;
+  if (_primary_radio_blocked && _prefs.rx_ps_level && _radio && _radio->profiles()) {
+    const auto& active = _radio->profiles()->primary;
+    recalcRxPowerSavingFromLevel(_prefs.rx_ps_level, active.sf, active.bw,
+        _prefs.rx_ps_preamble, &rx_us, &sleep_us);
+  }
+  const auto result = power == mesh::RadioParamApplyResult::APPLIED
+      && radio_driver.supportsRxPowerSaving()
+      ? radio_driver.trySetRxPowerSaving(_prefs.rx_powersaving_enabled != 0,
+          rx_us, sleep_us) : power;
   if (result == mesh::RadioParamApplyResult::APPLIED) {
-    float freq = command_radio_freq;
-    float bw = command_radio_bw;
-    uint8_t sf = command_radio_sf;
-    uint8_t cr = command_radio_cr;
-    uint8_t repeat = command_radio_repeat;
-    BaseSerialInterface* route = command_radio_reply_route;
-    command_radio_apply_pending = false;
-    command_radio_apply_deadline = 0;
-    command_radio_reply_route = NULL;
-    finishRadioParamApply(freq, bw, sf, cr, repeat, route);
+    saved_radio_apply_pending = false;
+    radio_apply_retry_at = 0;
+    radio_apply_failures = 0;
   } else if (result == mesh::RadioParamApplyResult::FAILED) {
-    writeErrFrame(ERR_CODE_ILLEGAL_ARG, command_radio_reply_route);
-    cancelPendingRadioParamApply();
-  } else if (expired) {
-    writeErrFrame(ERR_CODE_BAD_STATE, command_radio_reply_route);
-    cancelPendingRadioParamApply();
+    radio_apply_retry_at = futureMillis(nextRadioApplyRetryDelay(radio_apply_failures));
+    if (!radio_apply_retry_at) radio_apply_retry_at = 1;
   }
 }
 
@@ -3630,11 +3676,10 @@ static bool isFullCompanionBandwidth(float bw) {
 bool MyMesh::scheduleTempRadio(float freq, float bw, uint8_t sf, uint8_t cr,
                                uint32_t timeout_mins, char* reply,
                                size_t reply_size) {
-  if (command_radio_apply_pending) {
-    snprintf(reply, reply_size, "ERR radio change pending");
+  if (_primary_radio_blocked) {
+    mesh::cli::formatError(reply, reply_size, "radio acknowledgement pending");
     return false;
   }
-
 #if defined(OTA_SHARED_COMPANION_QUEUE)
   uint16_t drained = 0;
   if (!mesh::ota::ota_acquire_context(reply, reply_size, true, &drained)) return false;
@@ -3662,6 +3707,10 @@ bool MyMesh::scheduleTempRadio(float freq, float bw, uint8_t sf, uint8_t cr,
 }
 
 void MyMesh::scheduleNormalRadio(char* reply, size_t reply_size) {
+  if (_primary_radio_blocked) {
+    mesh::cli::formatError(reply, reply_size, "radio acknowledgement pending");
+    return;
+  }
   _temp_radio_set_at = 0;
   _temp_radio_revert_at = futureMillis(1500);  // keep the reply on the active tuple
   _temp_radio_retry_at = 0;
@@ -4062,7 +4111,15 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
     snprintf(reply, reply_size, "%s", result);
     return true;
   }
-  if (mesh::companion::handleRadioDiagnosticsCommand(
+  static const char rf_rx_key[] = "set radio.rxps.rfrx_disabled";
+  if (!strncmp(command, rf_rx_key, sizeof(rf_rx_key) - 1)
+      && (!command[sizeof(rf_rx_key) - 1] || command[sizeof(rf_rx_key) - 1] == ' '
+          || command[sizeof(rf_rx_key) - 1] == '\t')) {
+    const char* value = command + sizeof(rf_rx_key) - 1;
+    while (*value == ' ' || *value == '\t') ++value;
+    return applyRxPowerSavingRfRxDisabled(value, reply, reply_size);
+  }
+  if (mesh::companion::handleRadioDiagnosticsCommand<false>(
           radio_driver, _radio_available, command, reply, reply_size, [this]() {
             radio_driver.resetStats();
             this->resetStats();
@@ -4404,7 +4461,7 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
     } else if (!radio_driver.supportsRxBoostedGainMode()) {
       mesh::cli::formatError(reply, reply_size, "unsupported");
     } else if (!applyAndSaveRxBoostedGain(strcmp(value, "on") == 0)) {
-      mesh::cli::formatError(reply, reply_size, "radio busy or save failed");
+      mesh::cli::formatError(reply, reply_size, "RX gain failed");
     } else {
       snprintf(reply, reply_size, "OK - radio.rxgain %s", value);
     }
@@ -4885,10 +4942,11 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
         memset(saved_password, 0, sizeof(saved_password));
         if (_webconfig) {
           _webconfig->reloadStandaloneWiFi();
-          if (has_ssid && _webconfig->isRunning()) {
-            _webconfig->requestStop();
-          }
+          _webconfig->requestRestart();
         }
+#ifdef WITH_MQTT_BRIDGE
+        if (_mqtt_enabled && _mqtt_bridge) _mqtt_bridge->requestRestart();
+#endif
         if (has_ssid) {
           scheduleCompanionWiFiCredentialReload();
           snprintf(reply, reply_size,
@@ -4932,10 +4990,10 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
     if (!WebConfigServer::saveEnabled(enabled)) {
       mesh::cli::formatError(reply, reply_size, "failed to save webui setting");
     } else if (!enabled) {
-      if (_webconfig && _webconfig->isRunning()) _webconfig->requestStop();
+      if (_webconfig) _webconfig->requestStop();
       snprintf(reply, reply_size, "OK - webui off");
     } else if (_webconfig
-               && (_webconfig->isRunning() || _webconfig->isStopping())) {
+               && _webconfig->isRunning()) {
       snprintf(reply, reply_size, "OK - webui on (already active)");
     } else {
       char start_reply[160] = {0};
@@ -4966,7 +5024,8 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
     return true;
   }
   if (strcmp(command, "stop webconfig") == 0) {
-    if (!_webconfig || !_webconfig->isRunning()) {
+    if (!_webconfig || (!_webconfig->isRunning() && !_webconfig->isStopping()
+                        && !_webconfig->isStartPending())) {
       snprintf(reply, reply_size, "Err: webconfig not running");
     } else {
       _webconfig->requestStop();
@@ -5120,7 +5179,6 @@ void MyMesh::serviceTempRadio() {
       _temp_radio_retry_at = 0;
       _temp_radio_failures = 0;
       _temp_radio_applied = false;
-      saved_radio_apply_pending = false;
       MESH_DEBUG_PRINTLN("Full companion restored normal radio");
     } else {
       _temp_radio_retry_at = futureMillis(
@@ -5181,12 +5239,19 @@ static void copyMqttString(char* dest, size_t dest_size, const char* src) {
 void MyMesh::serviceMQTT(const char* wifi_ssid, const char* wifi_password) {
   if (!_mqtt_enabled) {
     stopMQTT();
+    if (_mqtt_bridge) _mqtt_bridge->loop();
     return;
   }
 #ifdef WITH_WEBCONFIG
   if (_wc_batch_active) return;
 #endif
-  if (!_mqtt_started) {
+  // OTA keeps its radio/heap ownership; retain desired MQTT for a later loop.
+  if (board.isOTAUpdateRunning()) {
+    if (_mqtt_bridge && _mqtt_bridge->isStopping()) _mqtt_bridge->loop();
+    return;
+  }
+  if (_mqtt_bridge && !_mqtt_bridge->isRunning()
+      && !_mqtt_bridge->isStopping()) {
     if (strcmp(_mqtt_prefs.wifi_ssid, wifi_ssid ? wifi_ssid : "") != 0) {
       copyMqttString(_mqtt_prefs.wifi_ssid, sizeof(_mqtt_prefs.wifi_ssid), wifi_ssid);
     }
@@ -5194,18 +5259,23 @@ void MyMesh::serviceMQTT(const char* wifi_ssid, const char* wifi_password) {
       copyMqttString(_mqtt_prefs.wifi_password, sizeof(_mqtt_prefs.wifi_password), wifi_password);
     }
   }
+  if (_mqtt_bridge) _mqtt_bridge->loop();
+  _mqtt_started = _mqtt_bridge && _mqtt_bridge->isRunning()
+      && !_mqtt_bridge->isStopping();
 
   // Start the recovery scheduler even when the router is down at boot. The
   // Companion still owns association; waiting for GOT_IP here would leave its
   // failed station outside MQTT/NTP's shared power budget indefinitely.
-  if (_mqtt_configured && !_mqtt_started && _mqtt_bridge
+  if (_mqtt_configured && wifi_ssid && wifi_ssid[0]
+      && !_mqtt_started && _mqtt_bridge
+      && !_mqtt_bridge->isStartPending()
 #ifdef WITH_WEBCONFIG
       && !isWebConfigSetupActive()
 #endif
   ) {
-    _mqtt_started = true;  // begin is one-shot; avoid retrying partial allocations
     _mqtt_bridge->begin();
-    if (_mqtt_bridge->isRunning()) {
+    _mqtt_started = _mqtt_bridge->isRunning() && !_mqtt_bridge->isStopping();
+    if (_mqtt_started) {
       mesh::usbLoggingPort().println("MQTT companion: bridge started");
     } else {
       mesh::usbLoggingPort().println(
@@ -5215,7 +5285,7 @@ void MyMesh::serviceMQTT(const char* wifi_ssid, const char* wifi_password) {
 }
 
 void MyMesh::stopMQTT() {
-  if (_mqtt_started && _mqtt_bridge) _mqtt_bridge->end();
+  if (_mqtt_bridge) _mqtt_bridge->requestStop();
   _mqtt_started = false;
 }
 #endif
@@ -5358,6 +5428,10 @@ void MyMesh::getNodeSnapshot(WebConfigServer::NodeSnapshot& s) {
 }
 
 bool MyMesh::startWebConfig(bool force_ap, char* reply) {
+  if (board.isOTAUpdateRunning()) {
+    strcpy(reply, "Err: OTA server is running - 'stop ota' first");
+    return false;
+  }
 #if defined(ESP32_PLATFORM) && defined(WIFI_SSID)
   if (!_management_password_ready) {
     strcpy(reply, "Err: management password unavailable; set password on USB");
@@ -5375,35 +5449,34 @@ bool MyMesh::startWebConfig(bool force_ap, char* reply) {
     strcpy(reply, "Err: WebUI unavailable (not enough memory)");
     return false;
   }
-  if (_webconfig->isRunning() || _webconfig->isStopping()) {
+  if (_webconfig->isRunning()) {
     if (force_ap && !_webconfig->isStopping()
         && _webconfig->mode() == WebConfigServer::MODE_LAN) {
 #ifdef WITH_MQTT_BRIDGE
-      if (_mqtt_started && _mqtt_bridge) {
+      if (_mqtt_bridge) {
         _mqtt_bridge->end();
         _mqtt_started = false;
       }
 #endif
-      return _webconfig->startSetupMode(reply);
+      return _webconfig->requestStart(true, reply);
     }
-    strcpy(reply, _webconfig->isStopping() ? "Err: WebUI still stopping"
-                                           : "Err: WebUI already running");
+    strcpy(reply, "Err: WebUI already running");
     return false;
   }
   if (force_ap) {
 #ifdef WITH_MQTT_BRIDGE
-    if (_mqtt_started && _mqtt_bridge) {
+    if (_mqtt_bridge) {
       _mqtt_bridge->end();
       _mqtt_started = false;
     }
 #endif
-    return _webconfig->startSetupMode(reply);
+    return _webconfig->requestStart(true, reply);
   }
-  return _webconfig->startAutoMode(reply);
+  return _webconfig->requestStart(false, reply);
 }
 
 void MyMesh::stopWebConfig() {
-  if (_webconfig && _webconfig->isRunning()) _webconfig->requestStop();
+  if (_webconfig) _webconfig->requestStop();
 }
 
 void MyMesh::serviceWebConfig() {
@@ -5411,7 +5484,13 @@ void MyMesh::serviceWebConfig() {
 }
 
 bool MyMesh::isWebConfigActiveOrStopping() const {
-  return _webconfig && (_webconfig->isRunning() || _webconfig->isStopping());
+  return _webconfig && (_webconfig->isRunning() || _webconfig->isStopping()
+      || _webconfig->isStartPending());
+}
+
+bool MyMesh::isWebConfigWiFiTransitionActive() const {
+  return _webconfig && (_webconfig->isStopping()
+      || _webconfig->mode() == WebConfigServer::MODE_SETUP);
 }
 
 bool MyMesh::isWebConfigSetupActive() const {
@@ -5447,7 +5526,7 @@ void MyMesh::onConfigBatchEnd() {
 #ifdef WITH_MQTT_BRIDGE
   if (_wc_mqtt_dirty) {
     CompanionMqttSetupPortal::saveStoredConfig(_mqtt_prefs);
-    if (_mqtt_started && _mqtt_bridge) _mqtt_bridge->end();
+    if (_mqtt_bridge) _mqtt_bridge->end();
     _mqtt_started = false;
     // loadStoredConfig only replaces its destination after validation. Pass
     // the live preferences directly: another 2.8 KB copy here nests with the
@@ -5645,35 +5724,16 @@ void MyMesh::execCommand(char* cmd, char* reply) {
     return;
   }
   if (strcmp(key, "radio") == 0) {
-    float freq, bw;
-    uint8_t sf, cr;
-    if (!mesh::cli::parseRadioTupleStrict(value, freq, bw, sf, cr)
-        || !isfinite(freq) || !isfinite(bw) || freq < 150.0f || freq > 2500.0f
-        || bw < 7.0f || bw > 500.0f || sf < 5 || sf > 12 || cr < 5 || cr > 8) {
+    float freq, bw; uint8_t sf, cr;
+    if (!mesh::cli::parseRadioTupleStrict(value, freq, bw, sf, cr)) {
       mesh::cli::formatError(reply, 160, "radio must be freq,bw,sf,cr");
     } else {
-      const float previous_freq = _prefs.freq, previous_bw = _prefs.bw;
-      const uint8_t previous_sf = _prefs.sf, previous_cr = _prefs.cr;
-      const uint32_t previous_rx_us = _prefs.rx_ps_rx_us;
-      const uint32_t previous_sleep_us = _prefs.rx_ps_sleep_us;
-      _prefs.freq = freq;
-      _prefs.bw = bw;
-      _prefs.sf = sf;
-      _prefs.cr = cr;
-      recalcRxPowerSavingFromLevel(_prefs.rx_ps_level, _prefs.sf, _prefs.bw,
-                                   _prefs.rx_ps_preamble, &_prefs.rx_ps_rx_us,
-                                   &_prefs.rx_ps_sleep_us);
-      if (savePrefs()) {
-        strcpy(reply, "OK - reboot required");
-      } else {
-        _prefs.freq = previous_freq;
-        _prefs.bw = previous_bw;
-        _prefs.sf = previous_sf;
-        _prefs.cr = previous_cr;
-        _prefs.rx_ps_rx_us = previous_rx_us;
-        _prefs.rx_ps_sleep_us = previous_sleep_us;
-        mesh::cli::formatError(reply, 160, "radio could not be saved");
-      }
+      const auto result = applyAndSaveRadioParams(freq, bw, sf, cr,
+          _prefs.client_repeat, _radio_profiles.primaryPreamble());
+      strcpy(reply, result == RadioSettingResult::Saved ? "OK"
+          : result == RadioSettingResult::SaveFailed ? "Error: radio not saved"
+          : result == RadioSettingResult::SaveUnconfirmed ? "Error: radio save unconfirmed"
+          : "Error: radio rejected");
     }
     return;
   }
@@ -5711,11 +5771,11 @@ void MyMesh::execCommand(char* cmd, char* reply) {
     } else {
       if (strcmp(key, "radio.rxgain") == 0) {
         if (!radio_driver.supportsRxBoostedGainMode()) {
-          mesh::cli::formatError(reply, 160, "RX boosted gain unsupported");
+          mesh::cli::formatError(reply, 160, "RX gain unsupported");
           return;
         }
         if (!applyAndSaveRxBoostedGain(enabled)) {
-          mesh::cli::formatError(reply, 160, "radio busy; retry");
+          mesh::cli::formatError(reply, 160, "RX gain failed");
           return;
         }
       } else {
@@ -6050,8 +6110,7 @@ void MyMesh::abandonPendingRequest() {
 
 bool MyMesh::hasFiniteDelayedReplyForRoute(BaseSerialInterface* route) const {
   if (route == NULL) return false;
-  if (_delayed_replies.hasReplyForRoute(route, _ms->getMillis())
-      || (command_radio_apply_pending && command_radio_reply_route == route)) {
+  if (_delayed_replies.hasReplyForRoute(route, _ms->getMillis())) {
     return true;
   }
   for (int i = 0; i < EXPECTED_ACK_TABLE_SIZE; ++i) {
@@ -6116,7 +6175,6 @@ void MyMesh::cancelSerialOperationsForRoute(BaseSerialInterface* route) {
     memset(private_key_backup_sender, 0, sizeof(private_key_backup_sender));
   }
   if (_delayed_replies.request.route == route) clearPendingReqs();
-  if (command_radio_reply_route == route) cancelPendingRadioParamApply();
   if (_delayed_replies.trace.route == route) clearBinaryTraceReply();
   if (sign_data_reply_route == route) cancelSigningSession();
   for (int i = 0; i < EXPECTED_ACK_TABLE_SIZE; ++i) {
@@ -6759,71 +6817,21 @@ void MyMesh::handleCmdFrame(size_t len) {
   } else if (cmd_frame[0] == CMD_SYNC_NEXT_MESSAGE) {
     syncNextOfflineMessage();
   } else if (cmd_frame[0] == CMD_SET_RADIO_PARAMS) {
-    if (len < 11) {
+    if (len < 11) { writeErrFrame(ERR_CODE_ILLEGAL_ARG); return; }
+    uint32_t freq, bw;
+    memcpy(&freq, &cmd_frame[1], 4);
+    memcpy(&bw, &cmd_frame[5], 4);
+    const uint8_t sf = cmd_frame[9], cr = cmd_frame[10];
+    const uint8_t repeat = len > 11 ? cmd_frame[11] : 0;
+    if (freq < 150000 || freq > 2500000 || bw < 7000 || bw > 500000
+        || sf < 5 || sf > 12 || cr < 5 || cr > 8) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-      return;
-    }
-#if COMPANION_FEATURE_TEMP_RADIO
-    if (isTempRadioActive() || _temp_radio_set_at != 0
-        || _temp_radio_revert_at != 0) {
-      writeErrFrame(ERR_CODE_BAD_STATE);
-      return;
-    }
-#endif
-    int i = 1;
-    uint32_t freq;
-    memcpy(&freq, &cmd_frame[i], 4);
-    i += 4;
-    uint32_t bw;
-    memcpy(&bw, &cmd_frame[i], 4);
-    i += 4;
-    uint8_t sf = cmd_frame[i++];
-    uint8_t cr = cmd_frame[i++];
-    uint8_t repeat = 0;  // default - false
-    if (len > i) {
-      repeat = cmd_frame[i++];   // FIRMWARE_VER_CODE  9+
-    }
-
-    if (repeat && !isValidClientRepeatFreq(freq)) {
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    } else if (freq >= 150000 && freq <= 2500000 && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && bw >= 7000 &&
-        bw <= 500000) {
-      float new_freq = (float)freq / 1000.0;
-      float new_bw = (float)bw / 1000.0;
-      if (command_radio_apply_pending) {
-        writeErrFrame(ERR_CODE_BAD_STATE);
-        return;
-      }
-
-      mesh::RadioParamApplyResult result = tryApplyRadioParams(new_freq, new_bw, sf, cr);
-      if (result == mesh::RadioParamApplyResult::BUSY) {
-        // Capture this requester instead of relying on the mutable last-RX
-        // route. This remains correct if a contact stream later unlocks or a
-        // different transport supplies another command before completion.
-        command_radio_freq = new_freq;
-        command_radio_bw = new_bw;
-        command_radio_sf = sf;
-        command_radio_cr = cr;
-        command_radio_repeat = repeat;
-        deferRadioCommand();
-        MESH_DEBUG_PRINTLN("Deferred CMD_SET_RADIO_PARAMS while radio is busy");
-        return;
-      }
-      if (result == mesh::RadioParamApplyResult::FAILED) {
-        // Persisted settings remain authoritative after a rejected change or
-        // a hardware apply that had to be rolled back.
-        saved_radio_apply_pending = true;
-        radio_apply_retry_at = 0;
-        radio_apply_failures = 0;
-        writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-        return;
-      }
-
-      finishRadioParamApply(new_freq, new_bw, sf, cr, repeat);
     } else {
-      MESH_DEBUG_PRINTLN("Error: CMD_SET_RADIO_PARAMS: f=%d, bw=%d, sf=%d, cr=%d", freq, bw, (uint32_t)sf,
-                         (uint32_t)cr);
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+      const auto result = applyAndSaveRadioParams(freq / 1000.0f, bw / 1000.0f,
+          sf, cr, repeat, _radio_profiles.primaryPreamble());
+      if (result == RadioSettingResult::Saved) writeOKFrame();
+      else writeErrFrame(result == RadioSettingResult::RadioRejected
+          ? ERR_CODE_ILLEGAL_ARG : ERR_CODE_FILE_IO_ERROR);
     }
   } else if (cmd_frame[0] == CMD_SET_RADIO_TX_POWER) {
     if (len < 2) {
@@ -8481,7 +8489,7 @@ bool MyMesh::saveAdvertLocation(double latitude, double longitude) {
 MyMesh::RadioSettingResult MyMesh::applyAndSaveTxPower(int8_t power) {
   if (!radio_driver.isTxPowerValid(power)) return RadioSettingResult::RadioRejected;
   const int8_t previous = _prefs.tx_power_dbm;
-  const auto result = _radio_available && !command_radio_apply_pending
+  const auto result = _radio_available
       ? radio_driver.trySetTxPower(power) : mesh::RadioParamApplyResult::BUSY;
   if (result == mesh::RadioParamApplyResult::FAILED) {
     // A rejected SPI transaction may have partly changed the hardware. Keep
@@ -8507,7 +8515,7 @@ MyMesh::RadioSettingResult MyMesh::applyAndSaveTxPower(int8_t power) {
 }
 
 void MyMesh::servicePendingTxPower() {
-  if (!tx_power_apply_pending || !_radio_available || command_radio_apply_pending
+  if (!tx_power_apply_pending || !_radio_available
       || (_radio && _radio->isCarrierWaveActive())) return;
   const uint32_t now = _ms->getMillis();
   if (tx_power_apply_retry_at
@@ -8561,24 +8569,22 @@ bool MyMesh::applyAndSaveFemTxGain(bool enabled) {
 }
 
 bool MyMesh::applyAndSaveRxBoostedGain(bool enabled) {
-  if (!radio_driver.supportsRxBoostedGainMode()
-      || (_radio_available && !radio_driver.setRxBoostedGainMode(enabled))) {
+  if (!radio_driver.supportsRxBoostedGainMode()) return false;
+  const auto result = _radio_available
+      ? radio_driver.trySetRxBoostedGainMode(enabled) : mesh::RadioParamApplyResult::BUSY;
+  if (result == mesh::RadioParamApplyResult::FAILED) {
+    queueSavedRadioApply();
     return false;
   }
-
   const uint8_t previous_pref = _prefs.rx_boosted_gain;
   _prefs.rx_boosted_gain = enabled ? 1 : 0;
   if (!savePrefs()) {
     _prefs.rx_boosted_gain = previous_pref;
-    if (_radio_available && !radio_driver.setRxBoostedGainMode(previous_pref != 0)) {
-      // A receive can make the rollback busy after hardware accepted the
-      // candidate. Retry the durable gain along with the saved radio settings.
-      saved_radio_apply_pending = true;
-      radio_apply_retry_at = 0;
-      radio_apply_failures = 0;
-    }
+    if (result == mesh::RadioParamApplyResult::APPLIED
+        && !radio_driver.setRxBoostedGainMode(previous_pref != 0)) queueSavedRadioApply();
     return false;
   }
+  if (result == mesh::RadioParamApplyResult::BUSY) queueSavedRadioApply();
   return true;
 }
 
@@ -9140,7 +9146,7 @@ bool MyMesh::handleRxPowerSavingGetCommand(const char* command, char* reply,
 
 bool MyMesh::applyAndSaveRxPowerSaving(const char* value, char* reply) {
   if (!radio_driver.supportsRxPowerSaving()) {
-    mesh::cli::formatError(reply, 160, "RX power saving unsupported");
+    mesh::cli::formatError(reply, 160, "RXPS unsupported");
     return false;
   }
 
@@ -9154,7 +9160,7 @@ bool MyMesh::applyAndSaveRxPowerSaving(const char* value, char* reply) {
 
   mesh::cli::RxPowerSavingArguments parsed = {};
   if (!mesh::cli::parseRxPowerSavingArgumentsStrict(value, parsed)) {
-    mesh::cli::formatError(reply, 160, "use off, level 1-10, or RX/SLEEP microseconds");
+    mesh::cli::formatError(reply, 160, "use off, level 1-10, or RX_US SLEEP_US");
     return false;
   }
 
@@ -9175,12 +9181,12 @@ bool MyMesh::applyAndSaveRxPowerSaving(const char* value, char* reply) {
     if (parsed.level < 1 || parsed.level > 10) {
       strcpy(reply, parsed.preamble == 0
           ? "Error: level must be 1-10"
-          : "Error: level must be 1-10; preamble must be 16 or 32");
+          : "Error: level 1-10; preamble 16 or 32");
       return false;
     }
     if (parsed.preamble != 0
         && parsed.preamble != 16 && parsed.preamble != 32) {
-      mesh::cli::formatError(reply, 160, "level must be 1-10; preamble must be 16 or 32");
+      mesh::cli::formatError(reply, 160, "level 1-10; preamble 16 or 32");
       return false;
     }
     enabled = 1;
@@ -9192,7 +9198,7 @@ bool MyMesh::applyAndSaveRxPowerSaving(const char* value, char* reply) {
         || parsed.rx_us > RX_POWERSAVING_MAX_PERIOD_US
         || parsed.sleep_us < RX_POWERSAVING_MIN_MANUAL_PERIOD_US
         || parsed.sleep_us > RX_POWERSAVING_MAX_PERIOD_US) {
-      snprintf(reply, 160, "Error: RX/SLEEP must be %lu-%lu us",
+      snprintf(reply, 160, "Error: RX/SLEEP %lu-%lu us",
                (unsigned long)RX_POWERSAVING_MIN_MANUAL_PERIOD_US,
                (unsigned long)RX_POWERSAVING_MAX_PERIOD_US);
       return false;
@@ -9210,22 +9216,25 @@ bool MyMesh::applyAndSaveRxPowerSaving(const char* value, char* reply) {
         || (preamble != 0 && preamble != 16 && preamble != 32)
         || !recalcRxPowerSavingFromLevel(level, _prefs.sf, _prefs.bw, preamble,
                                          &rx_us, &sleep_us)) {
-      mesh::cli::formatError(reply, 160, "level must be 1-10; preamble must be auto, 16, or 32");
+      mesh::cli::formatError(reply, 160, "level 1-10; preamble auto, 16 or 32");
       return false;
     }
   }
   if ((manual_requested || enabled)
       && (!isValidRxPowerSavingPeriod(rx_us)
           || !isValidRxPowerSavingPeriod(sleep_us))) {
-    snprintf(reply, 160, "Error: RX/SLEEP must be %lu-%lu us",
+    snprintf(reply, 160, "Error: RX/SLEEP %lu-%lu us",
              (unsigned long)RX_POWERSAVING_MIN_MANUAL_PERIOD_US,
              (unsigned long)RX_POWERSAVING_MAX_PERIOD_US);
     return false;
   }
 
-  if (_radio_available
-      && !radio_driver.setRxPowerSaving(enabled != 0, rx_us, sleep_us)) {
-    mesh::cli::formatError(reply, 160, "radio busy; retry");
+  const auto result = _radio_available && !_primary_radio_blocked
+      ? radio_driver.trySetRxPowerSaving(enabled != 0, rx_us, sleep_us)
+      : mesh::RadioParamApplyResult::BUSY;
+  if (result == mesh::RadioParamApplyResult::FAILED) {
+    queueSavedRadioApply();
+    mesh::cli::formatError(reply, 160, "RXPS rejected");
     return false;
   }
 
@@ -9244,15 +9253,13 @@ bool MyMesh::applyAndSaveRxPowerSaving(const char* value, char* reply) {
     _prefs.rx_ps_sleep_us = previous_sleep;
     _prefs.rx_ps_level = previous_level;
     _prefs.rx_ps_preamble = previous_preamble;
-    if (_radio_available
-        && !radio_driver.setRxPowerSaving(previous_enabled != 0, previous_rx, previous_sleep)) {
-      saved_radio_apply_pending = true;
-      radio_apply_retry_at = 0;
-      radio_apply_failures = 0;
-    }
-    mesh::cli::formatError(reply, 160, "RX power saving could not be saved");
+    if (result == mesh::RadioParamApplyResult::APPLIED
+        && !radio_driver.setRxPowerSaving(previous_enabled != 0, previous_rx, previous_sleep))
+      queueSavedRadioApply();
+    mesh::cli::formatError(reply, 160, "RXPS not saved");
     return false;
   }
+  if (result == mesh::RadioParamApplyResult::BUSY) queueSavedRadioApply();
   snprintf(reply, 160, "OK - %s,%lu,%lu",
            enabled ? "on" : "off", (unsigned long)rx_us,
            (unsigned long)sleep_us);
@@ -10370,7 +10377,7 @@ void MyMesh::handleTerminalCommand(char* command, bool reader_prompt,
 #endif
   } else if (strcmp(command, "get radio.rxgain") == 0) {
     if (!radio_driver.supportsRxBoostedGainMode()) {
-      terminalOutput().print("  ERROR: RX boosted gain is unsupported on this radio\r\n");
+      terminalOutput().print("  ERROR: RX gain unsupported\r\n");
     } else {
       terminalOutput().printf("  radio.rxgain %s\r\n",
                     _prefs.rx_boosted_gain ? "on" : "off");
@@ -10415,11 +10422,11 @@ void MyMesh::handleTerminalCommand(char* command, bool reader_prompt,
       const char* value = config + 12;
       while (*value == ' ' || *value == '\t') value++;
       if (strcmp(value, "on") != 0 && strcmp(value, "off") != 0) {
-        terminalOutput().print("  ERROR: use set radio.rxgain <on|off>\r\n");
+        terminalOutput().print("  ERROR: use on|off\r\n");
       } else if (!radio_driver.supportsRxBoostedGainMode()) {
-        terminalOutput().print("  ERROR: RX boosted gain is unsupported on this radio\r\n");
+        terminalOutput().print("  ERROR: RX gain unsupported\r\n");
       } else if (!applyAndSaveRxBoostedGain(strcmp(value, "on") == 0)) {
-        terminalOutput().print("  ERROR: radio busy; retry\r\n");
+        terminalOutput().print("  ERROR: RX gain failed\r\n");
       } else {
         terminalOutput().printf("  OK - radio.rxgain %s\r\n", value);
       }
@@ -10901,9 +10908,6 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
   if (_radio_profiles.handle(command, reply, reply_capacity, sender_timestamp != 0)) return true;
   if (!strncmp(command, "set tempradio ", 14)) command += 4;
   if (!strcmp(command, "get tempradio")) command += 4;
-  char profile_command[140];
-  const uint16_t previous_primary_preamble = _radio_profiles.primaryPreamble();
-  uint16_t requested_primary_preamble = previous_primary_preamble;
   if (!strncmp(command, "set radio ", 10)) {
     char legacy[120];
     uint16_t preamble = 0;
@@ -10915,9 +10919,15 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
     if (!_radio_profiles.acceptsPrimary(f, bw, sf, cr, preamble)) {
       mesh::cli::formatError(reply, reply_capacity, "radio params unsupported"); return true;
     }
-    requested_primary_preamble = preamble;
-    snprintf(profile_command, sizeof(profile_command), "set radio %s", legacy);
-    command = profile_command;
+    const auto result = applyAndSaveRadioParams(f, bw, sf, cr, _prefs.client_repeat,
+        preamble, sender_timestamp != 0);
+    snprintf(reply, reply_capacity, "%s", result == RadioSettingResult::Saved ? "OK"
+        : result == RadioSettingResult::SaveFailed ? "Error: radio not saved"
+        : result == RadioSettingResult::SaveUnconfirmed ? "Error: radio save unconfirmed"
+        : "Error: radio rejected");
+    if (result == RadioSettingResult::Saved)
+      _radio_profiles.appendPrimaryChirpWarning(reply, reply_capacity, sf, bw, preamble);
+    return true;
   }
   if (sender_timestamp == 0 && handleDirectCommand(command, reply, reply_capacity)) return true;
   if (handleNotificationCommand(command, reply, reply_capacity)) return true;
@@ -10948,14 +10958,12 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
         || frequency < 150.0f || frequency > 2500.0f) {
       mesh::cli::formatError(reply, reply_capacity, "frequency must be 150-2500 MHz");
     } else {
-      const float previous = _prefs.freq;
-      _prefs.freq = frequency;
-      if (savePrefs()) {
-        snprintf(reply, reply_capacity, "OK - reboot to apply");
-      } else {
-        _prefs.freq = previous;
-        mesh::cli::formatError(reply, reply_capacity, "frequency could not be saved");
-      }
+      const auto result = applyAndSaveRadioParams(frequency, _prefs.bw, _prefs.sf, _prefs.cr,
+          _prefs.client_repeat, _radio_profiles.primaryPreamble(), sender_timestamp != 0);
+      snprintf(reply, reply_capacity, "%s", result == RadioSettingResult::Saved ? "OK"
+          : result == RadioSettingResult::SaveFailed ? "Error: radio not saved"
+          : result == RadioSettingResult::SaveUnconfirmed ? "Error: radio save unconfirmed"
+          : "Error: radio rejected");
     }
     return true;
   }
@@ -10996,10 +11004,6 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
   }
 
   if (isCompanionRadioPrefsCommand(command)) {
-    const float previous_freq = _prefs.freq;
-    const float previous_bw = _prefs.bw;
-    const uint8_t previous_sf = _prefs.sf;
-    const uint8_t previous_cr = _prefs.cr;
     const float previous_af = _prefs.airtime_factor;
     const float previous_rxdelay = _prefs.rx_delay_base;
     const float previous_txdelay = _prefs.tx_delay_factor;
@@ -11008,30 +11012,13 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
     const uint8_t previous_agc = _prefs.agc_reset_interval;
     const uint8_t previous_hash_mode = _prefs.path_hash_mode;
     const uint8_t previous_multi_acks = _prefs.multi_acks;
-    const uint32_t previous_rx_us = _prefs.rx_ps_rx_us;
-    const uint32_t previous_sleep_us = _prefs.rx_ps_sleep_us;
 
     if (!_prefs.getRadioPrefs()->handleCommand(
-            command, sender_timestamp, reply)) {
+            command, sender_timestamp, reply, false)) {
       return false;
     }
     if (_prefs.getRadioPrefs()->isDirty() && strncmp(reply, "OK", 2) == 0) {
-      if (strncmp(command, "set radio ", 10) == 0) {
-        recalcRxPowerSavingFromLevel(
-            _prefs.rx_ps_level, _prefs.sf, _prefs.bw,
-            _prefs.rx_ps_preamble, &_prefs.rx_ps_rx_us,
-            &_prefs.rx_ps_sleep_us);
-      }
-      // Both validators must accept before either persistent image changes.
-      // In particular, the shared prefs parser has a tighter BW tolerance.
-      const bool primary_radio_command = strncmp(command, "set radio ", 10) == 0;
-      const bool preamble_saved = !primary_radio_command
-          || _radio_profiles.savePrimaryPreamble(requested_primary_preamble);
-      if (!preamble_saved || !savePrefs()) {
-        _prefs.freq = previous_freq;
-        _prefs.bw = previous_bw;
-        _prefs.sf = previous_sf;
-        _prefs.cr = previous_cr;
+      if (!savePrefs()) {
         _prefs.airtime_factor = previous_af;
         _prefs.rx_delay_base = previous_rxdelay;
         _prefs.tx_delay_factor = previous_txdelay;
@@ -11040,24 +11027,10 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
         _prefs.agc_reset_interval = previous_agc;
         _prefs.path_hash_mode = previous_hash_mode;
         _prefs.multi_acks = previous_multi_acks;
-        _prefs.rx_ps_rx_us = previous_rx_us;
-        _prefs.rx_ps_sleep_us = previous_sleep_us;
         _prefs.clearDirty();
-        if (!preamble_saved) {
-          mesh::cli::formatError(reply, reply_capacity, "preamble could not be saved");
-        } else if (primary_radio_command
-            && !_radio_profiles.savePrimaryPreamble(previous_primary_preamble)) {
-          mesh::cli::formatError(reply, reply_capacity, "radio save failed; preamble rollback failed");
-        } else {
-          mesh::cli::formatError(reply, reply_capacity, "setting changed but save failed");
-        }
+        mesh::cli::formatError(reply, reply_capacity, "setting changed but save failed");
       }
     }
-    // Keep get radio as the upstream four-field tuple. Apps parse this CSV
-    // directly; preamble and timing diagnostics have separate commands.
-    if (!strncmp(command, "set radio ", 10) && !strncmp(reply, "OK", 2))
-      _radio_profiles.appendPrimaryChirpWarning(reply, reply_capacity, _prefs.sf, _prefs.bw,
-                                               _radio_profiles.primaryPreamble());
     return true;
   }
 
@@ -11595,30 +11568,7 @@ void MyMesh::loop() {
 #endif
   serviceBinaryTraceReply();
   if (!mesh::morseTimingActive(_radio)) serviceSigningSession();
-  if (!command_radio_apply_pending && saved_radio_apply_pending && !hasOutbound()
-      && _radio_available
-#if COMPANION_FEATURE_TEMP_RADIO
-      && !_temp_radio_applied && _temp_radio_set_at == 0
-      && _temp_radio_revert_at == 0
-#endif
-      && (!radio_apply_retry_at || millisHasNowPassed(radio_apply_retry_at))) {
-    // A power-saving wake can enter begin() with a complete packet already
-    // waiting. Preserve that packet, then apply the persisted radio settings
-    // once the receive/response path is idle.
-    if ((!radio_driver.supportsRxBoostedGainMode()
-            || radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain))
-        && applySavedRadioParams()
-        && radio_driver.setTxPower(_prefs.tx_power_dbm)
-        && (!radio_driver.supportsRxPowerSaving()
-            || radio_driver.setRxPowerSaving(_prefs.rx_powersaving_enabled != 0,
-                                             _prefs.rx_ps_rx_us, _prefs.rx_ps_sleep_us))) {
-      saved_radio_apply_pending = false;
-      radio_apply_retry_at = 0;
-      radio_apply_failures = 0;
-    } else {
-      radio_apply_retry_at = futureMillis(nextRadioApplyRetryDelay(radio_apply_failures));
-    }
-  }
+
   if (has_next_ack_expiry
       && (next_ack_expiry == _ms->getMillis() || millisHasNowPassed(next_ack_expiry))) {
     expireExpectedAcks();
@@ -11639,8 +11589,7 @@ void MyMesh::loop() {
     checkCLIRescueCmd();
 #endif
   }
-  servicePendingRadioParamApply();
-  servicePendingTxPower();
+  servicePendingLocalRadioSettings();
 #if MESH_ENABLE_ONE_KEY_DM
   if (held_dm_count != 0 || verified_pending_count != 0) releaseHeldOneKeyDMs();
 #endif
@@ -11733,7 +11682,8 @@ bool MyMesh::canRecoverUsbLogging() const {
       && !_store->hasPendingAdvertWrites()
 #endif
       && !hasOutbound() && !isAnyTempRadioActive() && !hasPendingOtaApply()
-      && !command_radio_apply_pending && !saved_radio_apply_pending && !tx_power_apply_pending
+      && !saved_radio_apply_pending && !tx_power_apply_pending
+      && rf_rx_disable_pending < 0 && !_radio_profiles.hasPendingTuning()
       && _scheduled_reboot_at == 0 && !hasPendingReqs()
       && !_delayed_replies.hasBinaryTrace() && sign_data == NULL
 #if COMPANION_FEATURE_TEXT_TERMINAL
@@ -11778,7 +11728,8 @@ mesh::powerdiag::Mask MyMesh::pendingWorkReason() const {
   if (_iter_started && _serial != NULL
       && _serial->isReplyRouteAvailable(_iter_reply_route)) return mask(Reason::SerialIO);
   if (hasPendingOtaApply()) return mask(Reason::Ota);
-  if (command_radio_apply_pending || (tx_power_apply_pending && _radio_available)
+  if (_radio_profiles.hasPendingTuning() || (rf_rx_disable_pending >= 0 && _radio_available)
+      || (tx_power_apply_pending && _radio_available)
       || _scheduled_reboot_at != 0) return mask(Reason::Scheduled);
   if (hasPendingReqs() || _delayed_replies.hasBinaryTrace()) return mask(Reason::Mesh);
 #if COMPANION_FEATURE_TEXT_TERMINAL
@@ -11794,7 +11745,7 @@ mesh::powerdiag::Mask MyMesh::pendingWorkReason() const {
           && !_temp_radio_applied && _temp_radio_set_at == 0
           && _temp_radio_revert_at == 0
 #endif
-      && (!radio_apply_retry_at || millisHasNowPassed(radio_apply_retry_at))) return mask(Reason::Scheduled);
+      ) return mask(Reason::Scheduled);
   if (contact_write_needs_polling || _store->contactRecoveryPending()) return mask(Reason::Mesh);
 #if defined(ESP32_PLATFORM)
   if (_store->hasPendingAdvertWrites()) return mask(Reason::Mesh);

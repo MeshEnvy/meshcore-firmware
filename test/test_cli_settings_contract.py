@@ -80,6 +80,61 @@ OBSERVER_QUERY_EXCEPTIONS = {
 
 
 class CLISettingsContractTest(unittest.TestCase):
+    def test_shared_primary_parser_can_be_skipped_without_changing_other_commands(self):
+        harness = r'''
+#include <cassert>
+#include <cstdio>
+#include <cstring>
+#include "examples/companion_radio/NodePrefs.h"
+int main() {
+  CompanionNodePrefs prefs;
+  prefs.freq = 915; prefs.bw = 125; prefs.sf = 7; prefs.cr = 5;
+  auto* radio = prefs.getRadioPrefs(); radio->clearDirty();
+  char reply[160] = "unchanged";
+  for (const char* text : {"set radio 916,125,8,6", "set radio invalid"}) {
+    assert(!radio->handleCommand(text, 0, reply, false));
+    assert(!strcmp(reply, "unchanged") && !radio->isDirty());
+    assert(prefs.freq == 915 && prefs.bw == 125 && prefs.sf == 7 && prefs.cr == 5);
+  }
+  assert(radio->handleCommand("get radio", 0, reply, false));
+  float f = 0, bw = 0; unsigned sf = 0, cr = 0;
+  assert(sscanf(reply, "> %f,%f,%u,%u", &f, &bw, &sf, &cr) == 4);
+  assert(f == 915 && bw == 125 && sf == 7 && cr == 5);
+  assert(radio->handleCommand("set af 2", 0, reply, false));
+  assert(!strcmp(reply, "OK") && prefs.airtime_factor == 2 && radio->isDirty());
+  radio->clearDirty();
+  // The three-argument/default path keeps the complete legacy parser.
+  assert(radio->handleCommand("set radio invalid", 0, reply));
+  assert(strstr(reply, "invalid radio") && !radio->isDirty());
+  assert(radio->handleCommand("set radio 916,125,8,6", 0, reply));
+  assert(!strncmp(reply, "OK", 2) && radio->isDirty());
+  assert(prefs.freq == 916 && prefs.bw == 125 && prefs.sf == 8 && prefs.cr == 6);
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='common-radio-dispatch-') as directory:
+            work = Path(directory)
+            (work / 'test.cpp').write_text('#include <initializer_list>\n' + harness)
+            (work / 'Utils.h').write_text('''#pragma once
+#include <Arduino.h>
+#include <cassert>
+namespace mesh { struct Utils {
+ static void printHex(Stream&,const uint8_t*,size_t){assert(false);}
+ static void fromHex(uint8_t*,size_t,const char*){assert(false);}
+}; }
+''')
+            sources = ['ConfigSerializer.cpp', 'DynamicConfigSerializer.cpp',
+                       'CommonRadioPrefs.cpp', 'radiolib/RXPowerSaving.cpp',
+                       'radiolib/RXPowerSavingCLI.cpp', 'TxtDataHelpers.cpp']
+            compiled = subprocess.run(['g++', '-std=c++17', '-DNRF52_PLATFORM=1',
+                '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-pie', '-no-pie',
+                '-I', str(work), '-I', str(ROOT / 'test/fixtures/radio_profiles/mocks'),
+                '-I', str(ROOT / 'test/mocks'), '-I', str(ROOT / 'src'), '-I', str(ROOT),
+                str(work / 'test.cpp'), *(str(ROOT / 'src/helpers' / name) for name in sources),
+                '-o', str(work / 'test')], text=True, capture_output=True)
+            self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+            checked = subprocess.run([str(work / 'test')], text=True, capture_output=True)
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+
     def test_feature_guarded_query_coverage(self):
         compiler = shutil.which('g++') or shutil.which('clang++')
         self.assertIsNotNone(compiler, 'Host C++ compiler required')
@@ -275,6 +330,11 @@ class CLISettingsContractTest(unittest.TestCase):
                         extract_braced(source, signature).replace('CommonCLI::', 'CLI::')
                         for signature in ('void CommonCLI::applyAndSaveTxPower(',
                                           'void CommonCLI::servicePendingTxPower(')))
+                    fixture = fixture.replace('@RX_METHODS@', '\n'.join(
+                        extract_braced(source, signature).replace('CommonCLI::', 'CLI::')
+                        for signature in ('mesh::RadioParamApplyResult CommonCLI::applyRxSetting(',
+                                          'bool CommonCLI::saveRxSetting(',
+                                          'void CommonCLI::restoreRxSetting(')))
                     cpp.write_text(fixture, encoding='utf-8')
                     sanitizers = (['-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                                    '-fno-pie', '-no-pie'] if sys.platform.startswith('linux') else [])

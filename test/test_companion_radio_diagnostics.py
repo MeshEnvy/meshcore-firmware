@@ -18,6 +18,7 @@ class CompanionRadioDiagnosticsTests(unittest.TestCase):
         methods='\n'.join(body(wrapper,signature) for signature in (
             'bool supportsRxPowerSavingRfRxDisable() const override',
             'bool setRxPowerSavingRfRxDisabled(bool disabled) override',
+            'mesh::RadioParamApplyResult trySetRxPowerSavingRfRxDisabled(bool disabled) override',
             'bool isRxPowerSavingRfRxDisabled() const override'))
         admission='\n'.join(body(radio,signature) for signature in (
             'uint8_t RadioLibWrapper::beginReconfigure()',

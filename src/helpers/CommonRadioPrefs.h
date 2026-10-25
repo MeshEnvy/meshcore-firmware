@@ -66,7 +66,9 @@ public:
   virtual RxPowerSavingConfig readRxPowerSavingConfig() const { return {}; }
   void formatRxPowerSavingStatus(char* reply, size_t reply_size) const;
 
-  bool handleCommand(const char* command, uint32_t sender_timestamp, char* reply);
+  static bool isValidBandwidth(float bandwidth);
+  bool handleCommand(const char* command, uint32_t sender_timestamp, char* reply,
+                     bool allow_primary_set = true);
 
   bool setByKey(const char* key, const char* value) override;   // for dynamic key/value access
   bool getByKey(const char* key, char* value, size_t max_len) override;

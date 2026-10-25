@@ -39,7 +39,8 @@ struct WebConfigServer {
   Callbacks callbacks;
   Callbacks* _cb = &callbacks;
   mesh::RoomWebMailbox* _room_mailbox = new mesh::RoomWebMailbox;
-  Mode _mode = MODE_LAN;
+  Mode _mode = MODE_LAN, _start_mode = MODE_OFF;
+  uint32_t _start_retry_at = 0, _start_retry_delay = 5000;
   bool _stopping = false, _keep_wifi_on_stop = false, _was_setup_ap = false;
   bool _owns_wifi = true, _stop_warned = false, _initial_setup = false;
   bool _setup_provisioning_privilege = false;
@@ -139,4 +140,11 @@ int main() {
   assert(!failed.stopForOTA(reply));
   assert(strstr(reply, "WebConfig stopped; WiFi AP handoff failed"));
   assert(!failed.server.listening);
+  // OTA cancels a queued AP retry even when no listener was created yet.
+  WebConfigServer pending;
+  pending._mode = WebConfigServer::MODE_OFF;
+  pending._start_mode = WebConfigServer::MODE_SETUP;
+  pending._start_retry_at = 5000;
+  assert(pending.stopForOTA(reply));
+  assert(pending._start_mode == WebConfigServer::MODE_OFF && !pending._start_retry_at);
 }

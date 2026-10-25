@@ -410,6 +410,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks,
 
   bool addPost(ClientInfo* client, const char* postData);
   bool applySavedRadioParams();
+  void servicePendingPrimaryRadioSettings(bool tx_gap = false);
   bool storePost(const mesh::Identity& author, const char* postData);
   bool snapshotRoomHistory();
   void loadRoomHistory();
@@ -625,9 +626,19 @@ public:
   bool isTxPowerApplied(int8_t power_dbm) const override;
 #endif
   bool setRxPowerSaving(bool enable, uint32_t rx_us, uint32_t sleep_us) override;
+  bool supportsRxPowerSaving() const override;
+  mesh::RadioParamApplyResult trySetRxPowerSaving(bool enable, uint32_t rx_us, uint32_t sleep_us) override;
+  bool supportsRxPowerSavingRfRxDisable() const override;
+  mesh::RadioParamApplyResult trySetRxPowerSavingRfRxDisabled(bool disabled) override;
+  bool isRxPowerSavingRfRxDisabled() const override;
   void recalibrateNoiseFloor() override { _radio->recalibrateNoiseFloor(); }
   void getRxPsWatchdogCounts(uint32_t* soft, uint32_t* hard) override;
   bool setRxBoostedGain(bool enable) override;
+  bool supportsRxBoostedGain() const override;
+  mesh::RadioParamApplyResult trySetRxBoostedGain(bool enable) override;
+#if defined(USE_LR2021)
+  mesh::RadioParamApplyResult tryConfigSideDetectors(const uint8_t sideDetSFs[], uint8_t num, float bw) override;
+#endif
 
   void formatNeighborsReply(char *reply) override;
   void removeNeighbor(const uint8_t* pubkey, int key_len) override;
@@ -704,7 +715,7 @@ public:
 #endif
   bool canRecoverUsbLogging() const {
     return dirty_contacts_expiry == 0 && !hasOutbound() && !isAnyTempRadioActive()
-        && !hasPendingOtaApply() && !saved_radio_apply_pending && !_cli.hasPendingTxPower()
+        && !hasPendingOtaApply() && !saved_radio_apply_pending && !_cli.hasPendingRadioSettings()
         && set_radio_at == 0 && _ota_update_at == 0;
   }
 #if MESH_ENABLE_ROOM_FLOOD_RULE_ENGINE
@@ -767,11 +778,14 @@ public:
 
   bool setMqttBridgeState(bool enable) override {
     if (!enable) {
-      if (bridge && bridge->isRunning()) bridge->end();
+      if (bridge) bridge->end();
       _alerter.setBridge(nullptr);
       return !bridge || !bridge->isRunning();
     }
-    if (bridge && bridge->isStopping()) return false;
+    if (bridge && bridge->isStopping()) {
+      bridge->begin();
+      return bridge->isStartPending();
+    }
     // Give the WiFi station to MQTT while it associates. ESP-NOW is restarted
     // after the AP channel is known, which avoids a raw ESP-NOW-only session
     // pinning the station to a different channel.
@@ -814,7 +828,7 @@ public:
       _alerter.setBridge(bridge);
     }
     if (_prefs.espnow_bridge_enabled) startSharedEspNowBridgeIfReady();
-    return bridge->isRunning();
+    return bridge->isRunning() || bridge->isStartPending();
   }
 
   bool setEspNowBridgeState(bool enable) override {
@@ -872,7 +886,11 @@ public:
 
   bool setBridgeState(bool enable) override {
 #ifdef WITH_MQTT_BRIDGE
-    if (enable && bridge && bridge->isStopping()) return false;
+    if (!enable && bridge && bridge->isStartPending()) bridge->end();
+    if (enable && bridge && bridge->isStopping()) {
+      bridge->begin();
+      return bridge->isStartPending();
+    }
 #endif
 #if defined(WITH_MQTT_BRIDGE) && defined(WITH_ESPNOW_BRIDGE)
     if (!enable) return setEspNowBridgeState(false) && setMqttBridgeState(false);
@@ -936,7 +954,8 @@ public:
       _alerter.setBridge(nullptr);
 #endif
     }
-    return enable ? bridge->isRunning() : !bridge->isRunning();
+    return enable ? (bridge->isRunning() || bridge->isStartPending())
+                  : !bridge->isRunning();
 #endif
   }
 
@@ -970,7 +989,7 @@ public:
 #endif
     configureBridgeFilter(bridge);
     bridge->begin();
-    return bridge->isRunning();
+    return bridge->isRunning() || bridge->isStartPending();
 #endif
   }
 
@@ -1031,6 +1050,10 @@ public:
     return bridge && bridge->isStopping();
   }
 
+  bool isMqttBridgeStartPending() override {
+    return bridge && bridge->isStartPending();
+  }
+
   bool syncMqttNtp() override {
     if (!bridge || !bridge->isRunning()) return false;
     // Queue the sync onto the MQTT task (Core 0) without blocking: this runs on
@@ -1076,7 +1099,8 @@ public:
   bool setWiFiPowerSave(const char* value, char* reply) override;
   bool setWiFiCLI(const char* value, char* reply) override;
   bool isWebConfigActive() const override {
-    return _webconfig && (_webconfig->isRunning() || _webconfig->isStopping());
+    return _webconfig && (_webconfig->isRunning() || _webconfig->isStopping()
+        || _webconfig->isStartPending());
   }
   void getNodeSnapshot(WebConfigServer::NodeSnapshot& snapshot) override;
   void execCommand(char* cmd, char* reply) override { handleCommand(0, cmd, reply); }

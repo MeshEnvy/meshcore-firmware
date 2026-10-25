@@ -13,6 +13,7 @@ SANITIZER_FLAGS = [] if os.name == "nt" else ["-fsanitize=address,undefined", "-
 
 PREAMBLE = r'''
 #include <cassert>
+#include <helpers/TempRadioReplyBarrier.h>
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
@@ -55,6 +56,7 @@ struct RadioProfileCLI {
   }
   bool acceptsPrimary(float, float, uint8_t, uint8_t, uint16_t) { return true; }
   bool savePrimaryPreamble(uint16_t) { return true; }
+  bool restorePrimaryPreamble(uint16_t) { return true; }
   uint16_t primaryPreamble() const { return 0; }
   void appendSavedPreamble(char*, size_t, uint8_t, float) {}
   void appendPrimaryChirpWarning(char*, size_t, uint8_t, float, uint16_t) const {}
@@ -91,7 +93,8 @@ struct Store {
   bool formatFileSystem(){++erased;return success;}
 };
 struct Prefs {
-  uint8_t lost_reply=0;
+  uint8_t lost_reply=0, client_repeat=0;
+  bool rx_powersaving_enabled=false;
   float tx_delay_factor=0.5f, direct_tx_delay_factor=0.2f;
   uint8_t interference_threshold=0, agc_reset_interval=0;
   float tz_offset=0;
@@ -101,7 +104,7 @@ struct Prefs {
   int8_t tx_power_dbm=10;
   char node_name[32]="test";
   Prefs* getRadioPrefs(){return this;}
-  bool handleCommand(const char*,uint32_t,char*){return false;}
+  bool handleCommand(const char*,uint32_t,char*,bool=true){return false;}
   bool isDirty() const {return false;}
   void clearDirty(){}
 };
@@ -116,7 +119,7 @@ struct Board {
   bool supportsBatteryChargeTarget(uint16_t mv){return mv==4100 || mv==4200;}
   bool setBatteryChargeTarget(uint16_t mv){++charge_writes;charge_target=mv;return true;}
   bool rebootToUf2Bootloader(){return false;}
-  bool handleCommand(const char*,uint32_t,char*){return false;}
+  bool handleCommand(const char*,uint32_t,char*,bool=true){return false;}
   void powerOff(){++power_offs;}
 } board;
 struct Radio {
@@ -134,7 +137,7 @@ struct Radio {
 } radio_driver;
 struct AdvertDataParser {static bool isValidName(const char*){return true;}};
 struct StrHelper {static void strncpy(char* out,const char* in,size_t len){::strncpy(out,in,len);}};
-void recalcRxPowerSavingFromLevel(uint8_t,uint8_t,float,uint8_t,uint32_t*,uint32_t*){}
+bool recalcRxPowerSavingFromLevel(uint8_t,uint8_t,float,uint8_t,uint32_t*,uint32_t*){return true;}
 struct StatsFormatHelper {
   template<class... T> static void formatCoreStats(char* out,T&&...){strcpy(out,"core");}
   template<class... T> static void formatRadioStats(char* out,T&&...){strcpy(out,"radio");}
@@ -146,7 +149,11 @@ struct WebConfigServer {
 };
 const char* FIRMWARE_VERSION="test";
 const char* FIRMWARE_BUILD_DATE="test";
+struct CommonRadioPrefs {static bool isValidBandwidth(float){return true;}};
 struct MyMesh : CompanionFleetFixture {
+  mesh::TempRadioReplyBarrier _primary_radio_reply;
+  bool _primary_radio_blocked=false,_primary_radio_reply_admission=false;
+
   mesh::MorseReplyHandoff _morse_reply;
   bool _morse_reply_admission = false;
   mesh::RadioProfileCLI _radio_profiles;
@@ -164,8 +171,13 @@ struct MyMesh : CompanionFleetFixture {
   unsigned radio_apply_retry_at=0;
   uint8_t radio_apply_failures=0;
   int resets=0, saves=0;
-  enum class RadioSettingResult { Saved, RadioRejected, SaveFailed };
+  enum class RadioSettingResult { Saved, RadioRejected, SaveFailed, SaveUnconfirmed };
   RadioSettingResult applyAndSaveTxPower(int8_t);
+  RadioSettingResult applyAndSaveRadioParams(float,float,uint8_t,uint8_t,uint8_t,uint16_t,bool=false);
+  void queueSavedRadioApply();
+  bool isValidClientRepeatFreq(uint32_t) const {return true;}
+  mesh::RadioParamApplyResult tryApplyRadioParams(float,float,uint8_t,uint8_t) {return mesh::RadioParamApplyResult::APPLIED;}
+  bool applySavedRadioParams(){return true;}
   bool saveAdvertName(const char*);
   bool handleCommand(const char*,uint32_t,char*);
   bool handleDirectCommand(const char*,char*,size_t);
@@ -261,15 +273,15 @@ int main() {
   }
   assert(node.handleCommand("set freq 915.25",0,reply));
   assert(!node._radio_profiles.remote_origin);
-  assert(node._prefs.freq==915.25f && strstr(reply,"reboot to apply"));
+  assert(node._prefs.freq==915.25f && !strncmp(reply,"OK",2));
   assert(node.handleCommand("set freq 920",100,reply));
   assert(node._radio_profiles.remote_origin);
-  assert(node._prefs.freq==920.0f && strstr(reply,"reboot to apply"));
+  assert(node._prefs.freq==920.0f && !strcmp(reply,"OK"));
   for(uint32_t stamp:{0u,100u}) {
     reply[0]=0;
     node.onCLICommandRecv(ContactInfo{},nullptr,stamp,"A7|set freq 921.125",reply);
     assert(node._radio_profiles.remote_origin); // even a zero-timestamp LoRa command
-    assert(node._prefs.freq==921.125f && !strcmp(reply,"A7|OK - reboot to apply"));
+    assert(node._prefs.freq==921.125f && !strcmp(reply,"A7|OK"));
     assert(node._prefs.bw==125.0f && node._prefs.sf==7 && node._prefs.cr==5);
     for(const char* bad:{"set freq 149.9","set freq 2500.1","set freq 920oops",
                          "set freq NaN","set freq inf","set freq 1e3","set freq "}) {
@@ -471,6 +483,8 @@ int main() {
         implementation = "\n".join(extract_braced(source, signature) for signature in (
             "static bool isCompanionRadioPrefsCommand(",
             "MyMesh::RadioSettingResult MyMesh::applyAndSaveTxPower(",
+            "MyMesh::RadioSettingResult MyMesh::applyAndSaveRadioParams(",
+            "void MyMesh::queueSavedRadioApply(",
             "bool MyMesh::saveAdvertName(",
             "void MyMesh::onContactCacheFlushed()",
             "bool MyMesh::handleDirectCommand(", "bool MyMesh::handleCommand(",

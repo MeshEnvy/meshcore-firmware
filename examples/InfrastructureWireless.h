@@ -32,7 +32,8 @@ public:
     if (the_mesh.isWebConfigActive()) mask |= mesh::wireless::WiFi;
 #endif
 #ifdef WITH_MQTT_BRIDGE
-    if (the_mesh.isMqttBridgeRunning()) mask |= mesh::wireless::WiFi;
+    if (the_mesh.isMqttBridgeRunning() || the_mesh.isMqttBridgeStartPending())
+      mask |= mesh::wireless::WiFi;
 #endif
 #ifdef WITH_UDP_BRIDGE
     if (the_mesh.isUDPBridgeNetworkEnabled()) mask |= mesh::wireless::WiFi;
@@ -74,7 +75,8 @@ public:
           resume_web_ = the_mesh.isWebConfigActive();
 #endif
 #ifdef WITH_MQTT_BRIDGE
-          resume_mqtt_ = the_mesh.isMqttBridgeRunning();
+          resume_mqtt_ = the_mesh.isMqttBridgeRunning()
+              || the_mesh.isMqttBridgeStartPending();
 #endif
 #ifdef WITH_UDP_BRIDGE
           resume_udp_ = the_mesh.isUDPBridgeConfigured();

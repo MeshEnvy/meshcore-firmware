@@ -131,6 +131,7 @@ struct RoleCLI {
   ObserverPrefs* getObserverPrefs() { return &prefs; }
   bool hasActiveUserGpioTimer() const { return false; }
   bool hasPendingTxPower() const { return false; }
+  bool hasPendingRadioSettings() const { return false; }
 };
 struct AbstractBridge {
   bool running = false, stopping = false, allow_flash = true;
@@ -152,6 +153,7 @@ struct MQTTNodeInfo {
 struct MQTTBridge : AbstractBridge {
   bool network_suspended = false;
   bool isNetworkSuspended() const { return network_suspended; }
+  bool isStartPending() const { return false; }
   template<class... Args> explicit MQTTBridge(Args...) {}
   void setDeviceID(const char*) {} void setFirmwareVersion(const char*) {}
   void setBoardModel(const char*) {} void setBuildDate(const char*) {}
@@ -197,6 +199,8 @@ struct WebConfigServer {
     return true;
   }
   bool startAutoMode(char* reply) { return startSetupMode(reply); }
+  bool requestStart(bool ap, char* reply) { return ap ? startSetupMode(reply) : startAutoMode(reply); }
+  bool isStartPending() const { return false; }
   void requestStop() { running = false; stopping = true; }
   bool stopForOTA(char*) { running = stopping = false; WiFi.mode(WIFI_STA); return true; }
   void tick(uint32_t now) {
@@ -393,7 +397,7 @@ class ESP32FullPowerLifecycleTest(unittest.TestCase):
             "bool startSharedEspNowBridgeIfReady()", "bool setEspNowBridgeState(",
             "bool setMqttBridgeState(", "bool setBridgeState(",
             "bool isEspNowBridgeRunning()", "bool isMqttBridgeRunning()",
-            "bool isMqttBridgeStopping()",
+            "bool isMqttBridgeStopping()", "bool isMqttBridgeStartPending()",
             "bool isWebConfigActive() const", "bool isWebConfigStopping() const",
             "bool hasWirelessNetworkClient() const", "bool stopWebConfigForOTA("))
         methods = "\n".join(extract_braced(source, signature) for signature in (

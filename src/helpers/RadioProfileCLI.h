@@ -26,6 +26,8 @@ class RadioProfileCLI {
   RadioProfileConfig temporary_;
   RadioProfileConfig pending_temporary_;
   uint16_t primary_preamble_ = 0;
+  bool primary_preamble_dirty_ = false;
+  uint32_t primary_preamble_retry_ms_ = 0;
   RadioCrossMode cross_ = RadioCrossMode::Off;
   uint8_t reply_setting_ = 0;  // reserved image byte: 0 = role default
   bool infrastructure_replies_ = false;
@@ -118,6 +120,14 @@ class RadioProfileCLI {
   static void configureBootTuning(FILESYSTEM*, Radio&) {}
 #endif
   void begin(FILESYSTEM* fs, Radio* radio, RTCClock* rtc, bool infrastructure_replies = false);
+  void servicePendingTuning();
+  bool hasPendingTuning() const {
+#if MESH_RADIO_SWITCH_TUNING
+    return fast_pending_ || primary_preamble_dirty_;
+#else
+    return primary_preamble_dirty_;
+#endif
+  }
   void loop();
   bool handle(const char* command, char* reply, size_t capacity = 160, bool remote_origin = false);
   // Remote infrastructure commands must keep both RX-origin generations alive
@@ -146,6 +156,9 @@ class RadioProfileCLI {
   // its committed value changes saved intent only, never the running radio.
   void adoptPrimaryPreamble(uint16_t symbols) { primary_preamble_ = symbols; }
   bool savePrimaryPreamble(uint16_t symbols);
+  // A failed compensating write still restores the old runtime target. Keep
+  // that target dirty until storage confirms it, even for an identical save.
+  bool restorePrimaryPreamble(uint16_t symbols);
   bool acceptsPrimary(float freq, float bw, uint8_t sf, uint8_t cr, uint16_t preamble) const;
   RadioParamApplyResult applyPrimary(float freq, float bw, uint8_t sf, uint8_t cr,
       bool temporary, uint16_t preamble, const uint32_t* timings = nullptr) {

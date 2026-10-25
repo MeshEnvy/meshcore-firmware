@@ -606,6 +606,8 @@ private:
   };
   LifecycleOps _lifecycle_ops;
   MQTTLifecycle::Coordinator _lifecycle;
+  bool _start_requested = false;
+  uint32_t _start_retry_at = 0;
 
   // Observer config (MQTT/WiFi/timezone/SNMP/alert), persisted to /mqtt_prefs.
   MQTTPrefs* _obs = nullptr;
@@ -617,6 +619,7 @@ private:
   char _wifi_password[65] = {};
   uint8_t _wifi_power_save = 0;
   bool _wifi_configured = false;
+  bool _wifi_credentials_changed = false;
   bool prepareWiFiCredentials();
   void beginWiFiStation();
 #endif
@@ -633,6 +636,10 @@ public:
   // Core 1: request cooperative teardown without waiting or freeing resources.
   // Call loop() to reap the acknowledgment; end() remains the OTA stop barrier.
   void requestStop();
+  void requestRestart();
+  bool isStartPending() const {
+    return _start_requested && (!_initialized || isStopping());
+  }
   bool isStopping() const { return _lifecycle.isStopInProgress(); }
   bool isRunning() const override { return _initialized; }
   // Configured and still scheduling recovery, but transports are quiesced.

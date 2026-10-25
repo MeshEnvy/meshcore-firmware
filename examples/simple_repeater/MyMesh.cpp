@@ -4387,6 +4387,9 @@ void MyMesh::onSendComplete(mesh::Packet* packet) {
   if (_cli.fleetChannel()) _cli.fleetChannel()->complete(packet, _cli.radioProfiles());
 #endif
   if (temp_radio_reply_barrier.complete(packet) && !temp_radio_reply_barrier.waiting()) finishRadioReply(true);
+  _cli.servicePendingRxSettings();
+  _cli.radioProfiles().servicePendingTuning();
+  processScheduledRadioSettings(true);
   if (packet == pending_battery_alert_packet) {
     pending_battery_alert_packet = NULL;
     battery_alert_sent = true;
@@ -5129,9 +5132,9 @@ void MyMesh::serviceFleetScheduleReply() {
 }
 #endif
 
-void MyMesh::processScheduledRadioSettings() {
+void MyMesh::processScheduledRadioSettings(bool tx_gap) {
 #if MESH_ENABLE_FLEET_CONTROL
-  serviceFleetScheduleReply();
+  if (!tx_gap) serviceFleetScheduleReply();
 #endif
   const uint64_t current_uptime_millis =
       uptime_millis + (uint32_t)(millis() - last_millis);
@@ -5175,7 +5178,8 @@ void MyMesh::processScheduledRadioSettings() {
   // changes retain their existing bounded retry behavior.
   if (scheduled_radio_retry_at
       && !millisHasNowPassed(scheduled_radio_retry_at)
-      && !hard_temp_end_due) return;
+      && !hard_temp_end_due
+      && !(tx_gap && scheduled_radio_retry_failures == 0)) return;
 
   const bool schedule_check_due = next_scheduled_radio_time != 0
       && (next_scheduled_radio_check_at == 0
@@ -5193,7 +5197,7 @@ void MyMesh::processScheduledRadioSettings() {
 
   // Never touch modulation registers while a packet is still on air. Back off
   // this check too; a long packet should not make the scheduler poll every loop.
-  if (hasOutbound()) {
+  if (!tx_gap && hasOutbound()) {
     scheduled_radio_retry_at = futureMillis(RADIO_APPLY_RETRY_INTERVAL_MILLIS);
     return;
   }
@@ -5908,6 +5912,14 @@ bool MyMesh::setRxPowerSaving(bool enable, uint32_t rx_us, uint32_t sleep_us) {
   return ok;
 }
 
+bool MyMesh::supportsRxPowerSaving() const {
+  return radio_driver.supportsRxPowerSaving();
+}
+
+mesh::RadioParamApplyResult MyMesh::trySetRxPowerSaving(bool enable, uint32_t rx_us, uint32_t sleep_us) {
+  return radio_driver.trySetRxPowerSaving(enable, rx_us, sleep_us);
+}
+
 bool MyMesh::supportsRxPowerSavingRfRxDisable() const {
   return radio_driver.supportsRxPowerSavingRfRxDisable();
 }
@@ -5924,6 +5936,10 @@ bool MyMesh::isRxPowerSavingRfRxDisabled() const {
   return radio_driver.isRxPowerSavingRfRxDisabled();
 }
 
+mesh::RadioParamApplyResult MyMesh::trySetRxPowerSavingRfRxDisabled(bool disabled) {
+  return radio_driver.trySetRxPowerSavingRfRxDisabled(disabled);
+}
+
 void MyMesh::getRxPsWatchdogCounts(uint32_t* soft, uint32_t* hard) {
   *soft = radio_driver.getRxPsWatchdogSoftCount();
   *hard = radio_driver.getRxPsWatchdogHardCount();
@@ -5933,9 +5949,21 @@ bool MyMesh::setRxBoostedGain(bool enable) {
   return radio_driver.setRxBoostedGainMode(enable);
 }
 
+bool MyMesh::supportsRxBoostedGain() const {
+  return radio_driver.supportsRxBoostedGainMode();
+}
+
+mesh::RadioParamApplyResult MyMesh::trySetRxBoostedGain(bool enable) {
+  return radio_driver.trySetRxBoostedGainMode(enable);
+}
+
 #if defined(USE_LR2021)
 bool MyMesh::configSideDetectors(const uint8_t sideDetSFs[], uint8_t num, float bw) {
   return radio_driver.configSideDetectors(sideDetSFs, num, bw);
+}
+
+mesh::RadioParamApplyResult MyMesh::tryConfigSideDetectors(const uint8_t sideDetSFs[], uint8_t num, float bw) {
+  return radio_driver.tryConfigSideDetectors(sideDetSFs, num, bw);
 }
 #endif
 
@@ -11652,12 +11680,11 @@ bool MyMesh::startWebConfigImpl(bool force_ap, char* reply, bool automatic_setup
     strcpy(reply, "Err: OTA server is running - 'stop ota' first");
     return true;
   }
-  if (_webconfig && (_webconfig->isRunning() || _webconfig->isStopping())) {
+  if (_webconfig && _webconfig->isRunning()) {
     if (!automatic_setup && !_webconfig->isStopping()) {
       _webconfig->requestNetworkAccess();
     }
-    strcpy(reply, _webconfig->isStopping() ? "Err: webconfig still stopping, retry shortly"
-                                           : "Err: webconfig already running");
+    strcpy(reply, "Err: webconfig already running");
     return true;
   }
   if (mesh::wireless::control().blocked(mesh::wireless::WiFi)) {
@@ -11710,9 +11737,9 @@ bool MyMesh::startWebConfigImpl(bool force_ap, char* reply, bool automatic_setup
 #endif
   bool started;
   if (force_ap) {
-    started = _webconfig->startSetupMode(reply);
+    started = _webconfig->requestStart(true, reply);
   } else {
-    started = _webconfig->startAutoMode(reply);
+    started = _webconfig->requestStart(false, reply);
   }
   if (!started) {
     // A failed portal must not consume a live operator-started transport.
@@ -11734,7 +11761,8 @@ bool MyMesh::startWebConfigImpl(bool force_ap, char* reply, bool automatic_setup
 }
 
 bool MyMesh::stopWebConfig(char* reply) {
-  if (!_webconfig || !_webconfig->isRunning()) {
+  if (!_webconfig || (!_webconfig->isRunning() && !_webconfig->isStopping()
+                      && !_webconfig->isStartPending())) {
     strcpy(reply, "Err: webconfig not running");
     return true;
   }
@@ -11749,7 +11777,7 @@ bool MyMesh::setWebUIEnabled(bool enabled, char* reply) {
     return true;
   }
   if (enabled) {
-    if (_webconfig && (_webconfig->isRunning() || _webconfig->isStopping())) {
+    if (_webconfig && _webconfig->isRunning()) {
       strcpy(reply, "OK - webui on (already active)");
     } else {
       startWebConfig(false, reply);
@@ -11760,7 +11788,7 @@ bool MyMesh::setWebUIEnabled(bool enabled, char* reply) {
       }
     }
   } else {
-    if (_webconfig && _webconfig->isRunning()) _webconfig->requestStop();
+    if (_webconfig) _webconfig->requestStop();
     strcpy(reply, "OK - webui off");
   }
   return true;
@@ -11801,24 +11829,30 @@ bool MyMesh::getWiFiCLI(char* reply) const {
 
 bool MyMesh::setWiFiSSID(const char* value, char* reply) {
   if (WebConfigServer::setStandaloneWiFiSSID(value, reply, 160, canonicalWiFiLegacyPrefs())) {
-    const bool was_running = _webconfig && _webconfig->isRunning();
-    if (was_running) _webconfig->requestStop();
-    if (_webconfig) _webconfig->reloadStandaloneWiFi();
-    if (was_running) {
-      strcpy(reply, "OK - WiFi SSID saved; WebConfig stopping, start again to apply");
+    if (_webconfig) {
+      _webconfig->reloadStandaloneWiFi();
+      _webconfig->requestRestart();
     }
+#ifdef WITH_MQTT_BRIDGE
+    if (_prefs.bridge_enabled && mqtt_bridge
+        && !_cli.getBoard()->isOTAUpdateRunning()) mqtt_bridge->requestRestart();
+#endif
+    strcpy(reply, "OK - WiFi SSID saved; reconnect scheduled");
   }
   return true;
 }
 
 bool MyMesh::setWiFiPassword(const char* value, char* reply) {
   if (WebConfigServer::setStandaloneWiFiPassword(value, reply, 160, canonicalWiFiLegacyPrefs())) {
-    const bool was_running = _webconfig && _webconfig->isRunning();
-    if (was_running) _webconfig->requestStop();
-    if (_webconfig) _webconfig->reloadStandaloneWiFi();
-    if (was_running) {
-      strcpy(reply, "OK - WiFi password saved; WebConfig stopping, start again to apply");
+    if (_webconfig) {
+      _webconfig->reloadStandaloneWiFi();
+      _webconfig->requestRestart();
     }
+#ifdef WITH_MQTT_BRIDGE
+    if (_prefs.bridge_enabled && mqtt_bridge
+        && !_cli.getBoard()->isOTAUpdateRunning()) mqtt_bridge->requestRestart();
+#endif
+    strcpy(reply, "OK - WiFi password saved; reconnect scheduled");
   }
   return true;
 }
@@ -13858,7 +13892,7 @@ void __attribute__((noinline)) MyMesh::servicePostMeshLoop() {
 #endif
 #if defined(WITH_MQTT_BRIDGE)
   // MQTT owns TLS on Core 0; the radio loop only reaps an acknowledged stop.
-  if (mqtt_bridge && mqtt_bridge->isRunning()) mqtt_bridge->loop();
+  if (mqtt_bridge) mqtt_bridge->loop();
 #endif
 #if defined(WITH_ESPNOW_BRIDGE)
   // ESP-NOW remains cooperative, including in the
@@ -13960,7 +13994,8 @@ void __attribute__((noinline)) MyMesh::servicePostMeshLoop() {
   if (_webconfig) {
     _webconfig->updateWiFiOwnership(webConfigOwnsWiFi());
     _webconfig->tick(millis());
-    if (!_webconfig->isRunning() && !_webconfig->isStopping()) {
+    if (!_webconfig->isRunning() && !_webconfig->isStopping()
+        && !_webconfig->isStartPending()) {
       delete _webconfig;
       _webconfig = nullptr;
     }
@@ -14813,7 +14848,7 @@ mesh::powerdiag::Mask MyMesh::pendingWorkReason() const {
   if (_local_cli_output.busy()) return mask(Reason::SerialIO);
 #endif
   if (deferred_cli_command.pending || pending_self_advert || _cli.hasActiveUserGpioTimer()
-      || _cli.hasPendingTxPower()) return mask(Reason::Scheduled);
+      || _cli.hasPendingRadioSettings()) return mask(Reason::Scheduled);
 #if defined(WITH_BRIDGE)
   const AbstractBridge* active_bridge = activeBridge();
   if (active_bridge && active_bridge->isRunning()) {

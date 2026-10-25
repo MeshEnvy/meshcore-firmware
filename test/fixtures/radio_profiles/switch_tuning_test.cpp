@@ -280,13 +280,10 @@ static void localOnlyAndBusyTransactions() {
   const auto original = f.radio.tuning;
   const auto saved = f.fs.files["/radio_fast"];
   const unsigned persists = f.radio.persists;
-  for (const auto result : {mesh::RadioParamApplyResult::BUSY,
-                           mesh::RadioParamApplyResult::FAILED}) {
-    f.radio.admission = result;
-    f.cmd("set radio.fast.fs on", false);
-    assert(f.radio.tuning == original && f.radio.persists == persists);
-    assert(f.fs.files["/radio_fast"] == saved);
-  }
+  f.radio.admission = mesh::RadioParamApplyResult::FAILED;
+  f.cmd("set radio.fast.fs on", false);
+  assert(f.radio.tuning == original && f.radio.persists == persists);
+  assert(f.fs.files["/radio_fast"] == saved);
   f.radio.admission = mesh::RadioParamApplyResult::APPLIED;
   assert(strstr(f.cmd("set radio.fast.fs on", false, true), "local"));
   f.cli.beginReplyCommand();
@@ -297,6 +294,77 @@ static void localOnlyAndBusyTransactions() {
   assert(f.radio.tuning == original && f.fs.files["/radio_fast"] == saved);
   assert(!strcmp(f.cmd("get radio.fast.fs", true, true), "> off"));
   puts("Fast tuning: busy admission and local-only changes passed");
+}
+
+static void busyTargetsComposeAndApplyOnce() {
+  TuningFixture f;
+  const auto original = f.radio.tuning;
+  f.radio.admission = mesh::RadioParamApplyResult::BUSY;
+  assert(strstr(f.cmd("set radio.fast.warm off"), "pending"));
+  assert(f.cli.hasPendingTuning());
+  assert(strstr(f.cmd("set radio.fast.spi 9"), "pending"));
+  const auto committed = f.fs.files["/radio_fast"];
+  assert(f.radio.tuning == original);
+  // This pending feature must survive a rejected replacement save.
+  f.fs.fail_write = true;
+  f.cmd("set radio.fast.packet off", false);
+  f.fs.fail_write = false;
+  assert(f.fs.files["/radio_fast"] == committed);
+  const auto saved = f.fs.files;
+  for (unsigned i = 0; i < 40; ++i) f.advance(1000);
+  assert(f.cli.hasPendingTuning() && f.fs.files == saved);
+  // Completion hooks call this before the next queued packet starts.
+  f.radio.admission = mesh::RadioParamApplyResult::APPLIED;
+  f.cli.servicePendingTuning();
+  assert(!f.cli.hasPendingTuning());
+  assert(!(f.radio.tuning.flags & mesh::RadioSwitchTuning::Warm));
+  assert(f.radio.tuning.flags & mesh::RadioSwitchTuning::Packet);
+  assert(f.radio.tuning.spi_mhz == 9 && f.fs.files == saved);
+  const auto attempts = f.radio.attempts;
+  f.cli.servicePendingTuning();
+  assert(f.radio.attempts == attempts);
+  TuningRadio reboot;
+  mesh::RadioProfileCLI restored;
+  restored.begin(&f.fs, &reboot, &f.clock);
+  assert(reboot.tuning == f.radio.tuning);
+  puts("Fast tuning: BUSY targets compose, survive failed save and apply once without a retry command");
+}
+
+static void failedPreambleCompensationRepairsDurably() {
+  for (bool rollover : {false, true}) for (bool explicit_save : {false, true}) {
+    TuningFixture f;
+    assert(f.cli.savePrimaryPreamble(32));
+    const auto old = f.fs.files["/radio_profiles"];
+    assert(f.cli.savePrimaryPreamble(64));
+    const auto candidate = f.fs.files["/radio_profiles"];
+    assert(candidate != old);
+    const auto physical = f.radio.p.primary;
+    f.fs.fail_write = true;
+    assert(!f.cli.restorePrimaryPreamble(32));
+    assert(f.cli.primaryPreamble() == 32 && f.cli.hasPendingTuning());
+    assert(f.fs.files["/radio_profiles"] == candidate);
+    // RAM equality is insufficient evidence of a durable compensation.
+    assert(!f.cli.savePrimaryPreamble(32));
+    assert(f.cli.hasPendingTuning());
+    g_mock_millis = rollover ? UINT32_MAX - 500 : 100;
+    f.cli.servicePendingTuning();
+    f.fs.fail_write = false;
+    if (explicit_save) {
+      assert(f.cli.savePrimaryPreamble(32));
+    } else {
+      f.advance(999);
+      assert(f.cli.hasPendingTuning() && f.fs.files["/radio_profiles"] == candidate);
+      f.advance(1);
+    }
+    assert(!f.cli.hasPendingTuning() && f.fs.files["/radio_profiles"] == old);
+    assert(f.radio.p.primary == physical); // Persistence repair never retunes RX.
+    TuningRadio reboot; mesh::RadioProfileCLI restored;
+    restored.begin(&f.fs, &reboot, &f.clock);
+    assert(restored.primaryPreamble() == 32);
+    assert(!f.cli.restorePrimaryPreamble(7));
+    assert(f.cli.primaryPreamble() == 32 && !f.cli.hasPendingTuning());
+  }
+  puts("Preamble compensation: old runtime target, checked identical save, delayed durable repair and rollover passed");
 }
 
 static void storageFailureKeepsCommittedPolicy() {
@@ -435,11 +503,14 @@ static void bootRetriesAreBoundedAcrossRollover() {
       restored.loop();
       assert(reboot.attempts == 2 && reboot.tuning != expected);
       restored.loop();
-      assert(reboot.attempts == 2);
+      // BUSY is just an admission check: service can use the next TX gap.
+      // Real hardware failures retain the one-second retry backoff.
+      const unsigned before = admission == mesh::RadioParamApplyResult::BUSY ? 3 : 2;
+      assert(reboot.attempts == before);
       reboot.admission = mesh::RadioParamApplyResult::APPLIED;
       g_mock_millis += 1000;
       restored.loop();
-      assert(reboot.attempts == 3 && reboot.tuning == expected);
+      assert(reboot.attempts == before + 1 && reboot.tuning == expected);
       assert(f.fs.files == saved && !reboot.persists);
     }
   }
@@ -491,6 +562,8 @@ int main() {
   roundedClockRequiresCapabilityAndBootAdmission();
   clockOnlyLegacyHalKeepsFeaturesUnavailable();
   localOnlyAndBusyTransactions();
+  busyTargetsComposeAndApplyOnce();
+  failedPreambleCompensationRepairsDurably();
   storageFailureKeepsCommittedPolicy();
   bootRecoveryAndDeferredAdmission();
   malformedAndUnreadableImagesStayProtected();

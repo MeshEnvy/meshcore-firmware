@@ -30,6 +30,7 @@
 #include "DataStore.h"
 #include <helpers/RadioProfileCLI.h>
 #include <helpers/MorseReplyHandoff.h>
+#include <helpers/TempRadioReplyBarrier.h>
 #include <helpers/MeshtextConfig.h>
 #if MESH_ENABLE_ETHERNET_TUNNEL
 #include <helpers/EthernetTunnelSettings.h>
@@ -221,6 +222,7 @@ public:
   void begin(bool has_display, bool radio_available = true,
              mesh::ui::StartupScreen* startup_screen = nullptr);
   void activateRadio();
+  void servicePendingLocalRadioSettings();
   bool isRadioReady() const { return _radio_available; }
   void startInterface(BaseSerialInterface &serial);
   void cancelSerialResponseStream(BaseSerialInterface* route = NULL);
@@ -273,6 +275,7 @@ public:
   void stopWebConfig();
   void serviceWebConfig();
   bool isWebConfigActiveOrStopping() const;
+  bool isWebConfigWiFiTransitionActive() const;
   bool isWebConfigSetupActive() const;
   bool isWebConfigWiFiRecoveryActive() const;
 
@@ -678,7 +681,7 @@ private:
   bool applyAndSaveFemRxGain(bool enabled);
   bool applyAndSaveFemTxGain(bool enabled);
   bool applyAndSaveRxBoostedGain(bool enabled);
-  enum class RadioSettingResult { Saved, RadioRejected, SaveFailed };
+  enum class RadioSettingResult { Saved, RadioRejected, SaveFailed, SaveUnconfirmed };
   RadioSettingResult applyAndSaveTxPower(int8_t power);
   void servicePendingTxPower();
   bool handleCadCommand(const char* command, char* reply, size_t reply_size);
@@ -750,12 +753,11 @@ private:
   mesh::RadioParamApplyResult tryApplyRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, bool temporary = false, uint16_t preamble = 0);
   bool applySavedRadioParams();
   void configureRadioFromPrefs();
-  void finishRadioParamApply(float freq, float bw, uint8_t sf, uint8_t cr,
-                             uint8_t repeat,
-                             BaseSerialInterface* route = nullptr);
-  void deferRadioCommand();
-  void cancelPendingRadioParamApply();
-  void servicePendingRadioParamApply();
+  void queueSavedRadioApply();
+  void finishPrimaryRadioReply(bool delivered);
+  bool applyRxPowerSavingRfRxDisabled(const char* value, char* reply, size_t capacity);
+  RadioSettingResult applyAndSaveRadioParams(float freq, float bw, uint8_t sf,
+      uint8_t cr, uint8_t repeat, uint16_t preamble, bool remote = false);
   void servicePendingSerialReply();
   void servicePendingSerialReply(uint32_t now);
   bool beginPendingRequest(mesh::CompanionDelayedReplies::Kind kind,
@@ -807,6 +809,8 @@ private:
 #endif
   mesh::MorseReplyHandoff _morse_reply;
   bool _morse_reply_admission = false;
+  mesh::TempRadioReplyBarrier _primary_radio_reply;
+  bool _primary_radio_blocked = false, _primary_radio_reply_admission = false;
 #if MESH_ENABLE_MESHTEXT_CHAT
   mesh::mt::Region _mt_region = mesh::mt::Region::Unset;
   uint32_t _mt_slot = 0, _mt_node = 0, _mt_packet_id = 0;
@@ -913,20 +917,14 @@ private:
   uint8_t _morse_terminal_pending_chars = 0;
   bool _morse_terminal_was_receiving = false;
 #endif
+  int8_t rf_rx_disable_pending = -1;
+  uint32_t rf_rx_retry_at = 0;
   bool saved_radio_apply_pending;
   bool _radio_available;
   bool tx_power_apply_pending = false;
   uint32_t tx_power_apply_retry_at = 0;
   unsigned long radio_apply_retry_at;
   uint8_t radio_apply_failures;
-  bool command_radio_apply_pending;
-  float command_radio_freq;
-  float command_radio_bw;
-  uint8_t command_radio_sf;
-  uint8_t command_radio_cr;
-  uint8_t command_radio_repeat;
-  unsigned long command_radio_apply_deadline;
-  BaseSerialInterface* command_radio_reply_route;
   // Deferred so USB/TCP terminals can transmit the acknowledgement before
   // the transport disappears. Also used by USB interface changes.
   unsigned long _scheduled_reboot_at;
