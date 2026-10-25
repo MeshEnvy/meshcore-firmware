@@ -19,8 +19,8 @@ repeater.
 | Choice | What Full combines | Important limits |
 | --- | --- | --- |
 | Full Companion | The board's supported USB, Bluetooth, ESP32 WiFi, and qualified serial/Ethernet Companion transports, plus terminal chat and mOTA serving | The primary radio and board interfaces remain those of the selected target. Full Companion serves updates to other nodes; it does not install LoRa mOTA on itself. |
-| ESP32 Full Repeater or Room Server | Standalone operation, supported USB/WiFi services, and the qualified MQTT, ESP-NOW, or RS-232 combination | Not every image contains all three bridges. Read its capabilities and check the compiled controls. |
-| ESP32 Full Sensor | Sensor operation, supported CLI/logging, and qualified WiFi firmware-update and TCP 5001 seeding services | Current Sensor profiles do not gain the repeater's MQTT/ESP-NOW/RS-232 bridges. |
+| ESP32 Full Repeater or Room Server | Standalone operation, supported USB/WiFi services, and qualified MQTT, ESP-NOW or RS-232 services; supported Repeaters also include WiFi UDP | Not every image contains all listed services. UDP is repeater-only. Read its capabilities and check the compiled controls. |
+| ESP32 Full Sensor | Sensor operation, supported CLI/logging, and qualified WiFi firmware-update and TCP 5001 seeding services | Current Sensor profiles do not gain the repeater's MQTT/ESP-NOW/RS-232/UDP bridges. |
 | nRF52 Full supported sensors or Reduced sensors | Two separately qualified Repeater, Room Server, or Sensor recipes with LoRa OTA | These are sensor-driver choices, not ESP32 network features. Full Companion remains a separate profile. |
 
 Select the exact hardware variant and storage choice. Read the selected
@@ -74,13 +74,15 @@ inject them into LoRa. RS-232 uses the board's configured UART and pins.
 
 Check `get bridge.type` on bridge-capable images. Depending on the recipe,
 it can report combinations such as `mqtt+espnow`, `rs232+espnow`, or
-`mqtt+rs232+espnow`. Use only the controls compiled into your image:
+`mqtt+rs232+espnow`. UDP-capable images append `+udp`. Use only the
+controls compiled into your image:
 
 | Service | Saved enable/disable control | Check actual operation |
 | --- | --- | --- |
 | MQTT | `set mqtt.enabled on` / `off` | `get mqtt.running`, `get mqtt.status` |
 | ESP-NOW | `set espnow.enabled on` / `off` | `get espnow.running` |
 | RS-232 | `set rs232.enabled on` / `off` | `get rs232.running` |
+| WiFi UDP (Repeater only) | `set udp.enabled on` / `off` | `get udp.enabled`, `get udp.status` |
 | USB packet logs | `set usb.logging on` / `off` | `get usb.logging` |
 
 An enabled preference is not proof that a service started. Missing
@@ -113,6 +115,11 @@ For ESP-NOW, configure both peers with the same channel and compatible
 run together, the ESP-NOW channel must match the access point's fixed WiFi
 channel. ESP-NOW alone needs no WiFi credentials. Follow the
 [two-board setup](espnow_bridge_setup.md) for the complete commands.
+
+WiFi UDP is included on supported ESP32 Full Repeaters and defaults off.
+It connects up to eight peers on an existing WiFi network in station mode;
+it pauses in AP mode and during OTA. Follow the [UDP setup guide](udp_bridge_setup.md)
+and use `get udp.status` to check operation.
 
 For RS-232, stop the UART bridge before changing its configuration:
 
