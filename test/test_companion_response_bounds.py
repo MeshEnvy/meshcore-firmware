@@ -80,6 +80,7 @@ struct MyMesh {
   void onContactResponse(const ContactInfo&, const uint8_t*, uint8_t);
   void onControlDataRecv(mesh::Packet*);
   void onRawDataRecv(mesh::Packet*);
+  uint8_t rxViaTag(const mesh::Packet*, uint8_t none) const { return none; }
   void onTraceRecv(mesh::Packet*,uint32_t,uint32_t,uint8_t,const uint8_t*,const uint8_t*,uint8_t);
   void clearBinaryTraceReply();
   void checkGuards() const {
