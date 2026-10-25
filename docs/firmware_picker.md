@@ -305,7 +305,9 @@ the no-output and USB settings because `set usb.logging off|on` is persistent.
 On a fresh unified FULL install with no saved SSID, the setup AP and WiFi radio
 remain available for 30 minutes per boot, then turn off automatically until the
 next reboot or power cycle. An explicit administrator `start webconfig` remains
-available as an override. A saved SSID switches to the normal indefinite
+available as an override. Save `set webui off` to close the portal and prevent
+its automatic return after reboot, including on an ESP-NOW node without WiFi
+credentials. A saved SSID switches to the normal indefinite
 reconnect behavior instead.
 
 Fresh ESP32 Full infrastructure defaults to USB logging off. Existing saved

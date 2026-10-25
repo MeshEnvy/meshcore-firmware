@@ -158,7 +158,7 @@ struct MQTTBridge : AbstractBridge {
 };
 @STOP_OWNED_WIFI@
 struct WebConfigServer {
-  static bool enabled;
+  static int saved_enabled;
   static bool allow_start;
   bool running = false, stopping = false, owns;
   uint32_t _setup_started_at = 0;
@@ -170,7 +170,10 @@ struct WebConfigServer {
   template<class... Args> WebConfigServer(void*, void* prefs, bool owner, Args...) : owns(owner) {
     if (prefs) strcpy(_wifi_ssid, static_cast<ObserverPrefs*>(prefs)->wifi_ssid);
   }
-  static bool loadEnabled(bool) { return enabled; }
+  static bool loadEnabled(bool default_value) {
+    return saved_enabled < 0 ? default_value : saved_enabled != 0;
+  }
+  static bool saveEnabled(bool enabled) { saved_enabled = enabled ? 1 : 0; return true; }
   static bool hasConfiguredWiFi(const void* prefs) { return static_cast<const ObserverPrefs*>(prefs)->wifi_ssid[0] != 0; }
   bool isRunning() const { return running; }
   bool isStopping() const { return stopping; }
@@ -200,7 +203,7 @@ struct WebConfigServer {
     @SETUP_WINDOW@
   }
 };
-bool WebConfigServer::enabled = false;
+int WebConfigServer::saved_enabled = -1;
 bool WebConfigServer::allow_start = true;
 constexpr unsigned OTA_TX_DRAIN_TIMEOUT_MS = 1, OTA_MQTT_STOP_SETTLE_MS = 1;
 const char* ota_resolve_base(int) { return "test"; }
@@ -405,7 +408,7 @@ class ESP32FullPowerLifecycleTest(unittest.TestCase):
         methods += "\n" + wifi_owner
         defaults_start = source.index("  // bridge defaults")
         defaults = source[defaults_start:source.index("  _prefs.bridge_delay", defaults_start)]
-        startup = source[source.index("  bool start_webui = WebConfigServer::loadEnabled(false);"):]
+        startup = source[source.index("  bool start_webui ="):]
         startup = startup[:startup.index("#endif\n\n", startup.index("  if (start_webui)"))]
         tick = source.index("_webconfig->tick(millis());")
         portal_start = source.rfind("  if (_webconfig) {", 0, tick)
@@ -435,6 +438,56 @@ class ESP32FullPowerLifecycleTest(unittest.TestCase):
         for role in ("simple_repeater", "simple_room_server"):
             with self.subTest(role=role):
                 self.compile_and_run(self.fixture(role), *FLAGS)
+
+    def test_saved_webui_off_survives_reboot_without_stopping_espnow(self):
+        checks = r'''
+int main() {
+  for (bool configured : {false, true}) {
+    for (int saved : {-1, 0, 1}) {
+      // NVS survives a reboot; each node starts with fresh runtime state.
+      WebConfigServer::saved_enabled = -1;
+      if (saved >= 0) assert(WebConfigServer::saveEnabled(saved != 0));
+      WiFi.reset(); espnow_owners = 0; now = 0;
+      MyMesh node; node.defaults();
+      if (configured) strcpy(node._cli.prefs.wifi_ssid, "saved-network");
+      assert(node._prefs.bridge_enabled && node._prefs.espnow_bridge_enabled);
+      assert(node.setBridgeState(true)); WiFi.connected = true;
+      assert(node.startSharedEspNowBridgeIfReady());
+      assert(node.isMqttBridgeRunning() && node.espnow_bridge.isRunning());
+      const auto mqtt_stops = node.@WORKER@->stops;
+      const auto espnow_stops = node.espnow_bridge.stops;
+      node.startupSetup();
+      const bool setup_expected = saved == 1 || (saved < 0 && !configured);
+      assert(node.isWebConfigActive() == setup_expected);
+      assert(node._prefs.bridge_enabled && node._prefs.espnow_bridge_enabled);
+      if (setup_expected && !configured) {
+        assert(node._unconfigured_setup_espnow_suspended);
+        assert(!node.isMqttBridgeRunning() && !node.espnow_bridge.isRunning());
+      } else {
+        assert(!node._unconfigured_setup_espnow_suspended);
+        assert(node.isMqttBridgeRunning() && node.espnow_bridge.isRunning());
+        assert(node.@WORKER@->stops == mqtt_stops);
+        assert(node.espnow_bridge.stops == espnow_stops);
+      }
+      if (!setup_expected) {
+        assert(node._webconfig == nullptr && sdk_mode == WIFI_STA);
+        for (unsigned retry = 0; retry < 3; ++retry) {
+          now += 10000;
+          node.servicePortal(); node.serviceIdleWiFi();
+          assert(node.startSharedEspNowBridgeIfReady());
+          assert(!node.isWebConfigActive() && sdk_mode == WIFI_STA);
+          assert(sdk_started && node.isMqttBridgeRunning());
+          assert(node.espnow_bridge.isRunning());
+        }
+      }
+    }
+  }
+}
+'''
+        for role in ("simple_repeater", "simple_room_server"):
+            with self.subTest(role=role):
+                body = "#include <initializer_list>\n" + self.fixture(role, checks)
+                self.compile_and_run(body, *FLAGS)
 
     def test_suspended_mqtt_idle_portal_and_foreground_ownership(self):
         checks = r'''

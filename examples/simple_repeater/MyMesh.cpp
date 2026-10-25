@@ -4160,12 +4160,15 @@ void MyMesh::begin(FILESYSTEM *fs) {
 
   mesh::hilStartupTrace("mesh_webconfig_begin");
 #if defined(WITH_WEBCONFIG) && !defined(WEBCONFIG_NO_AUTO_AP)
-  bool start_webui = WebConfigServer::loadEnabled(false);
+  bool start_webui = false;
 #ifdef WITH_MQTT_BRIDGE
-  // Preserve the MQTT observer's first-boot setup experience even though the
-  // persistent WebUI master switch defaults off on infrastructure roles.
-  start_webui = start_webui || (_prefs.bridge_enabled
-      && !WebConfigServer::hasConfiguredWiFi(_cli.getObserverPrefs()));
+  // Offer first-boot MQTT setup only as the default. A saved WebUI choice,
+  // including off on an unconfigured ESP-NOW node, must take precedence.
+  start_webui = _prefs.bridge_enabled
+      && !WebConfigServer::hasConfiguredWiFi(_cli.getObserverPrefs());
+#endif
+  start_webui = WebConfigServer::loadEnabled(start_webui);
+#ifdef WITH_MQTT_BRIDGE
   if (start_webui && !WebConfigServer::hasConfiguredWiFi(_cli.getObserverPrefs())) {
   #if defined(WITH_ESPNOW_BRIDGE)
     if (espnow_bridge.isRunning()) espnow_bridge.end();

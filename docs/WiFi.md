@@ -194,8 +194,9 @@ absolute 30-minute window. Browser activity or a phone left associated with the
 AP does not extend it. If no SSID has been saved when the window expires,
 WebConfig closes and the ESP32 WiFi radio remains off automatically for the
 remainder of that boot. A reboot or power cycle starts a new 30-minute setup
-window; the timeout is deliberately not written to preferences. An
-administrator can still override the automatic cutoff with an explicit
+window unless `set webui off` has been saved. That choice prevents automatic
+setup even without WiFi credentials. The timeout itself is not saved.
+An administrator can still override the automatic cutoff with an explicit
 `start webconfig` command.
 
 Once an SSID is saved, the provisioning cutoff no longer applies. When WiFi is
