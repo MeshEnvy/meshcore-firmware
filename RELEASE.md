@@ -91,6 +91,12 @@ Use the same format for each revision:
 6. **Tested and limitations:** separate build checks from physical tests. Name
    important remaining limitations and link source-specific evidence.
 
+Include a collapsed **Features beyond mainline MeshCore** section with simple,
+linked bullets for the complete feature overview. Name the compared upstream
+release and comparison date; distinguish additions from extensions of existing
+features, and qualify board/role support. Keep it separate from the revision's
+New and Fixed lists. Recheck it against the actual released source each time.
+
 Compare the actual previous release's source and notes. A long commit list can
 include old work imported by merges; do not present it all as new. Do not relist
 existing features as additions. Keep tuning commands, build counts, memory
