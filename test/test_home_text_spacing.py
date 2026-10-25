@@ -21,17 +21,20 @@ ColorVal UIColor::window_bkg=0, UIColor::title_bkg=0, UIColor::title_txt=1;
 ColorVal UIColor::primary_txt=1, UIColor::secondary_txt=1, UIColor::warning_txt=1;
 ColorVal UIColor::popup_bkg=0, UIColor::popup_txt=1, UIColor::corp_blue=1;
 #define PRESS_LABEL "Press"
+#define SELECT_LABEL "Select"
 struct Display : DisplayDriver {
   struct Row { mesh::ui::DisplayRegion box; std::string text; };
   std::vector<Row> rows;
-  int size=1,x=0,y=0,small,large;
-  Display(int w,int h,int a,int b):DisplayDriver(w,h),small(a),large(b) {}
+  int size=1,x=0,y=0,small,large,render_size;
+  Display(int w,int h,int a,int b,int r=0):DisplayDriver(w,h),small(a),large(b),render_size(r) {}
+  int renderWidth() const override { return render_size?render_size:width(); }
+  int renderHeight() const override { return render_size?render_size:height(); }
   bool isOn() override { return true; }
   void turnOn() override {} void turnOff() override {}
   void clear() override { rows.clear(); }
   void startFrame(ColorVal=0) override { clear(); } void endFrame() override {}
   void setTextSize(int s) override { size=s; }
-  int textLineHeight() override { return size==1?small:large; }
+  int textLineHeight() override { return size==1?small:size==2?large:size*small; }
   void setColor(ColorVal) override {}
   void setCursor(int a,int b) override { x=a;y=b; }
   uint16_t getTextWidth(const char* text) override {
@@ -86,24 +89,37 @@ struct Board { int getBattMilliVolts(){return 4100;} };
 
 SCENARIOS = r'''
 int main() {
-  for(auto profile: {std::vector<int>{128,64,8,16}, {160,80,8,16},
-                    {250,122,21,27}, {250,122,22,29}, {200,200,22,29}, {240,135,10,20}}) {
-    Display d(profile[0],profile[1],profile[2],profile[3]); Task task;
-    for(int state=0;state<5;++state) for(int count:{0,99,99999}) {
+#ifdef UI_DEDICATED_PAIRING_BLOCK
+  const std::vector<std::vector<int>> profiles={{160,160,8,16,320},{160,160,8,16,480}};
+#else
+  const std::vector<std::vector<int>> profiles={{128,64,8,16}, {160,80,8,16},
+                    {250,122,21,27}, {250,122,22,29}, {200,200,22,29}, {240,135,10,20}};
+#endif
+  for(auto profile:profiles) {
+    Display d(profile[0],profile[1],profile[2],profile[3],profile.size()>4?profile[4]:0); Task task;
+    bool pairing_pin_visible=true;
+    for(int state=0;state<5;++state) for(int count:{0,99,99999}) for(uint32_t pin:{123456U,12345U}) {
       task.enabled=state!=2; task.connected=state==1; task.prompt=state==4;
-      task.count=count; the_mesh.pin=state==3?0:123456;
-      d.clear(); home(d,&task);
+      task.count=count; the_mesh.pin=state==3?0:pin;
+      d.clear(); home(d,&task,pairing_pin_visible);
       bool pin_expected=task.enabled && !task.connected && the_mesh.pin
           && (!task.prompt || d.height()>64);
-      assert((d.find("123456")!=nullptr)==pin_expected);
+      char pin_text[16]; snprintf(pin_text,sizeof(pin_text),"%06u",(unsigned)the_mesh.pin);
+      assert((d.find(pin_text)!=nullptr)==pin_expected);
+      assert(pairing_pin_visible==(d.find(pin_text)!=nullptr));
       if(pin_expected) {
-        auto pin=d.find("123456");
+        auto pin=d.find(pin_text);
         assert(pin->box.y>=d.height()/2);
+#ifndef UI_DEDICATED_PAIRING_BLOCK
         assert(pin->box.bottom()==d.height()-(d.height()>64?2:0));
+#endif
         assert(!d.find("Press: inbox"));
       }
-      if(task.connected) assert(d.find("CONNECTED"));
+      if(task.connected) assert(d.find("CONNECTED") || d.find("LINKED"));
     }
+    // A render on another page must clear a PIN retained from the first page.
+    pairing_pin_visible=true; d.clear(); home(d,&task,pairing_pin_visible,1);
+    assert(!pairing_pin_visible);
     Prefs prefs; Board board; d.clear(); repeater(&d,&prefs,&board);
     assert(d.rows.size()==5);  // Never solve overlap by losing a status row.
     d.clear(); d.setTextSize(1);
@@ -118,9 +134,10 @@ int main() {
   }
   // Sweep font sizes and short viewports: retain complete digits, omit only
   // a label that cannot fit, and never draw outside the reserved lower band.
-  for(int h=16;h<=160;++h) for(int line=8;line<=32;++line) {
-    Display d(160,h,line,2*line);
-    mesh::ui::drawBottomPairingBlock(d,h/3,"BLUETOOTH PIN","012345");
+  for(int width:{32,80,160}) for(int h=16;h<=160;++h) for(int line=8;line<=32;++line) {
+    Display d(width,h,line,2*line);
+    const bool pin_visible=mesh::ui::drawBottomPairingBlock(d,h/3,"BLUETOOTH PIN","012345");
+    assert(pin_visible==(d.find("012345")!=nullptr));
     for(const auto& row:d.rows) assert(row.box.y>=h/3);
   }
 }
@@ -130,23 +147,26 @@ int main() {
 class HomeTextSpacingTest(unittest.TestCase):
     def test_actual_home_and_repeater_branches(self):
         source = (ROOT / 'examples/companion_radio/ui-new/UITask.cpp').read_text()
-        start = source.index('    const int normal_line =')
+        start = source.index('    _pairing_pin_visible = false;')
         metrics = source[start:source.index('    display.setColor', start)]
         start = source.index('    if (_page == HomePage::FIRST) {', start)
         home = source[start:source.index('#if UI_MESSAGES_HOME_PAGE == 1', start)]
         repeater = (ROOT / 'examples/simple_repeater/UITask.cpp').read_text()
         start = repeater.index('    // Reserve a full measured font-height')
         repeater = repeater[start:repeater.index('\n  }\n}', start)]
-        implementation = ('void home(DisplayDriver& display, Task* _task) {\n'
-                          'display.setTextSize(1); char tmp[80]; int _page=0;\n'
+        implementation = ('void home(DisplayDriver& display, Task* _task, '
+                          'bool& _pairing_pin_visible, int _page=0) {\n'
+                          'char tmp[80];\n'
                           + metrics + 'display.drawTextEllipsized(0,2,display.width(),"Node name");\n'
                           + home + '\n}}\n'
                           'void repeater(DisplayDriver* _display, Prefs* _node_prefs, Board* _board) {'
                           'char tmp[80];\n' + repeater + '\n}\n')
-        for wifi in (False, True):
-            with self.subTest(wifi=wifi), tempfile.TemporaryDirectory() as temp:
+        for wifi, dedicated in ((False, False), (True, False), (False, True), (True, True)):
+            with self.subTest(wifi=wifi, dedicated=dedicated), tempfile.TemporaryDirectory() as temp:
                 binary = str(Path(temp) / 'spacing')
                 flags = ['-DWIFI_SSID="test"', '-DWITH_MQTT_BRIDGE'] if wifi else []
+                if dedicated:
+                    flags.append('-DUI_DEDICATED_PAIRING_BLOCK=1')
                 result = subprocess.run(['c++', '-std=c++11', '-fsanitize=address,undefined',
                                          '-fno-pie', '-no-pie', '-I'+str(ROOT/'src'),
                                          *flags, '-x', 'c++', '-', '-o', binary],

@@ -195,13 +195,14 @@ public:
 // PIN/connection status owns the bottom of every non-Indicator home screen,
 // including native 160x80 T096 and 250x122 MeshPocket panels. The caller must
 // not draw ordinary instructions/network rows in this same area.
-inline void drawBottomPairingBlock(DisplayDriver& display, int content_top,
+// Return true only when the complete value fits and was drawn.
+inline bool drawBottomPairingBlock(DisplayDriver& display, int content_top,
                                     const char* label, const char* value) {
   const int bottom = display.height() - (display.height() > 64 ? 2 : 0);
   const int available = bottom - content_top;
   const int margin = display.width() >= 16 ? 4 : 0;
   const int width = display.width() - 2 * margin;
-  if (available <= 0 || width <= 0) return;
+  if (available <= 0 || width <= 0) return false;
   display.setTextSize(1);
   const int label_height = display.textLineHeight();
   int value_size = 2;
@@ -211,7 +212,7 @@ inline void drawBottomPairingBlock(DisplayDriver& display, int content_top,
     display.setTextSize(value_size = 1);
   }
   const int value_height = display.textLineHeight();
-  if (value_height <= 0 || value_height > available) return;
+  if (value_height <= 0 || value_height > available) return false;
   // Prefer a readable complete PIN; omit its label on unusually short
   // viewports instead of colliding with the title or clipping the digits.
   const bool show_label = label_height > 0
@@ -227,6 +228,7 @@ inline void drawBottomPairingBlock(DisplayDriver& display, int content_top,
   }
   display.setTextSize(value_size);
   drawTextCenteredEllipsized(display, region, bottom - value_height, value);
+  return display.getTextWidth(value) <= width;
 }
 
 }  // namespace ui

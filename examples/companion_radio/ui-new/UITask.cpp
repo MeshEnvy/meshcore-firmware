@@ -466,6 +466,7 @@ class HomeScreen : public UIScreen {
   CompanionNodePrefs* _node_prefs;
   uint8_t _page;
   bool _shutdown_init;
+  bool _pairing_pin_visible = false;
 #if UI_WIFI_SETUP_HOME_PAGE == 1
   bool _wifi_setup_was_active;
   bool _wifi_was_connected;
@@ -960,7 +961,7 @@ public:
 #endif
     _page = HomePage::FIRST;
   }
-  bool isFirstPage() const { return _page == HomePage::FIRST; }
+  bool hasPairingPin() const { return _pairing_pin_visible; }
 
 #if COMPANION_FEATURE_READER
   bool isRadioPage() const {
@@ -1027,6 +1028,7 @@ public:
   }
 
   int render(DisplayDriver& display) override {
+    _pairing_pin_visible = false;
 #if UI_POCKET_GUI
     return renderPocket(display);
 #endif
@@ -1191,6 +1193,9 @@ public:
         display.setTextSize(pairing_value_size);
         mesh::ui::drawTextCenteredEllipsized(
             display, layout.pairing, layout.pairing_value_y, pairing_value);
+        _pairing_pin_visible = pairing_value == pairing_pin
+            && display.getTextWidth(pairing_value) <= layout.pairing.width
+            && layout.pairing_value_y + display.textLineHeight() <= display.height();
       } else if (expanded_home) {
         display.setColor(UIColor::secondary_txt);
         display.setTextSize(3);
@@ -1237,8 +1242,10 @@ public:
           pairing_value = pairing_pin;
         }
 
-        mesh::ui::drawBottomPairingBlock(display, home_content_top,
-                                        pairing_label, pairing_value);
+        const bool value_drawn =
+            mesh::ui::drawBottomPairingBlock(display, home_content_top,
+                                            pairing_label, pairing_value);
+        _pairing_pin_visible = value_drawn && !show_client;
       } else {
         mesh::ui::BoundedTextRows rows(display,
             {0, home_content_top, display.width(),
@@ -2617,11 +2624,9 @@ void UITask::renderPairingBanner() {
   if (_display == NULL || !isPairingScreenActive()) return;
   const uint32_t pairing_pin = the_mesh.getBLEPin();
   if (pairing_pin == 0) return;
-#if defined(HELTEC_T096)
-  // The native T096 home page already shows the larger PIN at the bottom.
-  if (curr == home && static_cast<HomeScreen*>(home)->isFirstPage()
-      && _display->height() > 64) return;
-#endif
+  // Keep one complete PIN per frame. Other pages and layouts without their
+  // own PIN still need this overlay during pairing.
+  if (curr == home && static_cast<HomeScreen*>(home)->hasPairingPin()) return;
 
   char prompt[24];
   snprintf(prompt, sizeof(prompt), "PAIR PIN %06u",

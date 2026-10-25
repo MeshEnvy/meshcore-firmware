@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the production pairing UI methods and OLED selection with USB present."""
+"""Run production pairing UI methods and keep exactly one visible PIN."""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -52,9 +52,10 @@ struct Interfaces {
 };
 struct UIScreen {};
 struct HomeScreen : UIScreen {
-  bool first = true;
-  bool isFirstPage() const { return first; }
-  void showFirstPage() { first = true; }
+  bool pairing_pin_visible = false;
+  bool hasPairingPin() const { return pairing_pin_visible; }
+  void showFirstPage() {}
+  void flushPocketSettings() {}
 };
 struct MsgPreviewScreen : UIScreen { bool hasMessages() const { return false; } };
 struct Mesh {
@@ -96,23 +97,28 @@ struct UITask {
 };
 @METHODS@
 static void homePairing(UITask* _task, TestDisplay& display) {
+  bool& _pairing_pin_visible = _task->home_screen.pairing_pin_visible;
+  _pairing_pin_visible = false;
+#if !UI_POCKET_GUI
   const int home_content_top = 20;
   @HOME_SELECTION@
+#endif
 }
 static void checkPairingPresentation(UITask& ui, TestDisplay& display) {
   display.text.clear();
   homePairing(&ui, display);
+  const bool home_pin = std::count(display.text.begin(), display.text.end(), "246810") == 1;
+  assert(ui.home_screen.hasPairingPin() == home_pin);
   ui.renderPairingBanner();
-#if defined(HELTEC_T096)
-  if (display.height() > 64) {
+  if (home_pin) {
     assert(std::count(display.text.begin(), display.text.end(), "246810") == 1);
     assert(std::count(display.text.begin(), display.text.end(), "PAIR PIN 246810") == 0);
     // Another home page or asynchronous screen still needs the top PIN.
-    ui.home_screen.first = false;
+    ui.home_screen.pairing_pin_visible = false;
     display.text.clear();
     ui.renderPairingBanner();
     assert(display.text.back() == "PAIR PIN 246810");
-    ui.home_screen.showFirstPage();
+    ui.home_screen.pairing_pin_visible = true;
     ui.curr = ui.msg_preview;
     display.text.clear();
     ui.renderPairingBanner();
@@ -120,7 +126,6 @@ static void checkPairingPresentation(UITask& ui, TestDisplay& display) {
     ui.curr = ui.home;
     return;
   }
-#endif
   assert(display.text.back() == "PAIR PIN 246810");
 }
 int main(int argc, char** argv) {
@@ -155,7 +160,13 @@ int main(int argc, char** argv) {
   assert(!ui.isPairingScreenActive() && !ui._pairing_from_button);
   display.text.clear();
   homePairing(&ui, display);
-  assert(display.text.back() == "246810"); // USB must not replace the idle PIN.
+#if UI_POCKET_GUI
+  assert(display.text.empty()); // Pocket's board view has no standalone PIN.
+#else
+  if (display.height() >= 64)
+    assert(display.text.back() == "246810"); // USB must not replace the idle PIN.
+  else assert(display.text.empty()); // Too short: only the pairing overlay fits.
+#endif
 
   interfaces.pending = true;
   ui.servicePairingState();
@@ -164,7 +175,10 @@ int main(int argc, char** argv) {
   assert(!ui.isPairingScreenActive());
   display.text.clear();
   homePairing(&ui, display);
-  assert(display.text.back() == "CONNECTED");
+#if !UI_POCKET_GUI
+  if (display.height() >= 64) assert(display.text.back() == "CONNECTED");
+  else assert(display.text.empty());
+#endif
 
   // Explicit off must remain off; disabling BLE must not reveal a stale PIN.
   interfaces.ble = false;
@@ -183,7 +197,11 @@ int main(int argc, char** argv) {
   assert(display.isOn() && !ui.isPairingScreenActive());
   display.text.clear();
   homePairing(&ui, display);
-  assert(display.text.back() == "CONNECTED"); // Only USB status remains.
+#if !UI_POCKET_GUI
+  if (display.height() >= 64)
+    assert(display.text.back() == "CONNECTED"); // Only USB status remains.
+  else assert(display.text.empty());
+#endif
 }
 '''
 
@@ -213,8 +231,11 @@ class CompanionPairingDisplayTests(unittest.TestCase):
             cpp, binary = Path(temp) / "test.cpp", Path(temp) / "test"
             cpp.write_text(program)
             for profile, flags, sizes in (
-                ("oled", [], [(128, 64)]),
+                ("shared", [], [(128, 64), (160, 80), (80, 160), (128, 128),
+                                 (240, 135), (320, 170), (320, 240), (240, 320),
+                                 (250, 122), (200, 200), (128, 24)]),
                 ("t096", ["-DHELTEC_T096=1"], [(160, 80), (80, 160), (128, 64)]),
+                ("pocket", ["-DUI_POCKET_GUI=1"], [(250, 122), (200, 200)]),
             ):
                 with self.subTest(profile=profile):
                     result = subprocess.run([
