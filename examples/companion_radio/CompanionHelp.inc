@@ -95,6 +95,10 @@ MESH_COMPANION_HELP_BEGIN
     "  memory\r\n"
 #endif
     "  get/set display.rotation <0|90|180|270>\r\n"
+#ifdef MESHCORE_HAS_COLOR_DISPLAY
+    "  get/set display.night <auto|on|off>\r\n"
+    "  get/set display.night.delay <-180..180> (minutes after sunset; default 60)\r\n"
+#endif
 #if defined(OLED_AUTO_DETECT) && OLED_AUTO_DETECT && defined(DISPLAY_CLASS)
     "  get/set display.controller <auto|ssd1306|sh1106> (saved; restart to apply)\r\n"
 #endif

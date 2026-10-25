@@ -105,6 +105,7 @@ class ST7789Spi : public OLEDDisplay {
       SPIClass * _spi;
       SPISettings 		    _spiSettings;
       uint16_t            _RGB=0xFFFF;
+      uint16_t            _lastRGB=0xFFFF;
       uint8_t             _buffheight;
   public:
     /* pass _cs as -1 to indicate "do not use CS pin", for cases where it is hard wired low */
@@ -157,6 +158,8 @@ class ST7789Spi : public OLEDDisplay {
 
     void display(void) {
     #ifdef OLEDDISPLAY_DOUBLE_BUFFER
+      const bool tint_changed = _lastRGB != _RGB;
+      _lastRGB = _RGB;
 
        uint16_t minBoundY = UINT16_MAX;
        uint16_t maxBoundY = 0;
@@ -172,7 +175,7 @@ class ST7789Spi : public OLEDDisplay {
          for (x = 0; x < displayWidth; x++) {
           //Serial.printf("x  %d y %d\r\n",x,y);
           uint16_t pos = x + y * displayWidth;
-          if (buffer[pos] != buffer_back[pos]) {
+          if (buffer[pos] != buffer_back[pos] || tint_changed) {
             minBoundY = min(minBoundY, y);
             maxBoundY = max(maxBoundY, y);
             minBoundX = min(minBoundX, x);

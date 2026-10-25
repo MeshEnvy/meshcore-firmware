@@ -1,4 +1,5 @@
 #include "MyMesh.h"
+#include <helpers/ui/DisplayNightLocation.h>
 
 #if FLOOD_ADVERT_RTC_FAST_SLOTS
 alignas(4) RTC_FAST_ATTR static mesh::FloodAdvertLimiter::Entry
@@ -2951,6 +2952,10 @@ static bool isShare(const mesh::Packet *packet) {
 
 void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32_t timestamp,
                           const uint8_t *app_data, size_t app_data_len) {
+#if defined(MESHCORE_HAS_COLOR_DISPLAY)
+  mesh::ui::observeDisplayNightAdvert(packet, id, self_id, app_data,
+                                     app_data_len, millis());
+#endif
   mesh::Mesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len); // chain to super impl
 
   // Mesh calls this hook only after verifying the advert's Ed25519 signature.
@@ -13315,6 +13320,11 @@ void MyMesh::loop() {
   // Check radio FIRST to ensure we don't miss incoming packets
   // MQTT processing runs in a separate FreeRTOS task on Core 0, so we don't call bridge.loop() here
   mesh::Mesh::loop();
+#if defined(MESHCORE_HAS_COLOR_DISPLAY)
+  if (!mesh::morseTimingActive(_radio)) {
+    mesh::ui::refreshDisplayNightLocation(sensors, getRTCClock()->getCurrentTime(), millis());
+  }
+#endif
 #if MESH_USB_CONSOLE_COOPERATIVE
   servicePendingSerialOutput();
 #endif

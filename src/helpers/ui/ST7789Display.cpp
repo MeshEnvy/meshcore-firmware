@@ -1,6 +1,7 @@
 #ifdef ST7789
 
 #include "ST7789Display.h"
+#include "ColorTheme.h"
 
 #if defined(HELTEC_T114) && defined(T114_DISPLAY_AUTODETECT) && T114_DISPLAY_AUTODETECT
 #include "T114DisplayProbe.h"
@@ -159,8 +160,11 @@ void ST7789Display::setTextSize(int sz) {
 void ST7789Display::setColor(ColorVal c) {
   if (!canDraw()) return;
   _color = c;
-  display.setColor((OLEDDISPLAY_COLOR)_color);
-  display.setRGB(_color == OLEDDISPLAY_COLOR::WHITE ? ST77XX_WHITE : ST77XX_BLACK);
+  display.setColor(mesh::ui::displayNightActive()
+      ? (mesh::ui::color_theme::isBackground(c) ? OLEDDISPLAY_COLOR::BLACK : OLEDDISPLAY_COLOR::WHITE)
+      : (OLEDDISPLAY_COLOR)_color);
+  display.setRGB(mesh::ui::displayNightActive() ? mesh::ui::color_theme::NIGHT_FOREGROUND
+      : _color == OLEDDISPLAY_COLOR::WHITE ? ST77XX_WHITE : ST77XX_BLACK);
 }
 
 void ST7789Display::setCursor(int x, int y) {

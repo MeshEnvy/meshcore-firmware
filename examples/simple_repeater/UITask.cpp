@@ -875,8 +875,15 @@ void UITask::loop() {
     _startup_complete = true;
   }
   const bool morse_timing = mesh::morseTimingActive(the_mesh.getProfileRadio());
+#ifdef MESHCORE_HAS_COLOR_DISPLAY
+  const bool screen_was_on = _display->isOn();
+#endif
   if (_display->servicePower(board.isExternalPowered() || board.isUsbHostConnected())) {
-    if (_display->isOn()) resetRadioProfileDisplayPage();
+    if (_display->isOn()
+#ifdef MESHCORE_HAS_COLOR_DISPLAY
+        && !screen_was_on
+#endif
+    ) resetRadioProfileDisplayPage();
     _next_refresh = 0;
 #ifdef DISPLAY_REDRAW_ON_CHANGE
     _frame_valid = false;

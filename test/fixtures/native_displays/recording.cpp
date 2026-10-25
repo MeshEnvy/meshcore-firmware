@@ -6,6 +6,7 @@
 #include <cstring>
 #include <vector>
 #include <helpers/ui/DisplayDriver.h>
+#include <helpers/ui/ColorTheme.h>
 #define pgm_read_byte(p) (*(const uint8_t*)(p))
 #define PROGMEM
 #define HSPI 1

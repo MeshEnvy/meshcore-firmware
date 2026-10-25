@@ -4,6 +4,7 @@
 #include <helpers/ui/ST7735Display.h>
 #include <helpers/ui/SmallMessageText.h>
 #include <helpers/ui/CompanionHomeLayout.h>
+#include <helpers/ui/ColorTheme.h>
 
 ColorVal UIColor::window_bkg = 0, UIColor::title_bkg = 0, UIColor::title_txt = 1;
 ColorVal UIColor::primary_txt = 1, UIColor::secondary_txt = 1, UIColor::warning_txt = 1;

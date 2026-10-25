@@ -108,6 +108,9 @@ class BaseChatMesh : public mesh::Mesh {
   int sendContactPacket(const ContactInfo& recipient, mesh::Packet* packet, uint32_t& est_timeout);
 
 protected:
+  bool isLocalContactImport(const mesh::Packet* packet) const {
+    return packet == _pendingLoopback;
+  }
   void sendAckTo(const ContactInfo& dest, const uint8_t* ack_hash, uint8_t ack_len=4);
   // Autonomous replies have independent ACK tracking and must preserve the
   // application/terminal send's shared timeout.

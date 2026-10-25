@@ -27,6 +27,9 @@ HARNESS = r'''
 #include <cstdint>
 #include <cstring>
 #include <vector>
+namespace mesh { namespace ui { namespace color_theme {
+constexpr uint16_t render(uint16_t color) { return color; }
+}}}
 
 constexpr int INPUT = 0, OUTPUT = 1, LOW = 0, HIGH = 1;
 constexpr int PIN_TFT_RST = 1, PIN_TFT_CS = 2, PIN_TFT_DC = 3;

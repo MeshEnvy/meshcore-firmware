@@ -1,4 +1,5 @@
 #include "ST7735Display.h"
+#include "ColorTheme.h"
 #include "../UsbLogging.h"
 #if defined(NRF52_PLATFORM) && defined(MESH_NRF52_FLASH_TRIM) && MESH_NRF52_FLASH_TRIM
   #include "Nrf52TftFontTrim.h"
@@ -512,7 +513,7 @@ bool ST7735Display::begin() {
       return false;
     }
     sprite->fillScreen(ST77XX_BLACK);
-    sprite->setTextColor(curr_color = ST77XX_WHITE);
+    sprite->setTextColor(curr_color = mesh::ui::color_theme::render(ST77XX_WHITE));
   }
 
   if (!spriteReady()) {
@@ -671,8 +672,8 @@ void ST7735Display::clear() {
 
 void ST7735Display::startFrame(ColorVal bkg) {
   if (!spriteReady()) return;
-  sprite->fillScreen(bkg);
-  sprite->setTextColor(curr_color = UIColor::primary_txt);
+  sprite->fillScreen(mesh::ui::color_theme::background(bkg));
+  sprite->setTextColor(curr_color = mesh::ui::color_theme::render(UIColor::primary_txt));
   sprite->setFreeFont();
   sprite->setTextSize(1);      // This one affects size of Please wait... message
   sprite->setTextWrap(false);
@@ -690,7 +691,7 @@ int ST7735Display::textLineHeight() {
 
 void ST7735Display::setColor(ColorVal c) {
   if (!spriteReady()) return;
-  curr_color = c;
+  curr_color = mesh::ui::color_theme::render(c);
   sprite->setTextColor(curr_color);
 }
 

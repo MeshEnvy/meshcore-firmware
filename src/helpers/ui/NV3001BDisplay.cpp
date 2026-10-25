@@ -421,7 +421,7 @@ bool NV3001BDisplay::begin() {
   is_on = true;
   color = 0x0000;
   fillPhysicalRect(0, 0, NV3001B_SCREEN_WIDTH, NV3001B_SCREEN_HEIGHT);
-  color = 0xffff;
+  color = mesh::ui::color_theme::render(0xffff);
   text_size = 1;
   cursor_x = 0;
   cursor_y = 0;
@@ -452,15 +452,15 @@ void NV3001BDisplay::turnOff() {
 
 void NV3001BDisplay::clear() {
   uint16_t saved = color;
-  color = UIColor::window_bkg;
+  color = mesh::ui::color_theme::background(UIColor::window_bkg);
   fillPhysicalRect(0, 0, NV3001B_SCREEN_WIDTH, NV3001B_SCREEN_HEIGHT);
   color = saved;
 }
 
 void NV3001BDisplay::startFrame(ColorVal bkg) {
-  color = bkg;
+  color = mesh::ui::color_theme::background(bkg);
   fillPhysicalRect(0, 0, NV3001B_SCREEN_WIDTH, NV3001B_SCREEN_HEIGHT);
-  color = UIColor::primary_txt;
+  color = mesh::ui::color_theme::render(UIColor::primary_txt);
   text_size = 1;
   cursor_x = 0;
   cursor_y = 0;
@@ -471,7 +471,7 @@ void NV3001BDisplay::setTextSize(int sz) {
 }
 
 void NV3001BDisplay::setColor(ColorVal c) {
-  color = c;
+  color = mesh::ui::color_theme::render(c);
 }
 
 void NV3001BDisplay::setCursor(int x, int y) {

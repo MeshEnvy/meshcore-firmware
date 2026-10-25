@@ -1,4 +1,5 @@
 #pragma once
+#include <helpers/ui/ColorTheme.h>
 
 #include <helpers/ui/LGFXDisplay.h>
 #include <Wire.h>
@@ -197,9 +198,9 @@ public:
     // The zoomed sprite blit stops a pixel short of the panel edge, so those
     // pixels keep whatever the panel powered up with (they showed as coloured
     // lines down the right side and along the bottom). Clear the panel once.
-    display->fillScreen(UIColor::window_bkg);
+    display->fillScreen(mesh::ui::color_theme::background(UIColor::window_bkg));
     display->setBrightness(153);
-    display->setTextColor(TFT_WHITE);
+    display->setTextColor(mesh::ui::color_theme::render(TFT_WHITE));
 
     buffer.setColorDepth(8);
     buffer.setPsram(true);

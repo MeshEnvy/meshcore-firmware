@@ -1,11 +1,16 @@
 #include "DisplayDriver.h"
+#include "DisplayNightMode.h"
 #include <Arduino.h>
 
 bool DisplayDriver::servicePower(bool usb_power, bool app_connected, bool pairing) {
   _power_policy.update(mesh::ui::displayPowerPrefs(), usb_power, app_connected, pairing, millis());
   const bool desired = _notification_power < 0 ? _power_policy.on() : _notification_power != 0;
-  const bool changed = isOn() != desired;
+  bool changed = isOn() != desired;
   if (changed) { if (desired) turnOn(); else turnOff(); }
+#ifdef MESHCORE_HAS_COLOR_DISPLAY
+  const bool night = mesh::ui::displayNightActive();
+  if (_night_seen != night) { _night_seen = night; changed = true; }
+#endif
   return changed;
 }
 

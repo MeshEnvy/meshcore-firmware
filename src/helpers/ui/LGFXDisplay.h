@@ -44,6 +44,7 @@ protected:
   bool _hasTransparentEmojiPixels = false;
   uint32_t _lastFrameHash = 0;
   bool _hasLastFrame = false;
+  bool _nightFrame = false;
   int _logicalTextSize = 1;
   bool _compactText = false;
   uint8_t _coordinateScale = UI_COORD_SCALE;
@@ -52,6 +53,7 @@ protected:
   String mapText(const char* str) const;
   uint32_t renderColor(ColorVal color) const;
   bool configurePalette();
+  void applyNightPalette();
   uint32_t frameHash() const;
   bool wasEmojiPresented(const EmojiOverlay& overlay) const;
   void drawEmojiMask(int32_t x, int32_t y, int32_t size,

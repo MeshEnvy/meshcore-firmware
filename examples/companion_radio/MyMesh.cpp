@@ -5,6 +5,7 @@
 #endif
 #include <helpers/LedSettings.h>
 #include <helpers/ui/DisplayPowerSettings.h>
+#include <helpers/ui/DisplayNightLocation.h>
 #if defined(OLED_AUTO_DETECT) && OLED_AUTO_DETECT && defined(DISPLAY_CLASS)
 #include <helpers/ui/OLEDControllerSettings.h>
 #endif
@@ -1892,14 +1893,24 @@ void MyMesh::onGroupDataRecv(mesh::Packet* packet, uint8_t type,
   BaseChatMesh::onGroupDataRecv(packet, type, key, data, len);
 }
 
-#ifdef COMPANION_MESH_CLOCK_SYNC
+#if defined(COMPANION_MESH_CLOCK_SYNC) || defined(MESHCORE_HAS_COLOR_DISPLAY)
 void MyMesh::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id,
                           uint32_t timestamp, const uint8_t* app_data,
                           size_t app_data_len) {
+#if defined(MESHCORE_HAS_COLOR_DISPLAY)
+  if (!isLocalContactImport(packet)) {
+    mesh::ui::observeDisplayNightAdvert(packet, id, self_id, app_data,
+                                       app_data_len, millis());
+  }
+#endif
   BaseChatMesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len);
+#ifdef COMPANION_MESH_CLOCK_SYNC
   _clock_sync.observeVerifiedAdvert(packet, id, timestamp);
+#endif
 }
+#endif
 
+#ifdef COMPANION_MESH_CLOCK_SYNC
 void MyMesh::onGroupPacketRecv(mesh::Packet* packet) {
   _clock_sync.observeGroupPacket(packet);
 }
@@ -11562,6 +11573,11 @@ void MyMesh::loop() {
   );
 #endif
   BaseChatMesh::loop();
+#if defined(MESHCORE_HAS_COLOR_DISPLAY)
+  if (!mesh::morseTimingActive(_radio)) {
+    mesh::ui::refreshDisplayNightLocation(sensors, getRTCClock()->getCurrentTime(), millis());
+  }
+#endif
 #ifdef COMPANION_MESH_CLOCK_SYNC
   if (!mesh::morseTimingActive(_radio)) _clock_sync.loop();
 #endif

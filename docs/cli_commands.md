@@ -1326,6 +1326,25 @@ saved settings. The WebConfig **Display** card exposes the same controls:
 Modes are `off`, `on`, `button`, `pairing`, `button-pairing`, and `automatic`.
 Pairing modes are available only on builds supporting BLE pairing.
 
+Color displays also support saved night-mode controls in the CLI and WebConfig:
+
+| Setting | CLI | Default |
+| --- | --- | --- |
+| Night mode | `get/set display.night auto\|on\|off` | `auto` |
+| Minutes after sunset | `get/set display.night.delay -180..180` | `60` |
+
+Night mode uses red and black only. `auto` starts after sunset plus the selected delay and ends at sunrise. Negative
+delays start before sunset. Automatic mode requires a valid clock and location;
+use `on` or `off` to choose manually. Monochrome and headless boards do not
+support these controls.
+
+The device's cached GPS fix takes priority. Without GPS, it averages the latest
+16 distinct neighbors with coordinates heard directly over LoRa in the last
+12 hours. Relayed, bridged and imported locations do not count. With no usable
+position, automatic mode keeps normal colors. The small integer approximation
+uses UTC and longitude, so it needs neither a time zone nor daylight-saving
+configuration. Screen brightness and screen-off timers still work normally.
+
 All display-equipped Companion builds show the screen at boot in the default
 `button` or `button-pairing` mode, on battery or USB power. It stays on for the
 selected profile's timeout (15 minutes on e-paper, 15 seconds elsewhere).

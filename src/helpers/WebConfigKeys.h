@@ -25,6 +25,7 @@ static const char* const WC_ALLOWED_SET_KEYS[] = {
   "repeat",
   "display.mode", "display.timeout", "display.usb.mode", "display.usb.timeout",
   "display.inbox", "display.rotation",
+  "display.night", "display.night.delay",
   "advert.interval", "flood.advert.interval",
   "flood.max", "flood.max.advert", "flood.max.unscoped", "loop.detect",
   // MQTTPrefs (WiFi / MQTT / misc observer)

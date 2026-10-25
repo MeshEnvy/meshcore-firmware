@@ -13,6 +13,7 @@ static_assert(sizeof(WEBCONFIG_AP_PREFIX) <= 28,
 #include <ArduinoJson.h>
 #include <helpers/ui/DisplayPowerSettings.h>
 #include <helpers/ui/DisplayBuildFlags.h>
+#include <helpers/ui/DisplayNightMode.h>
 #include <helpers/RegulatorSettings.h>
 #include <Preferences.h>
 #include <esp_wifi.h>
@@ -2443,6 +2444,13 @@ void WebConfigServer::handleConfigGet(AsyncWebServerRequest* req) {
     screen["usb_mode"] = mesh::ui::displayModeName(display_prefs.usb.mode);
     screen["usb_timeout"] = display_prefs.usb.seconds;
     screen["pairing"] = mesh::ui::displayPairingSupported();
+#ifdef MESHCORE_HAS_COLOR_DISPLAY
+    screen["night_supported"] = true;
+    const uint8_t night_mode = mesh::ui::displayNightMode();
+    screen["night"] = night_mode == 0 ? "off" : night_mode == 1 ? "on" : "auto";
+    screen["night_delay"] = mesh::ui::displayNightDelayMinutes();
+    screen["night_active"] = mesh::ui::displayNightActive();
+#endif
     screen["rotation_supported"] = node.display_rotation_supported;
     if (node.display_rotation_supported) {
       screen["rotation"] = node.display_rotation_degrees;

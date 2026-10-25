@@ -6,6 +6,7 @@
 #include "CompanionFeatures.h"
 #include <helpers/CompanionReader.h>
 #include <helpers/PowerSavingDiagnostics.h>
+#include <helpers/ui/DisplayBuildFlags.h>
 
 /*------------ Frame Protocol --------------*/
 #define FIRMWARE_VER_CODE 14
@@ -481,10 +482,12 @@ protected:
   bool allowFloodRetry(const mesh::Packet* packet) const override;
   uint8_t getFloodRetryMaxPathLength(const mesh::Packet* packet) const override;
   uint8_t getFloodRetryMaxAttempts(const mesh::Packet* packet) const override;
-#ifdef COMPANION_MESH_CLOCK_SYNC
+#if defined(COMPANION_MESH_CLOCK_SYNC) || defined(MESHCORE_HAS_COLOR_DISPLAY)
   void onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id,
                     uint32_t timestamp, const uint8_t* app_data,
                     size_t app_data_len) override;
+#endif
+#ifdef COMPANION_MESH_CLOCK_SYNC
   void onGroupPacketRecv(mesh::Packet* packet) override;
 #endif
 

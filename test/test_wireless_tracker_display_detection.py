@@ -17,6 +17,9 @@ ARDUINO = r'''
 #include <cstdint>
 #include <string>
 #include <vector>
+namespace mesh { namespace ui { namespace color_theme {
+constexpr uint16_t render(uint16_t color) { return color; }
+}}}
 #define LOW 0
 #define HIGH 1
 #define INPUT 0

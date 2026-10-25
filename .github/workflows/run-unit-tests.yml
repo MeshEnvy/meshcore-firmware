@@ -1175,6 +1175,9 @@ jobs:
           python3 -B test/test_backlight_poll_rollover.py -v
           python3 -B test/test_rgb_led_rollover.py -v
           python3 -B test/test_display_power.py
+          python3 -B test/test_display_night_mode.py -v
+          python3 -B test/test_display_night_location.py -v
+          python3 -B test/test_display_night_rendering.py -v
           python3 -B test/test_t114_display_detection.py -v
           python3 -B test/test_rc32_display_detection.py -v
           python3 -B test/test_wireless_tracker_display_detection.py -v
@@ -1206,6 +1209,7 @@ jobs:
           python3 -B test/test_webconfig_ui_runtime.py
           python3 -B test/test_webconfig_lost_reply.py -v
           python3 -B test/test_webconfig_cpu_frequency.py -v
+          python3 -B test/test_display_night_webconfig.py -v
           MESHCORE_REQUIRE_ROOM_BROWSER=1 python3 -B test/test_room_web_ui.py -v
           MESHCORE_REQUIRE_ROOM_BROWSER=1 python3 -B test/test_room_mail_web_ui.py -v
 

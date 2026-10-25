@@ -1,4 +1,5 @@
 #include "SensorMesh.h"
+#include <helpers/ui/DisplayNightLocation.h>
 #include <helpers/CLICommandUtils.h>
 #include <helpers/ClientACLCLI.h>
 #include <helpers/ClientACLResponse.h>
@@ -851,6 +852,10 @@ void SensorMesh::handleCommand(uint32_t sender_timestamp, char* command, char* r
 void SensorMesh::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id,
                               uint32_t timestamp, const uint8_t* app_data,
                               size_t app_data_len) {
+#if defined(MESHCORE_HAS_COLOR_DISPLAY)
+  mesh::ui::observeDisplayNightAdvert(packet, id, self_id, app_data,
+                                     app_data_len, millis());
+#endif
   mesh::Mesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len);
   _clock_sync.observeVerifiedAdvert(packet, id, timestamp);
 #if MESH_ENABLE_SENSOR_TRACKER
@@ -1519,6 +1524,11 @@ void SensorMesh::loop() {
 #endif
   _cli.loop();
   mesh::Mesh::loop();
+#if defined(MESHCORE_HAS_COLOR_DISPLAY)
+  if (!mesh::morseTimingActive(_radio)) {
+    mesh::ui::refreshDisplayNightLocation(sensors, getRTCClock()->getCurrentTime(), millis());
+  }
+#endif
   // Do not consume sensor/advert/write deadlines during timed Morse capture.
   // USB command service and the physical radio continue on every pass.
   if (mesh::morseTimingActive(_radio)) return;

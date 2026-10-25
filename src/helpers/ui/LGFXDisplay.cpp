@@ -132,7 +132,7 @@ bool LGFXDisplay::begin() {
   display->setRotation(DISPLAY_ROTATION);
   display->setBrightness(DISPLAY_BRIGHTNESS);
   display->setColorDepth(8);
-  display->setTextColor(TFT_WHITE);
+  display->setTextColor(mesh::ui::color_theme::render(TFT_WHITE));
 
   buffer.setColorDepth(UI_BUFFER_COLOR_DEPTH);
   // The RGB scanout framebuffer must live in PSRAM. Keep the UI sprite in
@@ -228,6 +228,7 @@ void LGFXDisplay::turnOff() {
 
 void LGFXDisplay::clear() {
 //  display->clearDisplay();
+  applyNightPalette();
   buffer.clearDisplay();
   _presentedEmojiOverlayCount = 0;
   _hasLastFrame = false;
@@ -238,7 +239,15 @@ void LGFXDisplay::startFrame(ColorVal bkg) {
 //  display->getScanLine();
   _emojiOverlayCount = 0;
   _hasTransparentEmojiPixels = false;
-  _color = renderColor(bkg);
+  const bool night = mesh::ui::displayNightActive();
+  if (_nightFrame != night) {
+    _nightFrame = night;
+    _hasLastFrame = false;
+    _presentedEmojiOverlayCount = 0;
+    display->fillScreen(mesh::ui::color_theme::background(UIColor::window_bkg));
+  }
+  applyNightPalette();
+  _color = night ? renderColor(UIColor::window_bkg) : renderColor(bkg);
   buffer.setBaseColor(_color);
   buffer.fillScreen(_color);
   setColor(UIColor::primary_txt);
@@ -380,7 +389,12 @@ bool LGFXDisplay::drawQrCode(const char* text, int x, int y, int size) {
   const int used_size = module_size * (qr.size + quiet_zone * 2);
   const int left = x * _coordinateScale + (scaled_size - used_size) / 2;
   const int top = y * _coordinateScale + (scaled_size - used_size) / 2;
-  const uint32_t light = renderColor(UIColor::primary_txt);
+  uint32_t light = renderColor(UIColor::primary_txt);
+#if UI_BUFFER_COLOR_DEPTH >= 8
+  // These QR locals use LovyanGFX's uint32 RGB888 overload. The ordinary
+  // drawing state is signed RGB565; preserve existing daytime QR values.
+  if (mesh::ui::displayNightActive()) light = mesh::ui::color_theme::rgb888(static_cast<ColorVal>(light));
+#endif
   const uint32_t dark = renderColor(UIColor::window_bkg);
 
   buffer.fillRect(x * _coordinateScale, y * _coordinateScale,
@@ -539,6 +553,14 @@ bool LGFXDisplay::installRuntimeFont(uint8_t* data, size_t size) {
 }
 
 uint32_t LGFXDisplay::renderColor(ColorVal color) const {
+  if (mesh::ui::displayNightActive()) {
+#if UI_BUFFER_COLOR_DEPTH < 8
+    return mesh::ui::color_theme::isBackground(color)
+        ? mesh::ui::color_theme::INDEX_BACKGROUND : mesh::ui::color_theme::INDEX_TEXT;
+#else
+    return mesh::ui::color_theme::render(color);
+#endif
+  }
 #if UI_BUFFER_COLOR_DEPTH < 8
   using namespace mesh::ui::color_theme;
   if (color == UIColor::window_bkg) return INDEX_BACKGROUND;
@@ -554,6 +576,17 @@ uint32_t LGFXDisplay::renderColor(ColorVal color) const {
   return color & 0x0F;
 #else
   return color;
+#endif
+}
+
+void LGFXDisplay::applyNightPalette() {
+#if UI_BUFFER_COLOR_DEPTH < 8
+  const bool night = mesh::ui::displayNightActive();
+  // Smooth glyph blending can choose any palette entry, not only the two
+  // explicit drawing indices. Keep every possible output red or black.
+  for (unsigned i = 0; i < 16; ++i) {
+    buffer.setPaletteColor(i, night ? (i ? 0xFF0000u : 0x000000u) : UI_PALETTE[i]);
+  }
 #endif
 }
 
@@ -680,6 +713,25 @@ int32_t LGFXDisplay::queueEmoji(lgfx::v1::LGFXBase* gfx,
   if (gfx != &buffer || codepoint > 0xFFFF || font_height <= 0
       || _emojiAtlas.glyph((uint16_t)codepoint) == nullptr) {
     return 0;
+  }
+  if (mesh::ui::displayNightActive()) {
+    // Keep only the opaque silhouette; no full-color overlay may bypass the
+    // red/black canvas. Work directly from the existing atlas without a copy.
+    const uint8_t* pixels = _emojiAtlas.glyph((uint16_t)codepoint);
+    const int source_width = _emojiAtlas.width();
+    const int source_height = _emojiAtlas.height();
+    const int32_t red = renderColor(UIColor::primary_txt);
+    for (int row = 0; row < source_height; ++row) {
+      const int top = y + row * font_height / source_height;
+      const int bottom = y + (row + 1) * font_height / source_height;
+      for (int col = 0; col < source_width; ++col) {
+        if (pixels[row * source_width + col] == _emojiAtlas.transparent()) continue;
+        const int left = x + col * font_height / source_width;
+        const int right = x + (col + 1) * font_height / source_width;
+        buffer.fillRect(left, top, right - left, bottom - top, red);
+      }
+    }
+    return font_height;
   }
   if (_emojiOverlayCount >= MAX_EMOJI_OVERLAYS) return font_height;
 

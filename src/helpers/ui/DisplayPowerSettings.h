@@ -2,6 +2,7 @@
 
 #include <helpers/IdentityStore.h>
 #include "DisplayPowerPolicy.h"
+#include "DisplayBuildFlags.h"
 
 namespace mesh { namespace ui {
 

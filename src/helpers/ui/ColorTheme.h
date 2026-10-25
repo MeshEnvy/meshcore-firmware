@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DisplayDriver.h"
+#include "DisplayNightMode.h"
 
 // Shared default palette for displays that can render real colour. Monochrome
 // OLED and e-paper drivers deliberately keep their own black/white palettes:
@@ -34,6 +35,27 @@ constexpr ColorVal POPUP_BACKGROUND = rgb565(20, 48, 70);
 constexpr ColorVal ACCENT = rgb565(64, 176, 240);
 constexpr ColorVal TOUCH_OUTLINE = rgb565(255, 255, 0);
 constexpr ColorVal TOUCH_PRESSED = rgb565(0, 255, 0);
+
+constexpr ColorVal NIGHT_BACKGROUND = 0x0000;
+constexpr ColorVal NIGHT_FOREGROUND = 0xF800;
+
+inline bool isBackground(ColorVal color) {
+  return color == 0 || color == UIColor::window_bkg
+      || color == UIColor::title_bkg || color == UIColor::popup_bkg
+      || color == WINDOW_BACKGROUND || color == TITLE_BACKGROUND
+      || color == POPUP_BACKGROUND;
+}
+
+// Leave the saved daytime palette intact, including variant-specific themes.
+// Mapping at the drawing boundary also covers raw colors and touch overlays.
+inline ColorVal render(ColorVal color) {
+  return displayNightActive()
+      ? (isBackground(color) ? NIGHT_BACKGROUND : NIGHT_FOREGROUND) : color;
+}
+
+inline ColorVal background(ColorVal color) {
+  return displayNightActive() ? NIGHT_BACKGROUND : color;
+}
 
 enum IndexedColor : uint8_t {
   INDEX_BACKGROUND = 0,

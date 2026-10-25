@@ -331,7 +331,7 @@ bool ST7789LCDDisplay::begin() {
     display.setSPISpeed(40e6);
 
     display.fillScreen(ST77XX_BLACK);
-    display.setTextColor(ST77XX_WHITE);
+    display.setTextColor(mesh::ui::color_theme::render(ST77XX_WHITE));
     display.setTextSize(1);
     display.setTextWrap(false);
     display.cp437(true); // Use full 256 char 'Code Page 437' font
@@ -400,6 +400,7 @@ void ST7789LCDDisplay::clear() {
 }
 
 void ST7789LCDDisplay::startFrame(ColorVal bkg) {
+  bkg = mesh::ui::color_theme::background(bkg);
 #if defined(LILYGO_TDECK) || defined(MESHCORE_HELTEC_R8_TFT_DETECTION)
   if (!_isOn) return;
 #endif
@@ -409,14 +410,14 @@ void ST7789LCDDisplay::startFrame(ColorVal bkg) {
     _frame_active = true;
     serviceRender(true);
     _canvas->fillScreen(bkg);
-    _canvas->setTextColor(_color = UIColor::primary_txt);
+    _canvas->setTextColor(_color = mesh::ui::color_theme::render(UIColor::primary_txt));
     _canvas->setTextSize(1);
     _canvas->cp437(true);
     return;
   }
 #endif
   display.fillScreen(bkg);
-  display.setTextColor(_color = UIColor::primary_txt);
+  display.setTextColor(_color = mesh::ui::color_theme::render(UIColor::primary_txt));
   display.setTextSize(1);
   display.cp437(true); // Use full 256 char 'Code Page 437' font
 }
@@ -435,6 +436,7 @@ void ST7789LCDDisplay::setTextSize(int sz) {
 }
 
 void ST7789LCDDisplay::setColor(ColorVal c) {
+  c = mesh::ui::color_theme::render(c);
 #if defined(LILYGO_TDECK) || defined(MESHCORE_HELTEC_R8_TFT_DETECTION)
   if (!_isOn) return;
 #endif

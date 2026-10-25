@@ -412,6 +412,13 @@ body.tab-cli{padding-bottom:0}
         <div class="f"><label>Timeout (seconds)</label><input type="number" data-k="display.usb.timeout" min="1" max="3600" step="1"></div>
       </div>
       <div class="hint">Automatic shows startup and messages while the app is disconnected. Connecting blanks the display; a button or pairing request can wake it. USB power detection depends on the board.</div>
+      <div class="hide" id="display-night-settings">
+        <div class="row">
+          <div class="f"><label>Night mode</label><select data-k="display.night"><option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option></select></div>
+          <div class="f"><label>Minutes after sunset</label><input type="number" data-k="display.night.delay" min="-180" max="180" step="1"></div>
+        </div>
+        <div class="hint">Uses red and black only. Auto starts 60 minutes after sunset by default and ends at sunrise. A negative delay starts before sunset. A valid clock and location are required.</div>
+      </div>
     </div>
     <div class="card">
       <h2>Advanced</h2>
@@ -935,6 +942,8 @@ function cfgVal(k){ // map a `set` key to its current value string, from st.cfg
     case"display.timeout":return String((st.cfg.display||{}).timeout||15);
     case"display.usb.mode":return (st.cfg.display||{}).usb_mode||"button";
     case"display.usb.timeout":return String((st.cfg.display||{}).usb_timeout||15);
+    case"display.night":return (st.cfg.display||{}).night||"auto";
+    case"display.night.delay":return String((st.cfg.display||{}).night_delay==null?60:st.cfg.display.night_delay);
     case"repeat":return r.repeat?"on":"off";
     case"flood.max":return String(r.flood_max);
     case"flood.max.advert":return String(r.flood_max_advert);
@@ -1124,6 +1133,9 @@ function loadConfig(loadCapture){
     var rotationSupported=!!(c.display&&c.display.rotation_supported);
     $("#display-rotation-setting").classList.toggle("hide",!rotationSupported);
     $('[data-k="display.rotation"]').disabled=!rotationSupported;
+    var nightSupported=!!(c.display&&c.display.night_supported);
+    $("#display-night-settings").classList.toggle("hide",!nightSupported);
+    $$('#display-night-settings [data-k]').forEach(function(el){el.disabled=!nightSupported});
     $$('#display-settings option[value="pairing"],#display-settings option[value="button-pairing"]').forEach(function(el){el.hidden=!(c.display&&c.display.pairing);el.disabled=el.hidden});
     syncDisplayTimeouts();
     loadRxps(c.radio);
@@ -2085,6 +2097,8 @@ var CLI_VERBS=[
    mode: 0 = get and set, 1 = get only, 2 = set only
    values: enum offered as value completions after `set <key> ` */
 var CLI_KEYS=[
+  ["display.night","Color display night mode",0,"auto|on|off"],
+  ["display.night.delay","Night mode delay after sunset in minutes (-180 to 180)",0],
   ["display.rotation","Display rotation on supported hardware (0 restores the board default)",0,"0|90|180|270"],
   ["display.inbox","Companion inbox behavior",0,"history|pending|unread"],
   ["display.mode","Display on battery",0,"off|on|button|pairing|button-pairing|automatic"],
@@ -2282,6 +2296,8 @@ var CLI_COMPANION_VERBS=[
   ["reboot","Restart the node"]
 ];
 var CLI_COMPANION_KEYS=[
+  ["display.night","Color display night mode",0,"auto|on|off"],
+  ["display.night.delay","Night mode delay after sunset in minutes (-180 to 180)",0],
   ["lost.reply","Lost-status auto reply to saved private chat contacts",0,"off|no|yes"],
   ["display.inbox","Companion inbox behavior",0,"history|pending|unread"],
   ["display.mode","Display on battery",0,"off|on|button|pairing|button-pairing|automatic"],

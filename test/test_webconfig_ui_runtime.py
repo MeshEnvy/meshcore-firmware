@@ -193,7 +193,7 @@ window.addEventListener("load",function(){
 </script>''' % (json.dumps(status), json.dumps(config))
         dom = self.run_page(prelude)
         for attribute, value in (
-            ("display-visible", "true"), ("display-count", "5"),
+            ("display-visible", "true"), ("display-count", "7"),
             ("battery-timeout", "23"), ("usb-timeout", "55"),
             ("usb-disabled", "true"), ("pairing-disabled", "true"),
             ("rotation-hidden", "true"), ("rotation-disabled", "true"),

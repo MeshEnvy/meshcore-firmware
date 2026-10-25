@@ -33,7 +33,7 @@ struct Bus {
 class Panel {
  public:
   int displayWidth,displayHeight,_buffheight;
-  uint16_t _RGB=0xffff;
+  uint16_t _RGB=0xffff, _lastRGB=0xffff;
   int _spiSettings=0;
   Bus bus; Bus* _spi=&bus;
   std::vector<uint8_t> front,back;
@@ -57,6 +57,13 @@ int main() {
     for(int row:p.rows) assert(row==1);
 #ifdef OLEDDISPLAY_DOUBLE_BUFFER
     p.display(); assert(p.bus.transfers==p.displayHeight);
+    // A tint-only night transition must flush even if every monochrome
+    // framebuffer bit is unchanged, then return to normal dirty suppression.
+    p._RGB=0xf800; p.display();
+    assert(p.bus.transfers==2*p.displayHeight);
+    p.display(); assert(p.bus.transfers==2*p.displayHeight);
+    p._RGB=0xffff; p.display();
+    assert(p.bus.transfers==3*p.displayHeight);
 #endif
   }
 }

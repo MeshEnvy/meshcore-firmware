@@ -18,6 +18,9 @@ class DisplayDriver {
   int _w, _h;
   mesh::ui::DisplayPowerPolicy _power_policy;
   int8_t _notification_power = -1;
+#ifdef MESHCORE_HAS_COLOR_DISPLAY
+  bool _night_seen = false;
+#endif
 protected:
   DisplayDriver(int w, int h) { _w = w; _h = h; }
   void setDimensions(int w, int h) { _w = w; _h = h; }
@@ -55,7 +58,7 @@ public:
   virtual void forceFullRefresh() {} // next refresh will be full for eink
   virtual void turnOn() = 0;
   virtual void turnOff() = 0;
-  // Returns whether the panel state changed, allowing cached UIs to redraw.
+  // Returns whether power or palette changed, allowing cached UIs to redraw.
   bool servicePower(bool usb_power, bool app_connected = false, bool pairing = false);
   bool wake(mesh::ui::DisplayWake reason);
   void dismiss();

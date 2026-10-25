@@ -316,6 +316,7 @@ should use command `0x42`. See [Companion radio binary protocol](companion_proto
 | Operational | [`advert.zerohop`](cli_commands.md#send-a-zero-hop-advert) | Advert-capable role | Yes | Yes | Yes | Yes | Yes |
 | Operational | [`erase`](cli_commands.md#erasefactory-reset) | Local connection | Local | Local | Local | Local | Local |
 | Display | [`get/set display.mode`; `display.timeout`; `display.usb.mode`; `display.usb.timeout`](cli_commands.md#set-display-modes-and-timeouts) | Display-equipped roles; pairing modes require BLE Companion | Feature | Feature | Feature | Feature | Feature |
+| Night display | [`get/set display.night`; `display.night.delay`](cli_commands.md#set-display-modes-and-timeouts) | Color displays only; auto uses clock and location | Feature | Feature | Feature | Feature | Feature |
 | Display | [`get/set display.flip`](cli_commands.md#set-mqtt-observer-display-flip) | MQTT observer with supported display driver | No | No | No | Feature | No |
 | Information | [`ver`](cli_commands.md#get-the-version) | All text CLI roles | Yes | Yes | Yes | Yes | Yes |
 | Information | [`board`](cli_commands.md#show-the-hardware-name) | All text CLI roles | Yes | Yes | Yes | Yes | Yes |

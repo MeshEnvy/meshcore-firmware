@@ -1,5 +1,7 @@
 #include "DisplayPowerSettings.h"
 #include "DisplayBuildFlags.h"
+#include "DisplayNightMode.h"
+#include "DisplayNightSettings.h"
 #include <helpers/CheckedSettingsFile.h>
 #include <stdio.h>
 
@@ -94,6 +96,7 @@ bool savePrefs(const DisplayPowerPrefs& prefs) {
 }
 
 bool loadDisplayPowerSettings(FILESYSTEM* fs, bool pairing_supported, bool wake_on_boot) {
+  loadDisplayNightSettings(fs);
 #ifdef MESHCORE_HAS_REAL_DISPLAY
   settings_fs = fs;
 #else
@@ -141,6 +144,7 @@ void migrateLegacyDisplayTimeout(uint16_t seconds) {
 
 bool handleDisplayPowerCommand(const char* command, char* reply, size_t reply_size,
                                bool inbox_supported) {
+  if (handleDisplayNightCommand(command, reply, reply_size)) return true;
 #ifndef MESHCORE_HAS_REAL_DISPLAY
   (void)inbox_supported;
   if ((command[0] != 'g' && command[0] != 's')

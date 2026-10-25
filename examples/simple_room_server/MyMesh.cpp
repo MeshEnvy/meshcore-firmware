@@ -1,4 +1,5 @@
 #include "MyMesh.h"
+#include <helpers/ui/DisplayNightLocation.h>
 #include <helpers/DefaultPasswordWarning.h>
 #if defined(HELTEC_V4_R8_TFT) && defined(HELTEC_TFT_RUNTIME_ROTATION) \
     && HELTEC_TFT_RUNTIME_ROTATION == 1
@@ -2396,6 +2397,10 @@ void MyMesh::onAckRecv(mesh::Packet *packet, uint32_t ack_crc) {
 void MyMesh::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id,
                           uint32_t timestamp, const uint8_t* app_data,
                           size_t app_data_len) {
+#if defined(MESHCORE_HAS_COLOR_DISPLAY)
+  mesh::ui::observeDisplayNightAdvert(packet, id, self_id, app_data,
+                                     app_data_len, millis());
+#endif
   mesh::Mesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len);
   _clock_sync.observeVerifiedAdvert(packet, id, timestamp);
 
@@ -4091,6 +4096,11 @@ void MyMesh::loop() {
   // Check radio FIRST to ensure we don't miss incoming packets
   // MQTT processing can take time, so we prioritize radio reception
   mesh::Mesh::loop();
+#if defined(MESHCORE_HAS_COLOR_DISPLAY)
+  if (!mesh::morseTimingActive(_radio)) {
+    mesh::ui::refreshDisplayNightLocation(sensors, getRTCClock()->getCurrentTime(), millis());
+  }
+#endif
 #if MESH_USB_CONSOLE_COOPERATIVE
   servicePendingSerialOutput();
 #endif
