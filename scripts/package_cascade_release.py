@@ -345,6 +345,65 @@ def category(record):
     return "repeater-room"
 
 
+def joined_labels(values, conjunction="and"):
+    if len(values) < 2:
+        return "".join(values)
+    return ", ".join(values[:-1]) + " " + conjunction + " " + values[-1]
+
+
+def release_group_description(name, records, extras=()):
+    """Describe actual page contents without assuming every matrix is current."""
+    manifests = [record["manifest"] for record in records]
+    platforms = {manifest["platform"] for manifest in manifests}
+    platform = ({"NRF52_PLATFORM": "nRF52", "ESP32_PLATFORM": "ESP32"}
+                .get(next(iter(platforms)), "") if len(platforms) == 1 else "")
+    role_names = []
+    for pattern, label in ((r"_repeater(?:[_-]|$)", "Repeater"),
+                           (r"_room_(?:server|svr)(?:[_-]|$)", "Room Server"),
+                           (r"_sensor(?:[_-]|$)", "Sensor"),
+                           (r"_terminal(?:[_-]|$)", "Terminal")):
+        if any(re.search(pattern, manifest["target"], re.I) for manifest in manifests):
+            role_names.append(label)
+    roles = joined_labels(role_names) or "Radio"
+    operating_roles = joined_labels(["a " + role.lower() for role in role_names], "or")
+    radio = ("an " if platform == "ESP32" else "a ") + platform + " radio" if platform else "a radio"
+    if platform == "nRF52":
+        radio = "an nRF52 radio"
+    if name == "companion":
+        return "Companion firmware", "Connect a radio to a phone or computer using the Companion mode supported by its hardware."
+    if name == "lora-ota":
+        lora = bool(manifests) and all("lora" in manifest.get("ota_update_methods", []) for manifest in manifests)
+        title = platform + " " + roles + " firmware" if platform else (
+            "LoRa OTA firmware" if lora else "Wireless update firmware")
+        purpose = ("Run " + radio + " as " + operating_roles if operating_roles
+                   else "Firmware for your exact radio")
+        return title, purpose + (" with LoRa OTA reception." if lora else " with wireless updates.")
+    if name == "full-profiles":
+        title = (platform + " " if platform else "Full ") + roles + " firmware"
+        return title, ("Full firmware for " + radio + " running as " + operating_roles + "." if operating_roles
+                       else "Choose the Full firmware for your exact radio and role.")
+    if name == "logging":
+        return "USB packet logging firmware", "Use these images when the chosen radio role needs USB packet logging."
+    if name == "utility":
+        names = [path.name.lower() for path in extras]
+        migration = any(filename.endswith("-migration.zip") or filename.startswith("esp32-partition-migration-")
+                        for filename in names)
+        bootloader = any("bootloader" in filename for filename in names)
+        tools = joined_labels((["migration"] if migration else []) + (["bootloader"] if bootloader else []))
+        if records:
+            title = roles + " firmware" + (" and upgrade tools" if extras else "")
+            return title, "Applications for " + (operating_roles or "your radio") + (
+                ", plus exact-board " + (tools or "upgrade") + " tools." if extras else ".")
+        return (tools.capitalize() if tools else "Upgrade") + " tools", (
+            "Use the exact board/role migration package or board/storage bootloader file for an update or recovery."
+            if migration and bootloader else
+            "Use the exact board and role package to migrate an ESP32 partition layout." if migration else
+            "Use the exact board/storage bootloader file for an update or recovery." if bootloader else
+            "Use the exact hardware package and follow its included instructions.")
+    return roles + " firmware", ("Run " + radio + " as " + operating_roles + "." if operating_roles
+                                  else "Firmware for the exact radio hardware and role selected in the picker.")
+
+
 def sha256(path):
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -554,10 +613,8 @@ def main():
         raise ValueError("staging directory must be empty; existing releases are never overwritten")
     base_tag = version
     groups = []
-    titles = {"companion": "Companion builds", "repeater-room": "Repeater and Room Server builds",
-              "utility": "Sensor and Terminal utilities", "logging": "USB packet logging builds",
-              "lora-ota": "LoRa OTA builds", "full-profiles": "Expanded FULL ESP32 profiles"}
-    for name in titles:
+    descriptions = {}
+    for name in ("companion", "repeater-room", "utility", "logging", "lora-ota", "full-profiles"):
         current = []
         count = 0
         chunks = []
@@ -572,16 +629,25 @@ def main():
         for index, chunk in enumerate(chunks):
             key = name + (f"-{index + 1}" if index else "")
             tag = base_tag if key == "companion" else f"{key}-{base_tag}"
-            title = f"MeshCore {args.version}{'' if args.stable else ' Dev'} - {titles[name]}"
-            if index:
-                title += f" (part {index + 1})"
+            label, purpose = release_group_description(name, chunk, extras if key == "utility" else [])
+            if len(chunks) > 1:
+                label += f" (part {index + 1} of {len(chunks)})"
+            title = f"MeshCore {args.version}{'' if args.stable else ' Dev'} - {label}"
+            descriptions[key] = {"label": label, "purpose": purpose, "parts": len(chunks)}
             groups.append({"key": key, "tag": tag, "title": title, "prerelease": not args.stable, "records": chunk})
     if extras and not any(g['key'] == 'utility' for g in groups):
+        label, purpose = release_group_description("utility", [], extras)
         groups.append({'key': 'utility', 'tag': 'utility-' + base_tag,
-                       'title': f'MeshCore {args.version} - Migration utilities',
+                       'title': f'MeshCore {args.version}{"" if args.stable else " Dev"} - {label}',
                        'prerelease': not args.stable, 'records': []})
-    links = "\n".join(f"- [{g['key']}](https://github.com/{args.repo}/releases/tag/{g['tag']})" for g in groups)
+        descriptions["utility"] = {"label": label, "purpose": purpose, "parts": 1}
+    links = "\n".join(f"- [{descriptions[g['key']]['label']}](https://github.com/{args.repo}/releases/tag/{g['tag']})"
+                      for g in groups)
     source_url = f"https://github.com/{args.repo}/blob/{args.commit}"
+    owner, repository = args.repo.split("/", 1)
+    docs_url = f"https://{owner}.github.io/" + ("" if repository.lower() == owner.lower() + ".github.io"
+                                               else quote(repository, safe="") + "/")
+    release_guide = docs_url + f"releases/{args.version}/"
     rows = []
     for group in groups:
         destination = args.output / group["key"]
@@ -656,15 +722,26 @@ def main():
             partial_note = (f"**Partial matrix:** {len(failures)} build attempt(s) failed and await repair. "
                             f"Only individually qualified firmware is published. [Missing builds]({report_url}).\n\n")
         channel = 'Stable release' if args.stable else 'Development prerelease'
-        body = (f"> **{channel}.** Firmware identifier: **{base_tag}**.\n\n"
-                f"# MeshCore {args.version} - USA Cascade\n\n"
-                f"Source: `{args.commit}`. USA/Canada: **{radio['frequency']} MHz, BW{radio['bandwidth']}, SF{radio['sf']}, CR{radio['cr']}**; Cascade defaults.\n\n"
-                f"This page contains **{len(summaries)} qualified firmware profiles**. Full Companions send MOTA and normally update over USB. Infrastructure has a verified wireless update path; see each capability manifest.\n\n"
-                f"[Feature on/off and update directions]({source_url}/docs/full_companion_features.md) | "
-                f"[Release details]({source_url}/docs/releases/{args.version}.md)\n\n"
-                "Match the exact board, radio, display, and storage variant. ESP32 WiFi updates use the application `.bin`; the merged image installs boot/partition data over USB. nRF52 firmware `.zip` files are native application DFU packages. Separate `with-bootloader-2.4.12` firmware embeds its exact-board OTAFIX image and checks it for installation after 70 seconds; ordinary firmware preserves the installed bootloader. Standalone bootloader downloads are separate utilities. LoRa MOTA installation requires an exact destination package and matching bootloader. Full Companions do not LoRa-install onto themselves.\n\n"
-                "Firmware and capability checks passed in the build matrix. Hardware update testing across every board was not performed.\n\n"
-                + partial_note + portable_note + links + "\n")
+        description = descriptions[group["key"]]
+        split_note = ("These pages are split for download limits and contain the same firmware version; "
+                      "the picker finds the correct page for your board.\n\n" if description["parts"] > 1 else "")
+        body = (f"[Open the firmware picker]({docs_url}firmware_picker/) | "
+                f"[What's new in {args.version}]({release_guide})\n\n"
+                f"# {group['title']}\n\n"
+                f"> **{channel}.** USA Cascade.\n\n"
+                + description["purpose"] + "\n\n"
+                "Select the exact board, radio, storage and role in the picker.\n\n"
+                + split_note + partial_note + portable_note
+                + f"[Installation and upgrade guide]({release_guide}) | "
+                f"[Feature controls]({docs_url}role_feature_switches/) | "
+                f"[Full Companion guide]({docs_url}full_companion_features/)\n\n"
+                "**Testing:** Published images passed build, capability and memory checks. "
+                "Physical coverage varies by board and update route; "
+                f"see the [release guide]({release_guide}).\n\n"
+                "Other firmware and tools:\n\n" + links + "\n\n"
+                f"USA Cascade defaults: **{radio['frequency']} MHz, BW{radio['bandwidth']}, "
+                f"SF{radio['sf']}, CR{radio['cr']}**. Saved radio settings take precedence.\n\n"
+                f"Firmware identifier: `{base_tag}`. Source: `{args.commit}`.\n")
         (args.output / (group["key"] + "-notes.md")).write_text(body)
         (destination / "BUILD-NOTES.txt").write_text(body)
     picker = ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"

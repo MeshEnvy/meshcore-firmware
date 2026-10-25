@@ -326,6 +326,111 @@ class ReleasePublicationTest(unittest.TestCase):
                     self.assertRaisesRegex(ValueError, "another source"):
                 package.main()
 
+    def test_page_descriptions_follow_actual_platforms_roles_and_tool_types(self):
+        def record(target, platform="ESP32_PLATFORM", methods=("lora",)):
+            return {"manifest": {"target": target, "platform": platform,
+                                 "ota_update_methods": list(methods)}}
+
+        nrf = [record("sample_repeater_lora_ota", "NRF52_PLATFORM"),
+               record("sample_room_server_lora_ota", "NRF52_PLATFORM"),
+               record("sample_sensor_lora_ota", "NRF52_PLATFORM")]
+        label, purpose = package.release_group_description("lora-ota", nrf)
+        self.assertEqual(label, "nRF52 Repeater, Room Server and Sensor firmware")
+        self.assertIn("LoRa OTA reception", purpose)
+        # Historical matrices also had ESP32 and mixed-platform LoRa pages.
+        esp = [record("legacy_repeater_lora_ota")]
+        self.assertEqual(package.release_group_description("lora-ota", esp)[0], "ESP32 Repeater firmware")
+        self.assertEqual(package.release_group_description("lora-ota", esp + nrf)[0], "LoRa OTA firmware")
+        self.assertNotIn("LoRa", package.release_group_description("lora-ota", [
+            record("legacy_repeater_lora_ota", methods=("wifi",))])[1])
+        full = [record("sample_repeater"), record("sample_room_server"), record("sample_sensor")]
+        self.assertEqual(package.release_group_description("full-profiles", full)[0],
+                         "ESP32 Repeater, Room Server and Sensor firmware")
+        for files, title in (([Path("board-migration.zip")], "Migration tools"),
+                             ([Path("board_bootloader.hex")], "Bootloader tools"),
+                             ([Path("board-migration.zip"), Path("board_bootloader.hex")],
+                              "Migration and bootloader tools")):
+            with self.subTest(title=title):
+                self.assertEqual(package.release_group_description("utility", [], files)[0], title)
+        utility = [record("sample_sensor"), record("sample_terminal_chat")]
+        self.assertEqual(package.release_group_description("utility", utility)[0], "Sensor and Terminal firmware")
+        self.assertEqual(package.release_group_description("utility", utility, [Path("board-migration.zip")])[0],
+                         "Sensor and Terminal firmware and upgrade tools")
+
+    def test_staged_notes_lead_with_picker_and_link_human_role_choices(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            companion, companion_files = self.record(base / "input", "Station_G2_companion_radio_full")
+            repeater, repeater_files = self.record(base / "input", "Station_G2_repeater", build_profile="full")
+            records = [{"manifest": companion, "files": companion_files},
+                       {"manifest": repeater, "files": repeater_files}]
+            extras = [base / "board-migration.zip", base / "board_bootloader.hex"]
+            for path in extras:
+                path.write_bytes(b"exact-board tool fixture\n")
+            before = {path: path.read_bytes() for path in companion_files + repeater_files + extras}
+            output = base / "stage"
+            argv = ["package", "--input", str(base / "input"), "--output", str(output),
+                    "--local-release", "--stable", "--version", "1.17.1.9", "--commit", SOURCE]
+            with patch.object(sys, "argv", argv), patch.object(package, "collect_local_release",
+                    return_value=(records, extras,
+                                  {"frequency": "910.525", "bandwidth": "62.5", "sf": "7", "cr": "5"})):
+                package.main()
+            plan = json.loads((output / "release-plan.json").read_text())
+            self.assertEqual([group["key"] for group in plan["groups"]], ["companion", "full-profiles", "utility"])
+            guide = "https://mikecarper.github.io/MeshCore/releases/1.17.1.9/"
+            for group in plan["groups"]:
+                notes = (output / (group["key"] + "-notes.md")).read_text(encoding="ascii")
+                self.assertTrue(notes.startswith("[Open the firmware picker](https://mikecarper.github.io/MeshCore/firmware_picker/)"))
+                self.assertIn("[What's new in 1.17.1.9](" + guide + ")", notes)
+                self.assertIn("[Installation and upgrade guide](" + guide + ")", notes)
+                self.assertIn("[Companion firmware](https://github.com/mikecarper/MeshCore/releases/tag/" + FAMILY + ")", notes)
+                self.assertIn("[ESP32 Repeater firmware](https://github.com/mikecarper/MeshCore/releases/tag/full-profiles-" + FAMILY + ")", notes)
+                self.assertIn("[Migration and bootloader tools](https://github.com/mikecarper/MeshCore/releases/tag/utility-" + FAMILY + ")", notes)
+                self.assertNotIn("[full-profiles]", notes)
+                self.assertNotIn("qualified firmware profiles", notes)
+                self.assertIn("**Testing:**", notes)
+                self.assertIn("Physical coverage varies by board and update route", notes)
+                self.assertIn("Saved radio settings take precedence", notes)
+                self.assertIn(SOURCE, notes)
+                self.assertIn(FAMILY, notes)
+                self.assertEqual((output / group["key"] / "BUILD-NOTES.txt").read_text(), notes)
+                for line in (output / group["key"] / "SHA256SUMS.txt").read_text().splitlines():
+                    expected, name = line.split("  ", 1)
+                    self.assertEqual(hashlib.sha256((output / group["key"] / name).read_bytes()).hexdigest(), expected)
+            self.assertEqual({path: path.read_bytes() for path in before}, before)
+
+    def test_split_pages_keep_tags_and_explain_one_version_with_human_links(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            records = []
+            for index in range(3):
+                target = f"board_{index}_repeater_lora_ota"
+                row, files = self.record(base / "input", target, platform="NRF52_PLATFORM")
+                # Exercise the real 900-file split with many tiny report assets.
+                for number in range(447):
+                    path = base / "input" / f"{target}-report-{number}.txt"
+                    path.write_bytes(b"qualification report fixture\n")
+                    files.append(path)
+                self.assertEqual(len(files), 451)
+                records.append({"manifest": row, "files": files})
+            output = base / "stage"
+            argv = ["package", "--input", str(base / "input"), "--output", str(output),
+                    "--local-release", "--stable", "--version", "1.17.1.9", "--commit", SOURCE]
+            with patch.object(sys, "argv", argv), patch.object(package, "collect_local_release",
+                    return_value=(records, [],
+                                  {"frequency": "910.525", "bandwidth": "62.5", "sf": "7", "cr": "5"})):
+                package.main()
+            plan = json.loads((output / "release-plan.json").read_text())
+            self.assertEqual([group["key"] for group in plan["groups"]], ["lora-ota", "lora-ota-2", "lora-ota-3"])
+            for number, group in enumerate(plan["groups"], 1):
+                self.assertEqual(group["tag"], group["key"] + "-" + FAMILY)
+                self.assertEqual(group["title"], f"MeshCore 1.17.1.9 - nRF52 Repeater firmware (part {number} of 3)")
+                notes = (output / (group["key"] + "-notes.md")).read_text(encoding="ascii")
+                self.assertIn("split for download limits and contain the same firmware version", notes)
+                for other in range(1, 4):
+                    self.assertIn(f"[nRF52 Repeater firmware (part {other} of 3)]", notes)
+                self.assertEqual(group["asset_count"], 457)
+
     def test_local_release_preserves_selected_profiles_and_verifies_complete_inventory(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)

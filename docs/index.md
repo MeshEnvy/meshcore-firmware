@@ -4,14 +4,21 @@
 
 # MeshCore documentation
 
-Choose firmware with the [firmware picker](firmware_picker.md). For help with a device already in service, start with the [FAQ](faq.md).
+## Start here
 
-## Current release
+**Current stable release: [1.18.0.1 USA Cascade](releases/1.18.0.1.md).**
+Read what changed, which boards benefit and the known limitations in one place.
 
-- [1.18.0.1 USA Cascade release notes](releases/1.18.0.1.md)
-- [Test Results](test-results/index.md) - source-specific validation archive
+| I want to... | Start here |
+| --- | --- |
+| See what is new or fixed | [1.18.0.1 release notes](releases/1.18.0.1.md) |
+| Download firmware for my board | [Firmware picker](firmware_picker.md) |
+| Install an update | [Update guide](ota_user_guide.md) |
+| Turn a feature on or off | [Feature controls by role](role_feature_switches.md) |
+| Find a command | [CLI reference](cli_commands.md) |
+| Troubleshoot a device | [FAQ](faq.md) |
 
-## Documentation
+## Detailed guides
 
 - [SolarXiao Base/Advanced/MPPT detection and battery controls](solarxiao_power.md)
 
@@ -32,6 +39,7 @@ The navigation groups the remaining guides under Documentation, including board-
 
 ## Engineering records
 
+- [Test Results](test-results/index.md) - hardware and build evidence, with the tested versions
 - [Research](research/index.md) - design notes, diagnostics, and historical update-chain studies
 - [Old Releases](old-releases/index.md) - historical release notes and supporting files
 

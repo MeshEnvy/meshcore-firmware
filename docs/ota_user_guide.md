@@ -4,13 +4,15 @@
 
 # Updating your node over the air (OTA) - user guide
 
-For **1.17.1.5**, use the exact board/storage profile from
-[OTAFIX 2.4.6](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/0.11.0-OTAFIX2.4.6)
-for nRF52 OTAFIX installations. New internal-flash hybrid receivers require
-its 64 KiB retained-RAM handoff; QSPI and microSD targets require their own
-matching bootloader profiles. Earlier preview versions mentioned below
-describe compatibility/migration history, not the current recommended download.
-Full Companion is a MOTA source and normally updates itself over USB.
+For **[1.18.0.1 USA Cascade](releases/1.18.0.1.md)**, choose the exact board,
+role and storage layout in the [firmware picker](firmware_picker.md). Supported
+nRF52 Repeater and Room Server images can include the matching OTAFIX 2.4.12
+bootloader; see the [embedded bootloader guide](nrf52_embedded_bootloader.md).
+Ordinary application images preserve the installed bootloader. Standalone
+bootloader downloads require an exact board/storage match from
+[OTAFIX 2.4.12](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/v0.11.0-OTAFIX2.4.12).
+Full Companion sends LoRa updates to other nodes and normally updates itself
+over USB. Older versions mentioned below describe compatibility history.
 
 Before a Companion upgrade, export its contacts when possible. ESP32, RP2040
 and STM32 can retain complete legacy records ahead of an interrupted final
@@ -60,90 +62,19 @@ preserves the RX benefit without risking missed packets from a legacy
 > application image alone is not enough. An intermediate repeater only relays packets and needs neither an
 > install-capable image nor OTAFIX. Check the bootloader release for an exact board match before attempting an update.
 
-The following nRF52 repeater families gained firmware-side LoRa OTA targets in
-this release. Their ordinary repeater keeps its complete declared sensor recipe;
-the install-capable `lora_ota_no_external_sensors` sibling is smaller:
-
-- Heltec Mesh Solar, T1, and Tower V2
-- Keepteen LT1, LilyGo T-Impulse Plus, Mesh Pocket, and Nano G2 Ultra
-- Minewsemi ME25LS01, RAK3401, SenseCAP Solar, and Wio WM1110
-
-The RAK3401 `RAK_3401_repeater_lora_ota_no_external_sensors` image trims selected
-optional environmental/ranging drivers but does not disable I2C. It retains the
-INA219, INA226, INA260, and INA3221 voltage/current monitors, board display and
-RTC support, and both RAK12500 I2C and RAK12501/L76K UART GPS paths. The four
-INA drivers are only the retained voltage/current entries in the optional
-environmental-sensor table; they are not the only I2C users. The SSD1306 OLED,
-autodiscovered DS3231/RV3028/PCF8563/RX8130CE RTCs, and RAK12500 GPS use I2C as
-separate board peripherals. Install one GPS module in sensor slot A. Slot D's
-reset/PPS lines conflict with the RAK13302 radio's BUSY/DIO1 lines.
-
-The firmware-configured INA3221 address and the RAK12500 address are both
-`0x42`, so those devices cannot share one bus at those addresses. To install
-both, leave the RAK12500 at `0x42`, strap INA3221 A0 to SCL for `0x43`, and use
-a firmware build with `-DTELEM_INA3221_ADDRESS=0x43`.
-
-The reduced RAK4631 profiles likewise retain the four INA monitors. The plain
-repeater and Serial2 bridge retain GPS: a RAK12501 can use sensor slot A or D,
-and a RAK12500 can use slot A or C. The runtime RS-232 bridge defaults to
-Serial2 so the UART RAK12501 can retain Serial1. The merged runtime image always
-reserves Serial1: a bounded silent probe cannot prove that a cold RAK12501 is
-absent, and turning the GPS setting off cannot stop a fitted module from driving
-the shared UART while WB_IO2/3V3_S remains powered. Use Serial2. Serial1 requires
-an explicit no-GPS/dedicated image. The reservation remains fail-closed even
-when an I2C RAK12500 is detected. The explicitly compiled
-`RAK_4631_repeater_bridge_rs232_serial1_lora_ota_no_external_sensors` target
-omits the combined GPS provider because its bridge owns the UART used by
-RAK12501; consequently that legacy image does not expose the I2C RAK12500 path
-either, even though RAK12500 itself does not use the UART.
-
-Selected nRF52 repeaters with dedicated external QSPI can now stage the
-complete package off-chip, so their normal full-sensor repeater build can
-install a full image or an in-place delta. The current matched families are
-XIAO nRF52840 and its XIAO-module derivatives, original LilyGo T-Echo,
-ThinkNode M1/M6, Wio Tracker L1, SenseCAP Solar, and the dedicated RAK4631 +
-RAK15001 slot-C target. The list also includes a separately wired W25Q16JV on
-RAK19007 with either RAK4631 or RAK3401 + RAK13302. These require the
-corresponding exact QSPI-aware OTAFIX bootloader; see
-[the nRF52 QSPI guide](ota_nrf52_qspi.md).
-
-The W25Q16 option uses one permanent RAK19007 wiring for either core: CLK/MISO/
-MOSI tap IO-connector pins 26/27/28, flash CS uses J11 AIN1, and power uses J12
-VDD (3.3 V) and GND. Add an approximately 10 kOhm CS-to-VDD pull-up and never
-power the flash from VBAT. The three SPI signals require underside pads or an
-IO-connector interposer; the easy J10/J11/J12 headers do not expose them. The
-flash consumes no WisBlock slot, so a supported GPS can remain in slot A.
-
-The unified RAK repeater images additionally support a header-only W25Q16
-layout, using J10 `TX1`/`RX1` and J11 `IO1`/`AIN1`. This layout needs the
-matching compatible OTAFIX 2.4.10 bootloader and gives up UART1 GPS/PPS; I2C
-sensors remain available. See the [pin table](ota_nrf52_qspi.md#header-only-w25q16-wiring-for-the-unified-rak-images).
-
-The ordinary full-sensor `RAK_4631_repeater` image remains too large for the
-safe internal in-place update limit. Without external flash, use
-`RAK_4631_repeater_lora_ota_no_external_sensors`; it trims selected optional
-environmental/ranging drivers while retaining generic I2C, battery monitoring,
-the four INA monitors, and target-compatible GPS. A RAK4631 fitted with
-RAK15001 in sensor slot C can instead use
-`RAK_4631_repeater_rak15001_slot_c_lora_ota` to retain the full sensor/GPS set
-and stage full images or deltas off-chip.
-
-For the external Winbond breakout, use
-`RAK_4631_repeater_w25q16_lora_ota` on RAK4631 or
-`RAK_3401_repeater_rak13302_w25q16_lora_ota` on RAK3401 + RAK13302. They retain
-the full sensor/GPS recipe and require exactly a 2 MiB `EF4015` W25Q16 plus the
-bootloader for that same core/radio/flash combination. Install
-`wiscore_rak4631_w25q16` for RAK4631 or
-`wiscore_rak3401_rak13302_w25q16` for RAK3401 + RAK13302 as a one-time
-prerequisite. The physical wiring is shared, but the two firmware identities
-are deliberately different and cannot be substituted for one another.
+For nRF52 storage and wiring requirements, see the
+[QSPI hardware guide](ota_nrf52_qspi.md). Older image names and board-specific
+constraints are collected in the [hardware reference](#hardware-and-older-image-layouts)
+at the end of this page; use the picker for current downloads.
 
 ---
 
-## The important part first: it's safe
+## Before you start
 
-- **Nothing installs by itself.** Your node can *discover* and download an update, but
-  it only **installs** when you say so (unless you deliberately turn on auto-install - see below).
+- **Application updates require installation approval** unless you enable
+  auto-install. Images labelled **with bootloader** have a separate automatic
+  bootloader check after 70 seconds; read the [bootloader guide](nrf52_embedded_bootloader.md)
+  before choosing one.
 - **Bad downloads can't sneak in.** Every piece of the firmware is checked against a cryptographic
   fingerprint as it arrives, and the whole image is verified again before install. A corrupt or tampered
   download is rejected, not installed.
@@ -152,8 +83,9 @@ are deliberately different and cannot be substituted for one another.
 - **Discovery stays quiet; a transfer is deliberate.** Periodic update discovery uses background priority.
   Once a download starts, its transfer packets are primary traffic across every relay hop, so use
   TempRadio as an OTA maintenance window when delaying unrelated mesh traffic would matter.
-- **It can recover.** If an install ever fails, the node falls back to a safe recovery mode (you can
-  re-flash a known-good firmware over USB) - it won't be left bricked.
+- **Know the recovery route.** Keep local USB/DFU or SWD access available where
+  practical. Recovery depends on the board, installed bootloader and failure;
+  a bootloader update can require a debugger if interrupted.
 
 ---
 
@@ -402,7 +334,8 @@ complete target inventory, storage layouts, and safety contract.
   without valid live `EndF`, they refuse every internal pull before erase
   because their normal application can extend through `0xED000`. Recover one
   of those builds over USB/BLE DFU or SWD.
-- If an **install** fails, the node won't boot a broken image - it lands in **recovery mode**:
+- If an **install** fails, recovery depends on the board and bootloader. When
+  its recovery mode remains available:
   - **nRF52:** it appears as a USB drive; drag a known-good firmware `.uf2` for that exact board onto it
     to recover.
   - **ESP32:** it keeps the previous firmware in the other slot and rolls back.
@@ -710,3 +643,88 @@ that only contains what changed). You get them by:
 
 For the full technical details (the file format and the radio protocol), see
 [the OTA protocol spec](ota_protocol.md).
+
+## Hardware and older image layouts
+
+Use the [firmware picker](firmware_picker.md) for current downloads. These
+notes retain hardware constraints and older image names for existing nodes.
+The 1.18.0.1 RAK release has separately checked Full/Reduced sensor images;
+older size limits below are not instructions to choose a Reduced build today.
+
+Older firmware used separate `lora_ota_no_external_sensors` images on the
+following families. These names explain older installations; use the current
+picker's Full/Reduced sensor choices for 1.18.0.1:
+
+- Heltec Mesh Solar, T1, and Tower V2
+- Keepteen LT1, LilyGo T-Impulse Plus, Mesh Pocket, and Nano G2 Ultra
+- Minewsemi ME25LS01, RAK3401, SenseCAP Solar, and Wio WM1110
+
+The RAK3401 `RAK_3401_repeater_lora_ota_no_external_sensors` image trims selected
+optional environmental/ranging drivers but does not disable I2C. It retains the
+INA219, INA226, INA260, and INA3221 voltage/current monitors, board display and
+RTC support, and both RAK12500 I2C and RAK12501/L76K UART GPS paths. The four
+INA drivers are only the retained voltage/current entries in the optional
+environmental-sensor table; they are not the only I2C users. The SSD1306 OLED,
+autodiscovered DS3231/RV3028/PCF8563/RX8130CE RTCs, and RAK12500 GPS use I2C as
+separate board peripherals. Install one GPS module in sensor slot A. Slot D's
+reset/PPS lines conflict with the RAK13302 radio's BUSY/DIO1 lines.
+
+The firmware-configured INA3221 address and the RAK12500 address are both
+`0x42`, so those devices cannot share one bus at those addresses. To install
+both, leave the RAK12500 at `0x42`, strap INA3221 A0 to SCL for `0x43`, and use
+a firmware build with `-DTELEM_INA3221_ADDRESS=0x43`.
+
+The reduced RAK4631 profiles likewise retain the four INA monitors. The plain
+repeater and Serial2 bridge retain GPS: a RAK12501 can use sensor slot A or D,
+and a RAK12500 can use slot A or C. The runtime RS-232 bridge defaults to
+Serial2 so the UART RAK12501 can retain Serial1. The merged runtime image always
+reserves Serial1: a bounded silent probe cannot prove that a cold RAK12501 is
+absent, and turning the GPS setting off cannot stop a fitted module from driving
+the shared UART while WB_IO2/3V3_S remains powered. Use Serial2. Serial1 requires
+an explicit no-GPS/dedicated image. The reservation remains fail-closed even
+when an I2C RAK12500 is detected. The explicitly compiled
+`RAK_4631_repeater_bridge_rs232_serial1_lora_ota_no_external_sensors` target
+omits the combined GPS provider because its bridge owns the UART used by
+RAK12501; consequently that legacy image does not expose the I2C RAK12500 path
+either, even though RAK12500 itself does not use the UART.
+
+Selected nRF52 repeaters with dedicated external QSPI can stage the
+complete package off-chip, so their normal full-sensor repeater build can
+install a full image or an in-place delta. The current matched families are
+XIAO nRF52840 and its XIAO-module derivatives, original LilyGo T-Echo,
+ThinkNode M1/M6, Wio Tracker L1, SenseCAP Solar, and the dedicated RAK4631 +
+RAK15001 slot-C target. The list also includes a separately wired W25Q16JV on
+RAK19007 with either RAK4631 or RAK3401 + RAK13302. These require the
+corresponding exact QSPI-aware OTAFIX bootloader; see
+[the nRF52 QSPI guide](ota_nrf52_qspi.md).
+
+The W25Q16 option uses one permanent RAK19007 wiring for either core: CLK/MISO/
+MOSI tap IO-connector pins 26/27/28, flash CS uses J11 AIN1, and power uses J12
+VDD (3.3 V) and GND. Add an approximately 10 kOhm CS-to-VDD pull-up and never
+power the flash from VBAT. The three SPI signals require underside pads or an
+IO-connector interposer; the easy J10/J11/J12 headers do not expose them. The
+flash consumes no WisBlock slot, so a supported GPS can remain in slot A.
+
+The unified RAK repeater images additionally support a header-only W25Q16
+layout, using J10 `TX1`/`RX1` and J11 `IO1`/`AIN1`. This layout needs the
+matching compatible OTAFIX 2.4.10 bootloader and gives up UART1 GPS/PPS; I2C
+sensors remain available. See the [pin table](ota_nrf52_qspi.md#header-only-w25q16-wiring-for-the-unified-rak-images).
+
+Older full-sensor `RAK_4631_repeater` images exceeded the safe internal
+in-place update limit. Their smaller sibling,
+`RAK_4631_repeater_lora_ota_no_external_sensors`, trims selected optional
+environmental/ranging drivers while retaining generic I2C, battery monitoring,
+the four INA monitors, and target-compatible GPS. A RAK4631 fitted with
+RAK15001 in sensor slot C can instead use
+`RAK_4631_repeater_rak15001_slot_c_lora_ota` to retain the full sensor/GPS set
+and stage full images or deltas off-chip.
+
+For the external Winbond breakout, use
+`RAK_4631_repeater_w25q16_lora_ota` on RAK4631 or
+`RAK_3401_repeater_rak13302_w25q16_lora_ota` on RAK3401 + RAK13302. They retain
+the full sensor/GPS recipe and require exactly a 2 MiB `EF4015` W25Q16 plus the
+bootloader for that same core/radio/flash combination. Install
+`wiscore_rak4631_w25q16` for RAK4631 or
+`wiscore_rak3401_rak13302_w25q16` for RAK3401 + RAK13302 as a one-time
+prerequisite. The physical wiring is shared, but the two firmware identities
+are deliberately different and cannot be substituted for one another.

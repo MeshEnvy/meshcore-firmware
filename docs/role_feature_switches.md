@@ -2,9 +2,10 @@
 <p class="meshcore-hosted-doc-link"><a href="https://mikecarper.github.io/MeshCore/role_feature_switches/">View this page on MeshCore Docs</a>.</p>
 <!-- meshcore-hosted-doc-link:end -->
 
-# Feature switches by role - 1.17.1.5 USA Cascade
+# Feature controls by role
 
-Use these settings with the exact board's canonical release image. Former
+Use these settings with the exact board's image from the
+[current release](releases/1.18.0.1.md). Former
 logging, power-saving, FEM-gain, and rotated-display variants are now runtime
 choices where the hardware supports them. A setting cannot add missing radio
 hardware, MQTT code, storage, or an OTA partition. Check the download's

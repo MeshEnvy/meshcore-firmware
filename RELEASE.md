@@ -73,8 +73,38 @@ release title/body, and the final asset inventory after publication. Preserve
 existing assets when making a documentation-only release edit.
 The current trigger explicitly excludes `repeater-room-*`.
 
-Use role-specific introductions for Companion, Repeater/Room Server, Sensor,
-LoRa OTA Repeater, and expanded Full infrastructure pages. Link the exact
-board/storage [OTAFIX 2.4.12 release](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/v0.11.0-OTAFIX2.4.12)
-where nRF52 bootloader requirements apply. Later documentation commits can be
-linked from release notes without moving the firmware tag or rebuilding assets.
+## Release notes
+
+Write one public release page at `docs/releases/VERSION.md`. Make it the
+starting point from the documentation home page and every GitHub download page.
+Use the same format for each revision:
+
+1. **Status and purpose:** stable or testing, version, region, and one sentence
+   explaining the user benefit.
+2. **New:** a short list of actual additions since the previous stable release.
+   Say who each change helps; link setup instructions beside the feature.
+3. **Fixed:** name affected boards and the behavior corrected.
+4. **Choose a download:** picker first, then a short table of role-specific
+   GitHub pages. Explain Full/Reduced sensors and included bootloaders once.
+5. **Before updating:** only required actions, changed defaults and compatibility
+   limits. Link the installation guides instead of copying them.
+6. **Tested and limitations:** separate build checks from physical tests. Name
+   important remaining limitations and link source-specific evidence.
+
+Compare the actual previous release's source and notes. A long commit list can
+include old work imported by merges; do not present it all as new. Do not relist
+existing features as additions. Keep tuning commands, build counts, memory
+layouts and implementation details in the reference guides or test reports.
+
+The main GitHub release should summarize New, Fixed and Tested in a few bullets
+and link the public release page. Other download pages should lead with their
+purpose and link the same notes. Use readable link names such as "ESP32
+Repeater, Room Server and Sensor" rather than internal keys like `full-profiles`.
+Label split pages "part 1 of 3" and explain that they contain the same version,
+not different feature levels. The picker should find the exact board for users.
+
+Keep required bootloader guidance linked to the exact board/storage
+[OTAFIX release](https://github.com/mikecarper/Adafruit_nRF52_Bootloader_OTAFIX/releases/tag/v0.11.0-OTAFIX2.4.12).
+A notes-only correction may update public titles, bodies and documentation.
+Preserve published tags, binaries, attached build notes and checksum files;
+verify release status, Latest and the asset inventory remain unchanged.
