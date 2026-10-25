@@ -91,13 +91,16 @@ Use the same format for each revision:
 6. **Tested and limitations:** separate build checks from physical tests. Name
    important remaining limitations and link source-specific evidence.
 
-Include a collapsed **Features beyond mainline MeshCore** section with simple,
-linked bullets for the complete feature overview. Name the compared upstream
+In the hosted release guide, include a collapsed
+**Features beyond mainline MeshCore** section with simple, linked bullets for
+the complete feature overview. Name the compared upstream
 release and comparison date; distinguish additions from extensions of existing
 features, and qualify board/role support. Keep it separate from the revision's
 New and Fixed lists. Recheck it against the actual released source each time.
 Put a direct feature link at the top of every release page. Link to the hosted
 release guide's `#extra-features` disclosure so clicking opens the feature list.
+Keep the complete list in that guide; do not duplicate the dropdown in GitHub
+release bodies.
 
 Compare the actual previous release's source and notes. A long commit list can
 include old work imported by merges; do not present it all as new. Do not relist
