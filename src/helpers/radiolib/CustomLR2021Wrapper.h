@@ -59,9 +59,11 @@ protected:
   float morseReceiverBandwidthKHz() const override { return 4.8f; }
   int16_t prepareMorseReceiver(float frequency_mhz) override {
     if (!supportsRadioDeepInit()) return RADIOLIB_ERR_UNSUPPORTED;
-    if (!_board->prepareRadioFrequency(frequency_mhz)) return RADIOLIB_ERR_INVALID_FREQUENCY;
     _morse_rx_fsk_mode = true;
+    // W12's rail preparation checks DIO routing over SPI. Recover a failed
+    // transceiver before asking it to quiesce controls for a band change.
     if (!prepareRadioHardReset()) return RADIOLIB_ERR_CHIP_NOT_FOUND;
+    if (!_board->prepareRadioFrequency(frequency_mhz)) return RADIOLIB_ERR_INVALID_FREQUENCY;
     const int16_t status = static_cast<CustomLR2021*>(_radio)->beginMorseReceive(frequency_mhz);
     const bool finished = _board->finishRadioHardReset();
     return status == RADIOLIB_ERR_NONE && !finished ? RADIOLIB_ERR_UNKNOWN : status;

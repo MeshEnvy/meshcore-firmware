@@ -141,7 +141,7 @@ struct RadioLibWrapper : mesh::Radio {
   uint32_t rssi_latency=0;
   unsigned rssi_reads=0;
   bool _params_valid=true, _rx_ps_armed=true, _rx_hold_continuous=false;
-  bool _rx_boosted_gain_valid=false, _cur_rx_boosted_gain=false;
+  bool _rx_boosted_gain_valid=false, _cur_rx_boosted_gain=false, _rx_boosted_gain_applied=false;
   bool rx_gain_apply_ok=true, physical_rx_gain=false;
   unsigned rx_gain_applies=0,rx_gain_order=0;
   virtual bool applyRxBoostedGainMode(bool enabled) {

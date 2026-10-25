@@ -360,6 +360,15 @@ radio settings preserve the saved TX power and safely clamp only the active
 band; returning to the saved settings restores its applicable power. A
 permanent frequency change clamps the saved TX power to the new band's limit.
 
+The W12 RF-switch update from [upstream #3579](https://github.com/meshcore-dev/MeshCore/pull/3579)
+keeps the sub-GHz amplifier biased in standby. Before changing FEM supplies,
+firmware lowers its control pins; high-band standby and shutdown keep the
+unpowered sub-GHz amplifier's controls low. The existing LF/HF rail isolation
+is retained. The [LR2021 receive fix in #3512](https://github.com/meshcore-dev/MeshCore/pull/3512)
+is covered by checked FIFO reads, interrupt acknowledgement and automatic RX
+rearming. Physical W12 packet-start power and current measurements are still
+required to qualify the RF result.
+
 The external SX1262, SX1268, LLCC68, LR1110, and LR2021 drivers also bound the
 post-SetTx BUSY wait. A failed PA ramp therefore returns an error and can enter
 the physical-reset recovery path instead of hanging the node indefinitely.

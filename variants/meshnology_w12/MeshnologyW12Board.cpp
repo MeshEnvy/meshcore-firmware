@@ -4,6 +4,10 @@
 void MeshnologyW12Board::begin() {
     ESP32Board::begin();
 
+    // An MCU-only reset can leave the radio's warm LF controls HIGH. Assert
+    // radio reset before releasing or dropping either retained FEM supply.
+    mesh::esp32::releaseOutputAfterDeepSleep((gpio_num_t)P_LORA_RESET, LOW);
+    delay(1);
     // Keep both FEM rails off while releasing a retained terminal shutdown.
     mesh::esp32::releaseOutputAfterDeepSleep((gpio_num_t)P_LORA_LF_PA_POWER, LOW);
     mesh::esp32::releaseOutputAfterDeepSleep((gpio_num_t)P_LORA_HF_PA_POWER, LOW);
@@ -15,6 +19,7 @@ void MeshnologyW12Board::begin() {
     digitalWrite(P_LORA_LF_PA_POWER, LOW);
     digitalWrite(P_LORA_HF_PA_POWER, LOW);
     prepareRadioFrequency(LORA_FREQ);
+    digitalWrite(P_LORA_RESET, HIGH);
 
     periph_power.begin();
     esp_reset_reason_t reason = esp_reset_reason();
@@ -45,18 +50,41 @@ void MeshnologyW12Board::begin() {
     const bool high_band = mesh::lr2021::isHighBand(frequency);
     if (radio_band_initialized && high_band == radio_high_band) return true;
 
+    // DIO controls must be LOW before either FEM loses its supply. A failed
+    // transition remains uninitialized so even a same-band retry repeats it.
+    radio_band_initialized = false;
+    if (radio_rf_switch_handler && !radio_rf_switch_handler(false, false)) return false;
+
     // The W12 schematic connects PA_EN_M (GPIO4) to the GC1109 sub-GHz rail
     // and PA_EN_G (GPIO3) to the RFX2402E 2.4 GHz rail. Keep only the selected
     // FEM powered, and disable the old path before enabling the new one.
     digitalWrite(P_LORA_LF_PA_POWER, LOW);
     digitalWrite(P_LORA_HF_PA_POWER, LOW);
     digitalWrite(high_band ? P_LORA_HF_PA_POWER : P_LORA_LF_PA_POWER, HIGH);
-    // The FEM rail needs only 1 ms to settle. TX control-line prearming is
-    // handled separately immediately before transmit, not by idling the PA on.
+    // PR #3579 uses a 1 ms FEM rail settling delay. Only after that delay
+    // may the selected LF FEM receive its retained standby control bias.
     delay(1);
+    if (radio_rf_switch_handler && !radio_rf_switch_handler(!high_band, false)) return false;
 
     radio_high_band = high_band;
     radio_band_initialized = true;
+    return true;
+  }
+
+  bool MeshnologyW12Board::resetRadio() {
+    // Recovery must pulse NRST before rail preparation, whose checked DIO
+    // routing would otherwise depend on the SPI fault being recovered.
+    radio_band_initialized = false;
+    mesh::esp32::releaseOutputAfterDeepSleep((gpio_num_t)P_LORA_RESET, LOW);
+    delay(10);
+    digitalWrite(P_LORA_RESET, HIGH);
+    // Match RadioLib's LRxxxx reset startup interval and bounded BUSY wait.
+    delay(300);
+    const uint32_t started = millis();
+    while (digitalRead(P_LORA_BUSY)) {
+      yield();
+      if (millis() - started >= 3000) return false;
+    }
     return true;
   }
 
@@ -89,12 +117,31 @@ void MeshnologyW12Board::begin() {
     esp_deep_sleep_start();   // CPU halts here and never returns!
   }
 
-  void MeshnologyW12Board::powerOff()  {
-    // A shutdown must not retain the packet-wake deep-sleep behavior above.
-    // Disable both external FEM rails, then use the base shutdown path so the
-    // display, GPS, radio, serial buffers, and stale wake sources are handled.
+  void MeshnologyW12Board::shutdownPeripherals() {
+    // Quiesce controls while the selected FEM is still powered, then let the
+    // radio enter sleep before removing its FEM supplies.
+    if (radio_rf_switch_handler) radio_rf_switch_handler(false, false);
+    ESP32Board::shutdownPeripherals();
+    // Stopping an active Morse carrier can restore a different packet band
+    // during base shutdown. Base shutdown also holds NSS HIGH; release only
+    // that hold for the final checked cold routing/sleep, then retain NSS again.
+    mesh::esp32::releaseOutputAfterDeepSleep((gpio_num_t)P_LORA_NSS, HIGH);
+    const bool controls_low = !radio_rf_switch_handler || radio_rf_switch_handler(false, true);
+    mesh::esp32::holdOutputForDeepSleep((gpio_num_t)P_LORA_NSS, HIGH);
+    if (!controls_low) {
+      // A failed SPI response cannot prove that the controls went LOW. Hold
+      // the transceiver in reset before removing the external FEM supplies.
+      mesh::esp32::holdOutputForDeepSleep((gpio_num_t)P_LORA_RESET, LOW);
+      delay(1);
+    }
+    radio_band_initialized = false;
     mesh::esp32::holdOutputForDeepSleep((gpio_num_t)P_LORA_LF_PA_POWER, LOW);
     mesh::esp32::holdOutputForDeepSleep((gpio_num_t)P_LORA_HF_PA_POWER, LOW);
+  }
+
+  void MeshnologyW12Board::powerOff() {
+    // Base powerOff dispatches shutdownPeripherals() above, clears stale wake
+    // sources, and enters terminal deep sleep with both FEM rails retained LOW.
     ESP32Board::powerOff();
   }
 

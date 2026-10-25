@@ -110,6 +110,7 @@ class LR2021 {
   }
   int16_t setCRC(uint8_t value) { assert(value==0 || value==2);return step(3); }
   int16_t explicitHeader() { return step(4); }
+  int16_t standby() { return 0; }
   int16_t setRxBoostedGainMode(uint8_t value) { gain=value;return step(5); }
   void setRfSwitchTable(const uint32_t (&)[Module::RFSWITCH_MAX_PINS],const Module::RfSwitchMode_t*) {}
   int16_t setDioFunction(uint8_t dio,uint8_t function,uint8_t pull) {

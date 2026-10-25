@@ -102,6 +102,7 @@ struct Native {
   int16_t startReceive() { const auto result=call(7); receiving=result==0; return result; }
   int16_t setRSSIConfig(uint8_t samples) { rssi_samples=samples; return call(6); }
   int16_t receiveDirect() { const auto result=call(7); receiving=result==0; return result; }
+  int16_t standby() { return 0; }
   int16_t setDioFunction(uint8_t dio,uint8_t function,uint8_t pull) {
     assert(dio>=5 && function==6 && (pull==0 || pull==1)); return call(4);
   }

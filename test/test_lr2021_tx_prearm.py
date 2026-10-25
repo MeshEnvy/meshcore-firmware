@@ -3,6 +3,8 @@
 The native radio mock models the distinction between host RF-switch GPIOs and
 LR2021 DIO masks. No PlatformIO or RF hardware is needed. Failed SPI responses
 may still apply a mask, so cleanup must not assume an error left a pin unchanged.
+The actual warm W12 and band-switch cold tables are exercised separately from
+optional transient prearming on the cold table.
 """
 from pathlib import Path
 import os
@@ -39,6 +41,9 @@ HARNESS = r'''
 @POLICY@
 #define LR2021_TX_BUSY_TIMEOUT_MS 4UL
 #define LR2021_USE_DCDC 0
+#ifndef TEST_WARM_STANDBY
+#define TEST_WARM_STANDBY 0
+#endif
 #define RADIOLIB_ERR_NONE 0
 #define RADIOLIB_ERR_UNKNOWN -16
 #define RADIOLIB_ERR_UNSUPPORTED -99
@@ -75,7 +80,10 @@ HARNESS = r'''
 using RadioLibTime_t = uint32_t;
 struct SPIClass {};
 struct Logger { void print(const char*) {} void println(int) {} };
-namespace mesh { Logger& usbLoggingPort() { static Logger logger;return logger; } }
+namespace mesh {
+  Logger& usbLoggingPort() { static Logger logger;return logger; }
+  struct MorseRx { static constexpr float ReceiverBitRateKbps=4.8f; };
+}
 struct Hal {
   uint32_t GpioLevelHigh=HIGH;
   uint32_t now=0;
@@ -109,7 +117,8 @@ public:
     MODE_TX_HF,
   };
   Module* mod;
-  float freqMHz=909.5f;
+  float freqMHz=909.5f,tcxoVoltage=0;
+  uint8_t gainModeLf=1,gainModeHf=3,preambleDetLength=4;
   uint8_t stagedMode=RADIOLIB_RADIO_MODE_NONE,chip_mode=MODE_STBY;
   uint32_t rxTimeout=0xffffff;
   uint8_t masks[7]={};
@@ -159,9 +168,6 @@ public:
   int16_t setTxTestMode(uint8_t mode) { assert(mode==0);return setTx(0); }
   int16_t setRx(uint32_t timeout) {
     assert(timeout==rxTimeout);++rx_calls;
-#if LR2021_TX_PREARM_MS > 0
-    assert(offInStandby());
-#endif
     applyMode(mesh::lr2021::isHighBand(freqMHz) ? MODE_RX_HF : MODE_RX);
     return 0;
   }
@@ -197,6 +203,13 @@ public:
   int16_t begin(float,float,uint8_t,uint8_t,uint8_t,int8_t,uint16_t,float) {
     std::fill(masks,masks+7,0);applyMode(MODE_STBY);return 0;
   }
+  int16_t beginGFSK(float frequency,float rate,float deviation,float bandwidth,
+                    int8_t power,uint16_t preamble,float tcxo) {
+    assert(rate==4.8f && deviation==0.6f && bandwidth==4.8f && power==2 && preamble==16 && tcxo==0);
+    freqMHz=frequency;std::fill(masks,masks+7,0);applyMode(MODE_STBY);return 0;
+  }
+  int16_t setRxBoostedGainMode(uint8_t) { return 0; }
+  int16_t setSyncWord(uint8_t*,size_t len) { assert(len==0);return 0; }
   int16_t setRegulatorDCDC() { assert(false); return -1; }
   int16_t setCRC(uint8_t) { return 0; }
   int16_t explicitHeader() { return 0; }
@@ -221,7 +234,9 @@ public:
 #endif
   @RESTORE@
   @TABLE@
+  @REPLACE_TABLE@
   @INIT@
+  @MORSE_RECEIVE@
   @RX_MODE@
   @TX_MODE@
   @LAUNCH@
@@ -230,15 +245,20 @@ public:
 };
 @BOARD_PINS@
 @BOARD_TABLE@
+@BOARD_COLD_TABLE@
+static CustomLR2021* target_radio=nullptr;
+@BOARD_CALLBACK@
 static void configure(CustomLR2021& radio) {
-  radio.setRfSwitchTable(rfswitch_dios,rfswitch_table);
-  assert(radio.offInStandby());
+  radio.setRfSwitchTable(rfswitch_dios,
+      TEST_WARM_STANDBY ? rfswitch_table : rfswitch_table_cold);
+  assert(radio.offInStandby()==!TEST_WARM_STANDBY);
   radio.writes.clear();radio.clear_attempts.clear();
 }
 static void noBias(CustomLR2021& radio) {
-  assert(radio.offInStandby());
+  const bool warm=radio._rf_switch_table==rfswitch_table;
+  assert(radio.offInStandby()==!warm);
   if(radio.chip_mode==LR2021::MODE_STBY)
-    assert(!radio.level(9) && !radio.level(10) && !radio.level(11));
+    assert(radio.level(9)==warm && radio.level(10)==warm && radio.level(11)==warm);
 #if LR2021_TX_PREARM_MS > 0
   assert(!radio._tx_standby_armed);
 #endif
@@ -251,11 +271,70 @@ static int packet(CustomLR2021& radio) {
 }
 int main(int argc,char** argv) {
   assert(argc==2);std::string test=argv[1];
-  Module module;CustomLR2021 radio(&module);configure(radio);
+  Module module;CustomLR2021 radio(&module);configure(radio);target_radio=&radio;
   if(test.rfind("latched_",0)==0) {
     radio.latch_masks_on_mode=true;test=test.substr(8);
   }
-  if(test=="packet" || test=="cw") {
+  if(test=="warm_routes" || test=="warm_reset" || test=="warm_failures" || test=="warm_replace_failures" || test=="warm_sleep") {
+    assert(TEST_WARM_STANDBY);
+    // This is exactly PR #3579's LF standby/RX/TX mask, not a timed substitute.
+    assert(radio.masks[9-5]==5 && radio.masks[10-5]==7 && radio.masks[11-5]==7);
+    noBias(radio);
+    if(test=="warm_routes") {
+      for(float frequency:{909.5f,2440.0f,909.5f,2440.0f,909.5f}) {
+        // The board first selects checked cold standby, then changes supplies,
+        // then restores warm standby only after the LF rail is powered.
+        assert(set_w12_rf_switch_standby(false,false));
+        assert(radio.offInStandby() && !radio.level(5) && !radio.level(6));noBias(radio);
+        radio.freqMHz=frequency;
+        assert(set_w12_rf_switch_standby(frequency<1500,false));
+        for(bool cw:{false,true}) {
+          radio.writes.clear();
+          assert((cw ? radio.transmitMorseCarrier() : packet(radio))==0);
+          assert(radio.chip_mode==(frequency<1500 ? LR2021::MODE_TX : LR2021::MODE_TX_HF));
+          assert(radio.writes.empty()); // Warm standby never removes retained LF bias.
+          noBias(radio);
+          assert(radio.standby()==0);noBias(radio);
+          assert(radio.startReceive()==0);
+          assert(radio.chip_mode==(frequency<1500 ? LR2021::MODE_RX : LR2021::MODE_RX_HF));
+          assert(!radio.level(9) && radio.level(10)==(frequency<1500) && radio.level(11)==(frequency<1500));
+        }
+      }
+    } else if(test=="warm_reset") {
+      for(bool warm:{true,false,true}) {
+        assert(radio.replaceRfSwitchTable(rfswitch_dios,warm?rfswitch_table:rfswitch_table_cold)==0);
+        assert(radio.beginMorseReceive(warm?909.5f:2440.0f)==0);noBias(radio);
+        assert(radio.std_init());noBias(radio);
+        assert(radio.sleep()==0);noBias(radio);
+      }
+    } else if(test=="warm_failures") {
+      for(int fault:{0,1,2}) {
+        radio.fail_tx=fault<2;radio.busy_after_tx=fault==2;
+        const int status=fault==1 ? radio.transmitMorseCarrier() : packet(radio);
+        assert(status==(fault==2 ? RADIOLIB_ERR_SPI_CMD_TIMEOUT : -72));
+        assert(radio.chip_mode==LR2021::MODE_STBY);noBias(radio);
+        assert(radio.writes.empty());module.hal->busy=false;
+      }
+    } else if(test=="warm_sleep") {
+      assert(set_w12_rf_switch_standby(false,true));
+      assert(radio.sleep_calls==1 && radio.offInStandby());noBias(radio);
+      assert(set_w12_rf_switch_standby(true,false));noBias(radio);
+      radio.fail_standby=true;
+      assert(!set_w12_rf_switch_standby(false,true));
+      assert(radio.sleep_calls==1); // Failed quiescence must not claim sleep.
+    } else {
+      // A replacement is checked at the initial standby, each mask write,
+      // and the final physical standby latch; errors may follow applied writes.
+      for(int fault:{0,1,2}) {
+        radio.fail_standby_at=fault==0 ? radio.standby_calls+1 : fault==2 ? radio.standby_calls+2 : 0;
+        radio.fail_dio=10;radio.fail_disarm=fault==1;radio.fail_count=1;
+        assert(radio.replaceRfSwitchTable(rfswitch_dios,rfswitch_table_cold)==(fault==1 ? -73 : -71));
+        radio.fail_standby_at=0;radio.fail_disarm=false;
+        assert(radio.replaceRfSwitchTable(rfswitch_dios,rfswitch_table_cold)==0);noBias(radio);
+        assert(radio.replaceRfSwitchTable(rfswitch_dios,rfswitch_table)==0);noBias(radio);
+      }
+    }
+  } else if(test=="packet" || test=="cw") {
     radio.chip_mode=LR2021::MODE_RX;
     assert((test=="packet" ? packet(radio) : radio.transmitMorseCarrier())==0);
     assert(radio.tx_calls==1 && radio.chip_mode==LR2021::MODE_TX);
@@ -382,7 +461,9 @@ class LR2021TxPrearmTest(unittest.TestCase):
             "@SLEEP@": "int16_t sleep()",
             "@RESTORE@": "int16_t restoreRfSwitchTable(",
             "@TABLE@": "void setRfSwitchTable(",
+            "@REPLACE_TABLE@": "int16_t replaceRfSwitchTable(",
             "@INIT@": "bool std_init(",
+            "@MORSE_RECEIVE@": "int16_t beginMorseReceive(",
             "@RX_MODE@": "uint8_t rfSwitchRxMode(",
             "@TX_MODE@": "uint8_t rfSwitchTxMode(",
             "@LAUNCH@": "int16_t launchMode(",
@@ -390,14 +471,18 @@ class LR2021TxPrearmTest(unittest.TestCase):
             "@RECEIVE@": "int16_t startReceive()",
         }.items():
             source = source.replace(marker, method(driver, signature))
+        source = source.replace("@BOARD_CALLBACK@", method(board,
+            "static bool set_w12_rf_switch_standby(").replace("radio.", "target_radio->"))
         source = source.replace("@POLICY@", re.search(
             r"#ifndef LR2021_TX_PREARM_MS\b.*?#endif", driver, re.S).group(0))
         for marker, pattern in {
             "@BOARD_PINS@": r"const uint32_t rfswitch_dios\[\].*?\n};",
             "@BOARD_TABLE@": r"static const Module::RfSwitchMode_t rfswitch_table\[\].*?\n};",
+            "@BOARD_COLD_TABLE@": r"static const Module::RfSwitchMode_t rfswitch_table_cold\[\].*?\n};",
         }.items():
             source = source.replace(marker, re.search(pattern, board, re.S).group(0))
-        for name, flags in {"w12": ["-DLR2021_TX_PREARM_MS=1"], "default": [],
+        for name, flags in {"w12": ["-DLR2021_TX_PREARM_MS=1", "-DTEST_WARM_STANDBY=1"],
+                            "cold_prearm": ["-DLR2021_TX_PREARM_MS=1"], "default": [],
                             "disabled": ["-DLR2021_TX_PREARM_MS=0"]}.items():
             cpp = Path(cls.temp.name) / (name + ".cpp")
             binary = Path(cls.temp.name) / (name + (".exe" if os.name == "nt" else ""))
@@ -411,10 +496,16 @@ class LR2021TxPrearmTest(unittest.TestCase):
                 raise AssertionError(built.stdout + built.stderr)
             cls.binaries[name] = binary
 
-    def run_case(self, case, build="w12"):
+    def run_case(self, case, build="cold_prearm"):
         ran = subprocess.run([str(self.binaries[build]), case], capture_output=True,
                              text=True, timeout=10)
         self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+
+    def test_actual_w12_warm_table_and_checked_cold_band_transitions(self):
+        for case in ["warm_routes", "warm_reset", "warm_failures", "warm_replace_failures", "warm_sleep"]:
+            for prefix in ["", "latched_"]:
+                with self.subTest(case=case, latched=bool(prefix)):
+                    self.run_case(prefix + case, "w12")
 
     def test_packet_settles_pa_without_retaining_standby_bias(self):
         self.run_case("packet")
@@ -466,7 +557,7 @@ class LR2021TxPrearmTest(unittest.TestCase):
             with self.subTest(case=case):
                 self.run_case(case)
 
-    def test_only_w12_enables_prearm_and_normal_standby_remains_off(self):
+    def test_only_w12_enables_the_tx_settle_and_cleanup_guard(self):
         opted_in = []
         for recipe in sorted((ROOT / "variants").glob("*/platformio.ini")):
             if re.search(r"(?m)^\s*-D\s+LR2021_TX_PREARM_MS=[1-9]\d*\b", recipe.read_text()):

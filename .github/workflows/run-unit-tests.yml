@@ -129,10 +129,10 @@ jobs:
           bash build.sh build-firmware Station_G3_ESP32_r2_repeater_observer_mqtt
           --firmware-version v1.18.0.1-halo-keymind-cascade-dev
           --radio-preset usa-cascade-fixed --profile cascade --require-ota --full-exact
-      - name: Compile W12 low-power FEM TX preparation in repeater and Full Companion
+      - name: Compile W12 band-aware RF switching in repeater and Full Companion
         run: |
           pio run -e meshnology_w12_repeater
-          bash build.sh build-firmware meshnology_w12_companion_radio_full --firmware-version v1.17.1.10-halo-keymind-cascade-dev --radio-preset usa-cascade-fixed --profile cascade --require-ota
+          bash build.sh build-firmware meshnology_w12_companion_radio_full --firmware-version v1.18.0.1-halo-keymind-cascade-dev --radio-preset usa-cascade-fixed --profile cascade --require-ota
       - name: Show qualification build logs on failure
         if: failure()
         run: |

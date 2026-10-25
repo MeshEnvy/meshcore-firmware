@@ -25,6 +25,7 @@ inline unsigned held=0,released=0,deinitialized=0,digital_held=0;
 inline int api_result=0;
 struct Pad { int latch=0; bool output=false, hold=false; int retained=-1; };
 inline Pad pads[64];
+inline void (*pad_changed)(int)=nullptr;
 inline bool deep_hold=false;
 inline bool require_configured_release=false;
 inline unsigned deep_hold_en_calls=0, deep_hold_dis_calls=0;
@@ -37,12 +38,12 @@ inline bool valid_output(int pin) {
 }
 #define GPIO_IS_VALID_OUTPUT_GPIO(pin) valid_output(pin)
 inline int physical(int pin) { return pads[pin].hold ? pads[pin].retained : (pads[pin].output ? pads[pin].latch : -1); }
-inline int gpio_set_level(int pin,unsigned level) { assert(valid_output(pin)); pads[pin].latch=level; return api_result; }
+inline int gpio_set_level(int pin,unsigned level) { assert(valid_output(pin)); pads[pin].latch=level; if(pad_changed) pad_changed(pin); return api_result; }
 inline int gpio_config(const gpio_config_t* config) {
   assert(config->mode==GPIO_MODE_OUTPUT && config->pull_up_en==0 && config->pull_down_en==0 && config->intr_type==0);
   if (api_result) return api_result;
   for(int pin=0;pin<64;++pin) if(config->pin_bit_mask&(1ULL<<pin)) {
-    assert(valid_output(pin)); pads[pin].output=true;
+    assert(valid_output(pin)); pads[pin].output=true; if(pad_changed) pad_changed(pin);
   }
   return ESP_OK;
 }
@@ -56,7 +57,7 @@ inline bool rtc_gpio_is_valid_gpio(int pin) {
 #endif
 }
 inline int rtc_gpio_hold_en(int pin) { assert(pin>=0 && rtc_gpio_is_valid_gpio(pin)); ++held; if(!api_result) { pads[pin].retained=physical(pin); pads[pin].hold=true; } return api_result; }
-inline int rtc_gpio_hold_dis(int pin) { assert(pin>=0 && rtc_gpio_is_valid_gpio(pin)); assert(!require_configured_release || !pads[pin].hold || pads[pin].output); ++released; if(!api_result) pads[pin].hold=false; return api_result; }
+inline int rtc_gpio_hold_dis(int pin) { assert(pin>=0 && rtc_gpio_is_valid_gpio(pin)); assert(!require_configured_release || !pads[pin].hold || pads[pin].output); ++released; if(!api_result) pads[pin].hold=false; if(pad_changed) pad_changed(pin); return api_result; }
 inline int rtc_gpio_deinit(int pin) { assert(pin>=0 && rtc_gpio_is_valid_gpio(pin)); ++deinitialized; return api_result; }
 #endif
 inline int gpio_hold_en(int pin) {
@@ -75,6 +76,7 @@ inline int gpio_hold_dis(int pin) {
   if(rtc_gpio_is_valid_gpio(pin)) return rtc_gpio_hold_dis(pin);
 #endif
   if(!api_result) pads[pin].hold=false;
+  if(pad_changed) pad_changed(pin);
   return api_result;
 }
 #if !SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
@@ -423,47 +425,15 @@ int main(){ EnvironmentSensorManager sensors;
         ):
             self.compile_run(code,defines=definitions)
 
-    def test_w12_fem_rails_restore_known_output_before_releasing_terminal_hold(self):
+    def w12_board_harness(self, case):
         source=(ROOT/'variants/meshnology_w12/MeshnologyW12Board.cpp').read_text()
         begin=body(source,'void MeshnologyW12Board::begin()')
-        prefix=begin[:begin.index('    prepareRadioFrequency(')]+'}\n'
-        code=r'''
-#include <helpers/ESP32GpioHold.h>
-#include <initializer_list>
-#define HIGH 1
-#define LOW 0
-#define OUTPUT 1
-#define P_LORA_LF_PA_POWER 4
-#define P_LORA_HF_PA_POWER 3
-#define PIN_ADC_CTRL 2
-void pinMode(int pin,int mode){assert(mode==OUTPUT);pads[pin].output=true;}
-void digitalWrite(int pin,int level){gpio_set_level(pin,level);}
-class ESP32Board {public:void begin(){mesh::esp32::resetTerminalDeepSleepHolds();}};
-class MeshnologyW12Board:public ESP32Board {public:void begin();};
-@BEGIN@
-int main(){ using namespace mesh::esp32;
- for(int active : {-1,3,4}) {
-   // Wake safely from terminal shutdown or either band's packet-wake sleep.
-   holdOutputForDeepSleep(4,active==4?HIGH:LOW);
-   holdOutputForDeepSleep(3,active==3?HIGH:LOW);
-   pads[4].output=false;pads[3].output=false;require_configured_release=true;
-   MeshnologyW12Board board;board.begin();
-   assert(!pads[3].hold && !pads[4].hold && physical(3)==LOW && physical(4)==LOW);
-   assert(!deep_hold && !terminalDigitalHoldPending());
- }
-}
-'''
-        self.compile_run(code.replace('@BEGIN@',prefix),s3=1)
-        # The prior release-before-pinMode sequence must be caught.
-        broken=prefix.replace('releaseOutputAfterDeepSleep((gpio_num_t)P_LORA_LF_PA_POWER, LOW)',
-            'releaseRtcGpioIfSupported((gpio_num_t)P_LORA_LF_PA_POWER)')
-        self.compile_run(code.replace('@BEGIN@',broken),s3=1,helper_mutation=lambda text:text)
-
-    def test_w12_packet_wake_retains_only_selected_band_and_terminal_shutdown_disables_both(self):
-        source=(ROOT/'variants/meshnology_w12/MeshnologyW12Board.cpp').read_text()
-        methods='\n'.join(body(source,signature) for signature in (
+        begin=begin[:begin.index('    periph_power.begin();')]+'}\n'
+        methods=begin+'\n'+'\n'.join(body(source,signature) for signature in (
             'bool MeshnologyW12Board::prepareRadioFrequency(float frequency)',
+            'bool MeshnologyW12Board::resetRadio()',
             'void MeshnologyW12Board::enterDeepSleep(uint32_t secs, int pin_wake_btn)',
+            'void MeshnologyW12Board::shutdownPeripherals()',
             'void MeshnologyW12Board::powerOff()'))
         code=r'''
 #include <helpers/ESP32GpioHold.h>
@@ -471,86 +441,208 @@ int main(){ using namespace mesh::esp32;
 #include <vector>
 #define HIGH 1
 #define LOW 0
+#define OUTPUT 1
+#define PIN_ADC_CTRL 2
 #define P_LORA_LF_PA_POWER 4
 #define P_LORA_HF_PA_POWER 3
 #define P_LORA_DIO_1 14
 #define P_LORA_NSS 8
+#define P_LORA_RESET 12
+#define P_LORA_BUSY 13
+#define LORA_FREQ 909.5f
 constexpr int ESP_PD_DOMAIN_RTC_PERIPH=1,ESP_PD_OPTION_ON=1;
 constexpr int RTC_GPIO_MODE_INPUT_ONLY=0,ESP_EXT1_WAKEUP_ANY_HIGH=1;
-static bool slept=false,shutdown=false;
-static unsigned settles=0;
+static bool slept=false,shutdown=false,controls_high=false,spi_working=true;
+static bool busy_stuck=false,base_restore_lf=false;
+static int fail_callback_at=0,callback_calls=0,sleep_callbacks=0,reset_pulses=0;
+static uint32_t clock_ms=0,reset_low_at=0;
 static uint64_t wake_mask=0,timer=0;
 static std::vector<int> writes;
-void digitalWrite(int pin,int level){
- assert(!pads[pin].hold);pads[pin].output=true;gpio_set_level(pin,level);
- writes.push_back(pin*2+level);
- // Never power both FEMs, even transiently, while changing bands.
- assert(physical(3)!=HIGH || physical(4)!=HIGH);
+static std::vector<unsigned> delays;
+void observe_pad(int pin){
+ if(pin==12 && physical(12)==LOW) reset_low_at=clock_ms;
+ if(pin==3 || pin==4){
+   // Supplies can be removed only after checked cold controls or settled NRST.
+   assert(physical(4)!=LOW || !controls_high);
+   assert(physical(3)!=HIGH || physical(4)!=HIGH);
+   writes.push_back(pin*2+(physical(pin)==HIGH));
+ }
 }
-void delay(unsigned ms){assert(ms==1);++settles;}
+void pinMode(int pin,int mode){assert(mode==OUTPUT);pads[pin].output=true;}
+void digitalWrite(int pin,int level){
+ assert(!pads[pin].hold);gpio_set_level(pin,level);
+ if(pin==12 && level==HIGH && clock_ms-reset_low_at>=1){++reset_pulses;spi_working=true;}
+}
+void delay(unsigned ms){
+ clock_ms+=ms;delays.push_back(ms);
+ if(physical(12)==LOW && clock_ms-reset_low_at>=1) controls_high=false;
+}
+uint32_t millis(){return clock_ms;}
+void yield(){++clock_ms;}
+int digitalRead(int pin){assert(pin==13);return busy_stuck;}
 void esp_sleep_pd_config(int domain,int option){assert(domain==1 && option==1);}
 void rtc_gpio_set_direction(int pin,int mode){assert(pin==14 && mode==0);}
 void rtc_gpio_pulldown_en(int pin){assert(pin==14);}
 void esp_sleep_enable_ext1_wakeup(uint64_t mask,int mode){assert(mode==1);wake_mask=mask;}
 void esp_sleep_enable_timer_wakeup(uint64_t value){timer=value;}
-void sleep_pads(){
- // Unretained outputs may float once the CPU domain powers down.
- for(int pin : {3,4}) if(!pads[pin].hold) pads[pin].output=false;
-}
+void sleep_pads(){for(int pin:{3,4}) if(!pads[pin].hold) pads[pin].output=false;}
 void esp_deep_sleep_start(){sleep_pads();slept=true;}
-class ESP32Board {public:void powerOff(){
- assert(pads[3].hold && pads[4].hold && physical(3)==LOW && physical(4)==LOW);
- sleep_pads();shutdown=true;
-}};
+class ESP32Board {public:
+ virtual bool prepareRadioFrequency(float){return false;}
+ void begin(){mesh::esp32::resetTerminalDeepSleepHolds();}
+ virtual void shutdownPeripherals(){
+   assert(physical(3)==HIGH || physical(4)==HIGH);
+   // Stopping CW can restore the LF packet profile and its warm standby table.
+   if(base_restore_lf){assert(prepareRadioFrequency(909.5f));controls_high=true;}
+   mesh::esp32::holdOutputForDeepSleep(P_LORA_NSS,HIGH);
+ }
+ void powerOff(){shutdownPeripherals();
+   assert(pads[3].hold && pads[4].hold && physical(3)==LOW && physical(4)==LOW);
+   assert(pads[8].hold && physical(8)==HIGH);shutdown=true;sleep_pads();
+ }
+};
 class MeshnologyW12Board:public ESP32Board {
 public:
  bool radio_band_initialized=false,radio_high_band=false;
- bool prepareRadioFrequency(float frequency);
+ bool (*radio_rf_switch_handler)(bool,bool)=nullptr;
+ void begin();
+ bool prepareRadioFrequency(float frequency) override;
+ bool resetRadio();
  void enterDeepSleep(uint32_t secs,int pin_wake_btn);
+ void shutdownPeripherals() override;
  void powerOff();
 };
 @METHODS@
+bool rf_switch(bool lf_awake,bool sleep_after){
+ ++callback_calls;
+ // Checked SPI cannot execute with a retained HIGH chip select.
+ assert(!pads[8].hold && physical(8)==HIGH);
+ if(!spi_working || callback_calls==fail_callback_at) return false;
+ if(lf_awake){assert(physical(4)==HIGH && physical(3)==LOW);assert(!delays.empty() && delays.back()==1);}
+ controls_high=lf_awake;
+ if(sleep_after){assert(!lf_awake);++sleep_callbacks;}
+ return true;
+}
+void fresh(){
+ pad_changed=nullptr;
+ for(auto& pad:pads) pad=Pad{};
+ clock_ms=reset_low_at=0;controls_high=false;spi_working=true;busy_stuck=false;
+ callback_calls=sleep_callbacks=reset_pulses=fail_callback_at=0;
+ base_restore_lf=slept=shutdown=false;writes.clear();delays.clear();
+ mesh::esp32::releaseOutputAfterDeepSleep(12,HIGH);
+ mesh::esp32::releaseOutputAfterDeepSleep(8,HIGH);
+ mesh::esp32::releaseOutputAfterDeepSleep(3,LOW);
+ mesh::esp32::releaseOutputAfterDeepSleep(4,LOW);
+ pad_changed=observe_pad;
+}
 int main(){using namespace mesh::esp32;
- for(bool high_band : {false,true}) {
-   resetTerminalDeepSleepHolds();
-   releaseOutputAfterDeepSleep(3,LOW);releaseOutputAfterDeepSleep(4,LOW);
-   MeshnologyW12Board board;
+@CASE@
+}
+'''
+        return code.replace('@METHODS@',methods).replace('@CASE@',case)
+
+    def test_w12_boot_quiesces_retained_warm_radio_before_releasing_fem_rails(self):
+        case=r'''
+ for(int active:{-1,3,4}){
+   fresh();pad_changed=nullptr;
+   holdOutputForDeepSleep(4,active==4?HIGH:LOW);
+   holdOutputForDeepSleep(3,active==3?HIGH:LOW);
+   if(active<0) holdOutputForDeepSleep(12,LOW);
+   // MCU-only restart preserves radio DIOs, including the LF warm standby.
+   controls_high=active==4;
+   pads[4].output=false;pads[3].output=false;pads[12].output=false;
+   require_configured_release=true;pad_changed=observe_pad;
+   MeshnologyW12Board board;board.begin();
+   assert(!pads[3].hold && !pads[4].hold && !pads[12].hold);
+   assert(physical(3)==LOW && physical(4)==HIGH && physical(12)==HIGH);
+   assert(!controls_high && reset_pulses==1 && board.radio_band_initialized);
+   assert(!deep_hold && !terminalDigitalHoldPending());
+ }
+'''
+        code=self.w12_board_harness(case)
+        self.compile_run(code,s3=1)
+        # Releasing retained rails before quiescing a warm radio must fail.
+        broken=code.replace('releaseOutputAfterDeepSleep((gpio_num_t)P_LORA_RESET, LOW)',
+            'releaseOutputAfterDeepSleep((gpio_num_t)P_LORA_RESET, HIGH)',1)
+        self.compile_run(broken,s3=1,helper_mutation=lambda text:text)
+
+    def test_w12_band_switch_failures_retry_and_physical_reset_recover_spi(self):
+        case=r'''
+ fresh();MeshnologyW12Board board;board.begin();board.radio_rf_switch_handler=rf_switch;
+ board.radio_band_initialized=false;assert(board.prepareRadioFrequency(909.5f));
+ assert(controls_high);const auto original_writes=writes.size();
+ // A failed cold callback must not drop the powered LF rail.
+ fail_callback_at=callback_calls+1;
+ assert(!board.prepareRadioFrequency(2440.0f));
+ assert(!board.radio_band_initialized && writes.size()==original_writes && physical(4)==HIGH);
+ fail_callback_at=0;
+ // Even returning to the cached old band repeats a previously failed transition.
+ int callbacks_before=callback_calls;
+ assert(board.prepareRadioFrequency(909.5f) && callback_calls==callbacks_before+2);
+ assert(board.prepareRadioFrequency(2440.0f) && !controls_high && physical(3)==HIGH);
+ // Failure after powering LF also invalidates the band cache for a same-band retry.
+ fail_callback_at=callback_calls+2;
+ assert(!board.prepareRadioFrequency(909.5f));
+ assert(!board.radio_band_initialized && physical(4)==HIGH);
+ fail_callback_at=0;callbacks_before=callback_calls;
+ assert(board.prepareRadioFrequency(909.5f) && callback_calls==callbacks_before+2 && controls_high);
+ // A physical reset must work without SPI; only then may frequency prep use SPI.
+ spi_working=false;const auto before_reset=writes.size();
+ assert(board.resetRadio() && spi_working && !board.radio_band_initialized);
+ assert(writes.size()==before_reset && physical(4)==HIGH && !controls_high);
+ assert(board.prepareRadioFrequency(909.5f) && controls_high);
+ busy_stuck=true;const uint32_t started=clock_ms;
+ assert(!board.resetRadio() && clock_ms-started>=3310 && clock_ms-started<3400);
+ assert(!board.radio_band_initialized && writes.size()>before_reset);
+'''
+        self.compile_run(self.w12_board_harness(case),s3=1)
+
+    def test_w12_packet_wake_retains_selected_rail_and_shutdown_quiesces_after_cw(self):
+        case=r'''
+ for(bool high_band:{false,true}){
+   fresh();MeshnologyW12Board board;board.begin();board.radio_rf_switch_handler=rf_switch;
    const float frequency=high_band?2440.0f:909.5f;
-   const unsigned before=settles;
-   assert(board.prepareRadioFrequency(frequency) && settles==before+1);
-   assert(writes[writes.size()-3]==4*2 && writes[writes.size()-2]==3*2);
-   assert(physical(3)==high_band && physical(4)==!high_band);
-   assert(board.prepareRadioFrequency(frequency) && settles==before+1);
-   // A real LF/HF crossing disables the previous rail before enabling the next.
-   assert(board.prepareRadioFrequency(high_band?909.5f:2440.0f));
-   assert(physical(3)==!high_band && physical(4)==high_band);
-   assert(board.prepareRadioFrequency(frequency) && settles==before+3);
-   for(int button : {-1,0}) {
+   board.radio_band_initialized=false;assert(board.prepareRadioFrequency(frequency));
+   for(int button:{-1,0}){
      slept=false;timer=0;
      board.enterDeepSleep(button<0?5:0,button);
      assert(slept && pads[3].hold && pads[4].hold);
      assert(physical(3)==high_band && physical(4)==!high_band);
      assert(wake_mask==((1ULL<<14)|(button<0?0:(1ULL<<button))));
      assert(timer==(button<0?5000000:0));
-     assert(!deep_hold && !terminalDigitalHoldPending());
-     // Deep sleep never returns: model begin() releasing the retained rails,
-     // then its normal band selection, before the next runtime operation.
-     releaseOutputAfterDeepSleep(3,LOW);releaseOutputAfterDeepSleep(4,LOW);
-     board.radio_band_initialized=false;
-     assert(board.prepareRadioFrequency(frequency));
+     // Model a new MCU instance: radio retains state, the callback is not ready.
+     board.radio_rf_switch_handler=nullptr;board.radio_band_initialized=false;
+     board.begin();releaseOutputAfterDeepSleep(8,HIGH);
+     board.radio_rf_switch_handler=rf_switch;
+     board.radio_band_initialized=false;assert(board.prepareRadioFrequency(frequency));
    }
-   // Explicit runtime shutdown must disable whichever band was powered.
-   board.powerOff();assert(shutdown && physical(3)==LOW && physical(4)==LOW);
+   // Base shutdown may finish a HF CW and rewarm LF before holding NSS HIGH.
+   base_restore_lf=true;board.powerOff();
+   assert(shutdown && sleep_callbacks==1 && !controls_high);
+   assert(physical(3)==LOW && physical(4)==LOW && !board.radio_band_initialized);
+   assert(pads[8].hold && physical(8)==HIGH && !pads[12].hold);
  }
-}
 '''
-        self.compile_run(code.replace('@METHODS@',methods),s3=1)
-        # Detect either active-rail loss or a floating inactive rail on sleep.
-        for rail in ('P_LORA_LF_PA_POWER','P_LORA_HF_PA_POWER'):
-            broken=re.sub(r'(?m)^\s*mesh::esp32::holdOutputForDeepSleep\(\(gpio_num_t\)'+rail+
-                          r', radio_high_band[^;]*;', '', methods)
-            self.assertNotEqual(broken,methods)
-            self.compile_run(code.replace('@METHODS@',broken),s3=1,helper_mutation=lambda text:text)
+        code=self.w12_board_harness(case)
+        self.compile_run(code,s3=1)
+        broken=code.replace('mesh::esp32::releaseOutputAfterDeepSleep((gpio_num_t)P_LORA_NSS, HIGH);','')
+        self.compile_run(broken,s3=1,helper_mutation=lambda text:text)
+
+    def test_w12_failed_shutdown_quiescence_holds_reset_before_removing_rails(self):
+        case=r'''
+ fresh();MeshnologyW12Board board;board.begin();board.radio_rf_switch_handler=rf_switch;
+ board.radio_band_initialized=false;assert(board.prepareRadioFrequency(909.5f));
+ assert(controls_high);
+ // A failed SPI response leaves controls unknown; reset is the independent fallback.
+ spi_working=false;board.powerOff();
+ assert(shutdown && physical(3)==LOW && physical(4)==LOW && !controls_high);
+ assert(pads[12].hold && physical(12)==LOW && !board.radio_band_initialized);
+ assert(pads[8].hold && physical(8)==HIGH && sleep_callbacks==0);
+'''
+        code=self.w12_board_harness(case)
+        self.compile_run(code,s3=1)
+        broken=code.replace('mesh::esp32::holdOutputForDeepSleep((gpio_num_t)P_LORA_RESET, LOW);','')
+        self.compile_run(broken,s3=1,helper_mutation=lambda text:text)
 
     def test_all_production_hold_release_deinit_sites_use_capability_wrapper(self):
         # No board or FEM may keep using unsupported RTC calls behind the fix.

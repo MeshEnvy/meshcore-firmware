@@ -16,7 +16,7 @@
 #define LR2021_USE_DCDC 0
 #endif
 
-// Board-specific FEM warm-up. Do not leave a PA enabled in ordinary standby.
+// Optional board-specific FEM settling; the RF table defines standby bias.
 #ifndef LR2021_TX_PREARM_MS
 #define LR2021_TX_PREARM_MS 0
 #endif
@@ -72,8 +72,9 @@ class CustomLR2021 : public LR2021 {
   }
 
   int16_t prepareTxRfSwitch() {
-    // stageMode(TX) does not enter standby. Stop RX before temporarily enabling
-    // the LF PA there; HF routing and boards without this opt-in are unchanged.
+    // stageMode(TX) does not enter standby. Stop RX before settling the LF PA.
+    // A warm standby table (W12 PR #3579) retains its original DIO masks;
+    // other tables temporarily add the TX bias only for this preparation.
     int16_t status = standby();
     if (status == RADIOLIB_ERR_NONE && !mesh::lr2021::isHighBand(freqMHz)) {
       status = setTxStandbyMask(true);
@@ -124,7 +125,9 @@ class CustomLR2021 : public LR2021 {
 #if LR2021_TX_PREARM_MS > 0
     _tx_standby_armed = false;
 #endif
-    return RADIOLIB_ERR_NONE;
+    // Some DIO implementations latch a new mask only on a mode transition.
+    // Reset restoration must physically select the restored standby outputs.
+    return LR2021::standby();
   }
 
   uint8_t rfSwitchRxMode() const {
@@ -262,6 +265,17 @@ class CustomLR2021 : public LR2021 {
       if (status != RADIOLIB_ERR_NONE) return false;
 
       return true;  // success
+    }
+
+    int16_t replaceRfSwitchTable(const uint32_t (&pins)[Module::RFSWITCH_MAX_PINS],
+                                 const Module::RfSwitchMode_t table[]) {
+      // Used by W12 supply transitions. Keep the old rail powered until a
+      // checked cold standby has confirmed every control output is low.
+      int16_t status = LR2021::standby();
+      if (status != RADIOLIB_ERR_NONE) return status;
+      for (size_t i = 0; i < Module::RFSWITCH_MAX_PINS; ++i) _rf_switch_pins[i] = pins[i];
+      _rf_switch_table = table;
+      return restoreRfSwitchTable();
     }
 
     void setRfSwitchTable(const uint32_t (&pins)[Module::RFSWITCH_MAX_PINS],
@@ -421,6 +435,8 @@ class CustomLR2021 : public LR2021 {
     }
 
     int16_t readData(uint8_t* data, size_t len) override {
+      // PR #3512 (d208bfef): reject continuous-RX FIFO races. The wrapper
+      // stops RX before this snapshot; reject errors/mismatches before copying.
       uint16_t fifo_level = 0;
       const int16_t status = getRxFifoLevel(&fifo_level);
       if (status != RADIOLIB_ERR_NONE) return status;

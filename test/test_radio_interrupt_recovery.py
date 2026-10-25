@@ -82,6 +82,7 @@ uint32_t millis(){return now_ms;}
 struct LR2021 {
  bool stopped=false, inject_read_irq=false;
  int rx_status=1, tx_status=1, fifo_status=0, clear_status=0, base_status=0, standby_status=0;
+ int irq_clear_status=0;
  uint32_t irq=0;
  uint16_t fifo=4;
  int packet_length=4;
@@ -95,11 +96,23 @@ struct LR2021 {
  void setPacketReceivedAction(void (*fn)()){callback=fn;}
  int checkIrq(int type){++irq_probes;return type==RADIOLIB_IRQ_RX_DONE?rx_status:tx_status;}
  int standby(){++standbys;if(standby_status)return standby_status;stopped=true;return 0;}
- int clearIrqFlags(uint32_t){assert(stopped);++irq_clears;rx_status=0;return 0;}
- int getPacketLength(){return packet_length;}
- float getSNR(){return 7;}
- float getRSSI(){return -90;}
- int getRxFifoLevel(uint16_t* output){*output=fifo;return fifo_status;}
+ int clearIrqFlags(uint32_t flags){
+   if(flags&RADIOLIB_LR2021_IRQ_RX_DONE)assert(stopped);
+   ++irq_clears;
+   if(irq_clear_status)return irq_clear_status;
+   irq &= ~flags;
+   if(flags&RADIOLIB_LR2021_IRQ_RX_DONE)rx_status=0;
+   return 0;
+ }
+ void assertStoppedSnapshot(){
+#if defined(USE_LR2021)
+   assert(stopped && "LR2021 RX must stop before metadata/FIFO snapshots");
+#endif
+ }
+ int getPacketLength(){assertStoppedSnapshot();return packet_length;}
+ float getSNR(){assertStoppedSnapshot();return 7;}
+ float getRSSI(){assertStoppedSnapshot();return -90;}
+ int getRxFifoLevel(uint16_t* output){assertStoppedSnapshot();*output=fifo;return fifo_status;}
  int clearRxFifo(){++clears;if(clear_status)return clear_status;fifo=0;return 0;}
  virtual int16_t readData(uint8_t* output,size_t len){
    ++reads;
@@ -723,6 +736,68 @@ int main(){
  w.chip.irq=RADIOLIB_LR2021_IRQ_PREAMBLE_DETECTED;
  assert(w.chip.isReceiving());
  w.chip.irq=0;assert(!w.chip.isReceiving());
+}
+''', ["-DUSE_LR2021=1"])
+
+    def test_lr2021_upstream_3512_fifo_failures_never_copy_suspect_bytes(self):
+        # #3512 at d208bfef94ab83280de30ba4a0675ff73b3ecef3 rejects FIFO
+        # length mismatches. Keep the checked, stop-before-copy integration.
+        compile_run(self.source() + r'''
+int main(){
+ Chip chip;chip.stopped=true;uint8_t bytes[8];memset(bytes,0x3c,sizeof(bytes));
+ for(int fifo:{0,3,5}){
+   chip.fifo=fifo;
+   assert(chip.readData(bytes,4)==RADIOLIB_ERR_PACKET_TOO_SHORT);
+   assert(chip.reads==0&&chip.fifo==0);
+   for(uint8_t byte:bytes)assert(byte==0x3c);
+ }
+ chip.fifo=4;chip.fifo_status=-99;
+ const unsigned clears=chip.clears;
+ assert(chip.readData(bytes,4)==-99&&chip.clears==clears&&chip.reads==0);
+ chip.fifo_status=0;chip.fifo=3;chip.clear_status=-44;
+ assert(chip.readData(bytes,4)==-44&&chip.fifo==3&&chip.reads==0);
+ for(uint8_t byte:bytes)assert(byte==0x3c);
+ chip.clear_status=0;chip.fifo=4;
+ // RadioLib permits len=0 to select the actual packet length.
+ assert(chip.readData(bytes,0)==0&&chip.reads==1);
+ chip.packet_length=0;chip.fifo=0;
+ assert(chip.readData(bytes,0)==RADIOLIB_ERR_PACKET_TOO_SHORT&&chip.reads==1);
+}
+''', ["-DUSE_LR2021=1"])
+
+    def test_lr2021_failed_rx_done_ack_blocks_rearm_until_recovery(self):
+        compile_run(self.source() + r'''
+int main(){
+ CustomLR2021Wrapper w;assert(w.registerInterruptAction());uint8_t bytes[16]={};
+ w.chip.irq_clear_status=-44;w.chip.callback();
+ assert(w.recvRaw(bytes,sizeof(bytes))==0);
+ assert(w.chip.stopped&&w.state==STATE_IDLE&&w.chip.arms==0);
+ assert(w.chip.irq_clears==1&&w.chip.rx_status==1&&w.n_recv_errors==1);
+ w.chip.irq_clear_status=0;
+ assert(w.recvRaw(bytes,sizeof(bytes))==0&&w.chip.arms==1&&w.state==STATE_RX);
+ w.chip.fifo=4;w.chip.rx_status=1;w.chip.callback();
+ assert(w.recvRaw(bytes,sizeof(bytes))==4&&w.chip.irq_clears==2);
+ assert(!w.chip.stopped&&w.state==STATE_RX&&w.chip.arms==2);
+}
+''', ["-DUSE_LR2021=1"])
+
+    def test_lr2021_upstream_3512_fresh_preamble_gets_a_new_activity_timeout(self):
+        compile_run(self.source() + r'''
+int main(){
+ Chip chip;
+ chip.irq=RADIOLIB_LR2021_IRQ_LORA_HEADER_VALID|RADIOLIB_LR2021_IRQ_LORA_HDR_CRC_ERROR;
+ assert(chip.isReceiving()&&chip._headerSeen);
+ // A stale error flag and the preceding header timer must not cancel the
+ // next frame's preamble after continuous RX cleared HEADER_VALID.
+ now_ms+=chip._maxPayloadMillis;
+ chip.irq=RADIOLIB_LR2021_IRQ_PREAMBLE_DETECTED|RADIOLIB_LR2021_IRQ_LORA_HDR_CRC_ERROR;
+ assert(chip.isReceiving()&&!chip._headerSeen&&chip._activityAt==now_ms);
+ assert(chip.irq_clears==0);
+ now_ms+=chip._preambleMillis;
+ assert(chip.isReceiving());
+ ++now_ms;
+ assert(!chip.isReceiving()&&chip._activityAt==0&&chip.irq_clears==1);
+ assert(!(chip.irq&RADIOLIB_LR2021_IRQ_PREAMBLE_DETECTED));
 }
 ''', ["-DUSE_LR2021=1"])
 
