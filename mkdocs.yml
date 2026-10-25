@@ -132,6 +132,7 @@ extra_css:
   - _stylesheets/esp32_partition_catalog.css?v=20261001-1
 
 extra_javascript:
+  - _javascript/release_features.js?v=20261024-1
   - _javascript/hosted_doc_links.js?v=20261007-1
   - _javascript/notification_builder.js?v=20261006-channel9
   - https://unpkg.com/leaflet@1.9.4/dist/leaflet.js

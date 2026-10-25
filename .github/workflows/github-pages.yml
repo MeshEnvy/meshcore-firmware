@@ -34,6 +34,7 @@ jobs:
           pip install mkdocs-material
           node test/test_firmware_picker.js
           node test/test_partition_catalog_viewer.js
+          node test/test_release_features.js
           python scripts/sync_bootloader_manifest.py
           mkdocs build
           cmp firmware/esp32_partition_catalog.json site/_data/esp32_partition_catalog.json

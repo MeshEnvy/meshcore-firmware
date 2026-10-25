@@ -1224,3 +1224,5 @@ jobs:
         run: python3 -B test/test_hosted_doc_links.py -v
       - name: Verify hosted-link visibility and navigation
         run: node test/test_hosted_doc_links.js
+      - name: Release feature link behavior
+        run: node test/test_release_features.js
