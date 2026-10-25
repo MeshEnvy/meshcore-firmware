@@ -99,7 +99,11 @@ static void rampAndRollover() {
       w.recvRaw(bytes, sizeof(bytes)); assert(w.arms == arms + 1 && retryDelay(w) == 1);
       ++now_ms; assert(retryDelay(w) == 0);
     }
-    w.begin(); assert(!w._rx_retry_pending && w._rx_retry_delay_ms == 0);
+    // Restarting the radio invalidates the hardware power verification along
+    // with the receive retry ramp; the next identical setting must be applied.
+    w._dbm_applied = true;
+    w.begin();
+    assert(!w._dbm_applied && !w._rx_retry_pending && w._rx_retry_delay_ms == 0);
     w.recvRaw(bytes, sizeof(bytes)); assert(retryDelay(w) == 20);
   }
 }

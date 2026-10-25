@@ -36,6 +36,10 @@ class RadioReceiveRetryTests(unittest.TestCase):
             self.assertEqual(body.count('return resetAGCIfIdle();'), 3)
             source = source.replace(body, body.replace(
                 'return resetAGCIfIdle();', 'resetAGC(); return true;'))
+        if mutation == 'stale_power':
+            body = method(source, 'void RadioLibWrapper::begin(')
+            self.assertEqual(body.count('  _dbm_applied = false;'), 1)
+            source = source.replace(body, body.replace('  _dbm_applied = false;', ''))
         getter = method(header, 'bool isCalibratingNoiseFloor() const')
         if mutation == 'pending_veto':
             getter = getter.replace('isInRecvMode() && !_rx_ps_armed && ', '')
@@ -113,6 +117,7 @@ class RadioReceiveRetryTests(unittest.TestCase):
   bool isSendComplete() override { return false; }
   float packetScore(float, int) override { return 0; }
   bool _loop_event_pending = false;
+  bool _dbm_applied = false;
   void finishReceiveProcessing();
   void onReceiveProcessed() override { ++processed; finishReceiveProcessing(); }
   unsigned processed = 0;
@@ -189,6 +194,12 @@ class RadioReceiveRetryTests(unittest.TestCase):
             result = self.run_probe(self.build(folder), 'profile-repair')
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('PASS: untrusted profile RX waits for repair', result.stdout)
+
+    def test_begin_cannot_retain_verified_power_from_before_restart(self):
+        with tempfile.TemporaryDirectory(prefix='meshcore-rx-stale-power-negative-') as folder:
+            result = self.run_probe(self.build(folder, 'stale_power'))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('_dbm_applied', result.stderr)
 
     def test_old_hot_poll_and_pending_calibration_veto_negative_controls(self):
         for mutation in ('unpaced', 'pending_veto', 'agc_fast'):
