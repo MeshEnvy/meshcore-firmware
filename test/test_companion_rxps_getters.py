@@ -241,6 +241,58 @@ int main() {
         self.assertNotIn("ota_", helper)
         self.assertNotIn("_prefs.rx_ps_rx_us =", helper)
 
+    def test_framed_setters_share_checked_persistence_and_bounded_local_replies(self):
+        source = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text(encoding="ascii")
+        local = extract_braced(source, "bool MyMesh::handleLocalControlCommand(")
+        setter = extract_braced(local, 'if (strncmp(command, "set radio.rxps", 14) == 0')
+        self.assertIn("applyAndSaveRxPowerSaving(value, result)", setter)
+        # Keep the actual entry validation and command recognition. Unrelated
+        # hardware/transport handlers need no boundaries in this RXPS fixture.
+        entry = local[:local.index("#if defined(ESP32_PLATFORM)")]
+        entry += setter + "\n  return false;\n}\n"
+        shared = extract_braced(source, "bool MyMesh::handleCommand(")
+        adapter = shared[:shared.index("#if defined(ESP32_PLATFORM)")]
+        registration = "  if (handleLocalControlCommand(command, reply, reply_capacity)) return true;"
+        self.assertIn(registration, shared)
+        adapter += "  (void)sender_timestamp;\n" + registration + "\n  return false;\n}\n"
+        frame = extract_braced(source, "} else if (mesh::companion::isRunCliFrame(")
+        frame = frame.replace("} else if", "if", 1)
+        methods = "\n".join((
+            extract_braced(source, "bool MyMesh::applyAndSaveRxPowerSaving("), entry, adapter,
+        ))
+        constants = "\n".join(line for line in source.splitlines()
+                              if line.startswith(("#define RESP_CODE_CLI_REPLY ",
+                                                  "#define ERR_CODE_ILLEGAL_ARG ")))
+        fixture = (ROOT / "test/fixtures/companion_rxps_setters.cpp").read_text(encoding="ascii")
+        fixture = constants + "\n" + fixture.replace("@METHODS@", methods).replace("@FRAME@", frame)
+        compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
+        self.assertIsNotNone(compiler, "RXPS routing needs a host C++17 compiler")
+        sanitizers = [] if os.name == "nt" else [
+            "-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-pie", "-no-pie"]
+        with tempfile.TemporaryDirectory(prefix="meshcore-rxps-setter-routes-") as directory:
+            work = Path(directory)
+            cpp, binary = work / "routes.cpp", work / "routes"
+            for removed_route in (False, True):
+                with self.subTest(removed_route=removed_route):
+                    # The old firmware had the parser and save helper but
+                    # omitted this dispatch registration. It must fail here.
+                    cpp.write_text(fixture.replace(setter, "", 1) if removed_route else fixture,
+                                   encoding="ascii")
+                    built = subprocess.run([
+                        compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", *sanitizers,
+                        "-DCOMPANION_FEATURE_TEMP_RADIO=0", "-I", str(ROOT / "src"),
+                        "-isystem", str(ROOT / "test/mocks"), str(cpp),
+                        str(ROOT / "src/helpers/radiolib/RXPowerSaving.cpp"), "-o", str(binary),
+                    ], capture_output=True, text=True, timeout=60)
+                    self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+                    ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20)
+                    if removed_route:
+                        self.assertNotEqual(ran.returncode, 0, "Missing RXPS dispatch was not detected")
+                        self.assertIn("Assertion", ran.stderr)
+                    else:
+                        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                        self.assertIn("RXPS framed setter and bounded shared-route contracts passed", ran.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4057,6 +4057,15 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
   if (handleCompanionBluetoothCommand(command, reply, reply_size)) return true;
   if (handleCompanionWirelessCommand(command, reply, reply_size)) return true;
   if (handleRxPowerSavingGetCommand(command, reply, reply_size)) return true;
+  if (strncmp(command, "set radio.rxps", 14) == 0
+      && (command[14] == 0 || command[14] == ' ' || command[14] == '\t')) {
+    const char* value = command + 14;
+    while (*value == ' ' || *value == '\t') ++value;
+    char result[160];
+    applyAndSaveRxPowerSaving(value, result);
+    snprintf(reply, reply_size, "%s", result);
+    return true;
+  }
   if (mesh::companion::handleRadioDiagnosticsCommand(
           radio_driver, _radio_available, command, reply, reply_size, [this]() {
             radio_driver.resetStats();
@@ -10384,10 +10393,6 @@ void MyMesh::handleTerminalCommand(char* command, bool reader_prompt,
     if (strncmp(config, "powersaving ", 12) == 0) {
       char reply[160];
       applyAndSavePowerSaving(config + 12, reply);
-      terminalOutput().printf("  -> %s\r\n", reply);
-    } else if (strncmp(config, "radio.rxps ", 11) == 0) {
-      char reply[160];
-      applyAndSaveRxPowerSaving(config + 11, reply);
       terminalOutput().printf("  -> %s\r\n", reply);
 #if defined(ESP32) && defined(WIFI_SSID)
     } else if (strncmp(config, "wifi.powersave", 14) == 0
