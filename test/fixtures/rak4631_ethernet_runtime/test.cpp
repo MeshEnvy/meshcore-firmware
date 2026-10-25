@@ -70,6 +70,11 @@ static void write_all(const uint8_t* data, size_t size) {
     return accepted == size;
   });
 }
+static void read_complete_line(char* line, size_t capacity) {
+  // Online is only a snapshot: the worker can take SPI before the read.
+  // Retry the operation itself, preserving partial input between turns.
+  wait_until([&] { return ethernet_read_line(line, capacity); });
+}
 void mock_bus_touch() {
   assert(bus_owner.load() && spi_active.load());
   assert(ethernet_spi_access.load() != EthernetSpiAccess::Idle);
@@ -577,7 +582,8 @@ int main(int argc, char** argv) {
       wait_until([&] { return output().find(first + second.substr(0, 112)) != std::string::npos && ethernet_is_running(); });
       assert(ethernet_client.write(reinterpret_cast<const uint8_t*>(second.data() + 112), 288) == 288);
       wait_until([&] { return output().find(first + second) != std::string::npos && ethernet_is_running(); });
-      assert(ethernet_read_line(line, sizeof(line)) && std::string(line) == "eth off");
+      read_complete_line(line, sizeof(line));
+      assert(std::string(line) == "eth off");
       finish_off();
       break;
     }
@@ -587,14 +593,19 @@ int main(int argc, char** argv) {
       (void)ethernet_take_session_reset();
       mock_ethernet_input = "eth off" + std::string(80, 'x') + "\rget eth\r";
       char line[32] = {};
-      assert(!ethernet_read_line(line, sizeof(line)) && line[0] == 0);
+      wait_until([&] {
+        assert(!ethernet_read_line(line, sizeof(line)));
+        return ethernet_session_reset.load();
+      });
+      assert(line[0] == 0 && mock_ethernet_input == "get eth\r");
       assert(ethernet_get_enabled() && ethernet_take_session_reset());
-      wait_until([] { return ethernet_is_running(); });
-      assert(ethernet_read_line(line, sizeof(line)) && std::string(line) == "get eth");
+      read_complete_line(line, sizeof(line));
+      assert(std::string(line) == "get eth");
       wait_until([] { return output().find("invalid or oversized command; discarded") != std::string::npos && ethernet_is_running(); });
       line[0] = 0;
       mock_ethernet_input = std::string(31, 'm') + "\r";
-      assert(ethernet_read_line(line, sizeof(line)) && std::strlen(line) == 31);
+      read_complete_line(line, sizeof(line));
+      assert(std::string(line) == std::string(31, 'm'));
       finish_off();
       break;
     }
@@ -604,10 +615,14 @@ int main(int argc, char** argv) {
       (void)ethernet_take_session_reset();
       mock_ethernet_input = std::string("eth off\0junk", 12) + "\rget eth\r";
       char line[32] = {};
-      assert(!ethernet_read_line(line, sizeof(line)) && line[0] == 0);
+      wait_until([&] {
+        assert(!ethernet_read_line(line, sizeof(line)));
+        return ethernet_session_reset.load();
+      });
+      assert(line[0] == 0 && mock_ethernet_input == "get eth\r");
       assert(ethernet_get_enabled() && ethernet_take_session_reset());
-      wait_until([] { return ethernet_is_running(); });
-      assert(ethernet_read_line(line, sizeof(line)) && std::string(line) == "get eth");
+      read_complete_line(line, sizeof(line));
+      assert(std::string(line) == "get eth");
       finish_off();
       break;
     }
@@ -669,13 +684,20 @@ int main(int argc, char** argv) {
       (void)ethernet_take_session_reset();
       mock_ethernet_input = std::string(220, 'x') + "\nget eth\n";
       char line[32] = {};
-      assert(!ethernet_read_line(line, sizeof(line)) && line[0] == 0);
+      const size_t initial_size = mock_ethernet_input.size();
+      wait_until([&] {
+        assert(!ethernet_read_line(line, sizeof(line)) && line[0] == 0);
+        return mock_ethernet_input.size() != initial_size;
+      });
       assert(mock_ethernet_input.size() == 101 && ethernet_line_discarding);
-      assert(!ethernet_read_line(line, sizeof(line)) && line[0] == 0);
+      wait_until([&] {
+        assert(!ethernet_read_line(line, sizeof(line)) && line[0] == 0);
+        return ethernet_session_reset.load();
+      });
       assert(!ethernet_line_discarding);
-      (void)ethernet_take_session_reset();
-      wait_until([] { return ethernet_is_running(); });
-      assert(ethernet_read_line(line, sizeof(line)) && std::string(line) == "get eth");
+      assert(mock_ethernet_input == "get eth\n" && ethernet_take_session_reset());
+      read_complete_line(line, sizeof(line));
+      assert(std::string(line) == "get eth");
       finish_off();
       break;
     }
@@ -715,7 +737,8 @@ int main(int argc, char** argv) {
       (void)ethernet_take_session_reset();
       mock_ethernet_input = "get eth\r";
       char line[32] = {};
-      assert(ethernet_read_line(line, sizeof(line)));
+      read_complete_line(line, sizeof(line));
+      assert(std::string(line) == "get eth");
       const uint32_t previous = ethernet_session_generation.load();
       mock_accept_client.store(true);
       wait_until([&] { return ethernet_session_generation.load() != previous && ethernet_is_running(); });
@@ -733,15 +756,22 @@ int main(int argc, char** argv) {
       (void)ethernet_take_session_reset();
       mock_ethernet_input = "eth ";
       char line[32] = {};
-      assert(!ethernet_read_line(line, sizeof(line)) && std::string(line) == "eth ");
+      wait_until([&] {
+        assert(!ethernet_read_line(line, sizeof(line)));
+        return std::string(line) == "eth ";
+      });
       const uint32_t before = ethernet_session_generation.load();
       mock_accept_client.store(true);
       wait_until([&] { return ethernet_session_generation.load() != before && ethernet_is_running(); });
       mock_ethernet_input = "off\r";
-      assert(!ethernet_read_line(line, sizeof(line)) && line[0] == 0);
+      wait_until([&] {
+        assert(!ethernet_read_line(line, sizeof(line)));
+        return line[0] == 0;
+      });
       assert(mock_ethernet_input == "off\r");
       (void)ethernet_take_session_reset();
-      assert(ethernet_read_line(line, sizeof(line)) && std::string(line) == "off");
+      read_complete_line(line, sizeof(line));
+      assert(std::string(line) == "off");
       finish_off();
       break;
     }

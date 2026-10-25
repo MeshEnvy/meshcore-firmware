@@ -53,6 +53,75 @@ SCENARIOS = (
 
 
 class Rak4631EthernetRuntimeTests(unittest.TestCase):
+    def test_fixture_retries_busy_reads_and_preserves_partial_commands(self):
+        compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
+        if compiler is None:
+            self.skipTest("a host C++17 compiler is required")
+        fixture = (FIXTURE / "test.cpp").read_text(encoding="ascii")
+        waiter = method(fixture, "static void wait_until(")
+        reader = method(fixture, "static void read_complete_line(")
+        harness = r'''
+#include <cassert>
+#include <chrono>
+#include <cstring>
+#include <functional>
+#include <string>
+#include <thread>
+static unsigned read_calls = 0;
+static bool ethernet_read_line(char* line, size_t capacity) {
+  assert(capacity >= sizeof("get eth"));
+  switch (read_calls++) {
+    case 0: // Worker acquired SPI after the caller observed Online.
+      assert(line[0] == 0);
+      return false;
+    case 1: // An admitted turn received only part of the command.
+      std::strcpy(line, "get ");
+      return false;
+    case 2: // Busy again; the caller must retain the partial command.
+      assert(std::string(line) == "get ");
+      return false;
+    case 3:
+      assert(std::string(line) == "get ");
+      std::strcat(line, "eth");
+      return true;
+    default:
+      assert(false && "reader retried after completing the command");
+      return false;
+  }
+}
+@WAITER@
+@READER@
+int main() {
+  char line[32] = {};
+  read_complete_line(line, sizeof(line));
+  assert(std::string(line) == "get eth" && read_calls == 4);
+}
+'''
+        with tempfile.TemporaryDirectory(prefix="meshcore-ethernet-fixture-read-") as directory:
+            for name, implementation in (
+                ("retry-partial", reader),
+                ("single-attempt", "static void read_complete_line(char* line, size_t capacity) {\n"
+                 "wait_until([] { return true; });\n"
+                 "assert(ethernet_read_line(line, capacity));\n}"),
+                ("lost-prefix", reader.replace(
+                    "return ethernet_read_line(line, capacity);",
+                    "line[0] = 0; return ethernet_read_line(line, capacity);")),
+            ):
+                with self.subTest(implementation=name):
+                    binary = Path(directory) / name
+                    compiled = subprocess.run(
+                        [compiler, "-std=c++17", "-pthread", "-Wall", "-Wextra", "-Werror",
+                         *SANITIZER_FLAGS, "-x", "c++", "-", "-o", str(binary)],
+                        input=harness.replace("@WAITER@", waiter).replace("@READER@", implementation),
+                        capture_output=True, text=True, timeout=60)
+                    self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+                    checked = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
+                    if name == "retry-partial":
+                        self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+                    else:
+                        self.assertNotEqual(checked.returncode, 0)
+                        self.assertIn("Assertion", checked.stderr)
+
     def test_fixture_retries_busy_and_short_writes_without_duplicates(self):
         compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
         if compiler is None:
@@ -201,6 +270,8 @@ int main() {
             self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
             cases = list(enumerate(SCENARIOS))
             cases.extend((7, f"online ownership race repeat {index}") for index in range(32))
+            cases.extend((scenario, f"parser ownership race repeat {index}: {SCENARIOS[scenario]}")
+                         for index in range(8) for scenario in (18, 19, 23, 27))
             for scenario, description in cases:
                 with self.subTest(scenario=description):
                     checked = subprocess.run([str(binary), str(scenario)],
