@@ -215,6 +215,9 @@ def build_and_run(scenario, *, mutation=None, full=True):
         for name in ('esp_err.h', 'esp_wifi.h', 'WiFi.h', 'Preferences.h'):
             (folder / name).write_text('#pragma once\n')
         fixture = (ROOT / 'test/fixtures/wifi_ap_shared_lr_sdk.h').read_text()
+        dispatcher = (ROOT / 'src/Dispatcher.h').read_text()
+        fixture = fixture.replace('@RADIO_APPLY_ENUM@',
+                                  method(dispatcher, 'enum class RadioParamApplyResult') + ';')
         source = fixture + '\n#include <atomic>\n#include <helpers/bridges/ESPNowBridgeDiagnostics.h>\n'
         source += 'constexpr int ESP_ERR_INVALID_ARG=-4;\n#include <helpers/esp32/WiFiRadioPolicy.h>\n'
         source += '#include <helpers/esp32/WiFiStationPolicy.h>\n'

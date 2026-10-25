@@ -33,7 +33,9 @@ struct esp_now_send_info_t {};
 struct esp_now_recv_info_t {const uint8_t* src_addr;};
 struct esp_now_peer_info_t {uint8_t peer_addr[6];int channel,ifidx;bool encrypt;};
 struct esp_now_rate_config_t {int phymode,rate;bool ersu,dcm;};
-namespace mesh {enum class RadioParamApplyResult {APPLIED};}
+namespace mesh {
+@RADIO_APPLY_ENUM@
+}
 int failure=0,mode_reads=0,station_writes=0,ap_writes=0,storage_writes=0;
 int init_calls=0,deinit_calls=0,wake_refs=0,send_calls=0,power=0,rate_calls=0;
 bool driver_initialized=true,sdk_active=false,storage_ram=false,lr=false,nvs_lr=false;
