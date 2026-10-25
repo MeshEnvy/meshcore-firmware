@@ -305,6 +305,14 @@ static bool save_filter(const ContactInfo& c);
 #ifndef DEFAULT_PATH_HASH_MODE
 #define DEFAULT_PATH_HASH_MODE 0
 #endif
+#ifndef DEFAULT_COMPANION_PATH_HASH_MODE
+#if defined(CASCADE_PROFILE) && CASCADE_PROFILE
+// Mode is zero-based: Cascade Companions use two bytes per path hop.
+#define DEFAULT_COMPANION_PATH_HASH_MODE 1
+#else
+#define DEFAULT_COMPANION_PATH_HASH_MODE DEFAULT_PATH_HASH_MODE
+#endif
+#endif
 #ifndef DEFAULT_MANUAL_ADD_CONTACTS
 #define DEFAULT_MANUAL_ADD_CONTACTS 0
 #endif
@@ -2909,7 +2917,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _prefs.peripherals_shared = 0; // A genuinely fresh missing image is GPS-only.
 #endif
   _prefs.autoadd_config = DEFAULT_AUTOADD_CONFIG;
-  _prefs.path_hash_mode = DEFAULT_PATH_HASH_MODE;
+  _prefs.path_hash_mode = DEFAULT_COMPANION_PATH_HASH_MODE;
 #ifdef RADIO_FEM_TXGAIN
   _prefs.radio_fem_txgain = RADIO_FEM_TXGAIN;
 #else

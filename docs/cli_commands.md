@@ -3428,7 +3428,8 @@ installed images need an updated build. See the [setting-dispatch audit](test-re
   - `2`: 3 Byte hash size (16,777,216 unique ids)[21 max flood]
   - `3`: DO NOT USE (Reserved) 
 
-**Default:** `0`
+**Default:** `0` (1 byte). Cascade Companions use `1` (2 bytes), and Cascade
+Repeaters use `2` (3 bytes). Existing saved values are preserved.
 
 **Note:** the 'path.hash.mode' sets the low-level ID/hash encoding size used when the repeater adverts. This setting has no impact on what packet ID/hash size this repeater forwards, all sizes should be forwarded on firmware >= 1.14. This feature was added in firmware 1.14
 

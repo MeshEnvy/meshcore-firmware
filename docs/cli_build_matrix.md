@@ -88,6 +88,9 @@ The default `cascade` settings profile enables device and LoRa RX power saving;
 saved preferences take precedence, and active USB/network services can prevent
 device sleep. `--profile default` instead uses the upstream power-saving defaults.
 
+Cascade Companions default to **2-byte path hashes per hop** (`path.hash.mode 1`)
+on a fresh install or factory reset. Saved path settings take precedence.
+
 ## Role comes first
 
 | Role | Text administration CLI |
