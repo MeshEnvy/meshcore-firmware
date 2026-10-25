@@ -620,6 +620,10 @@ public:
   void cancelPendingSerialOutput();
 #endif
   bool setTxPower(int8_t power_dbm) override;
+  mesh::RadioParamApplyResult trySetTxPower(int8_t power_dbm) override;
+#if defined(MESH_HIL_TX_FREQ_MHZ)
+  bool isTxPowerApplied(int8_t power_dbm) const override;
+#endif
   bool setRxPowerSaving(bool enable, uint32_t rx_us, uint32_t sleep_us) override;
   void recalibrateNoiseFloor() override { _radio->recalibrateNoiseFloor(); }
   void getRxPsWatchdogCounts(uint32_t* soft, uint32_t* hard) override;
@@ -700,7 +704,7 @@ public:
 #endif
   bool canRecoverUsbLogging() const {
     return dirty_contacts_expiry == 0 && !hasOutbound() && !isAnyTempRadioActive()
-        && !hasPendingOtaApply() && !saved_radio_apply_pending
+        && !hasPendingOtaApply() && !saved_radio_apply_pending && !_cli.hasPendingTxPower()
         && set_radio_at == 0 && _ota_update_at == 0;
   }
 #if MESH_ENABLE_ROOM_FLOOD_RULE_ENGINE

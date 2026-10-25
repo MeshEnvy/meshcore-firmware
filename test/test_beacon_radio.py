@@ -175,6 +175,7 @@ struct RadioLibWrapper {
     void onSendFinished();
     uint32_t getBeaconAirtime(const mesh::RadioProfileParams&, int);
     bool validateBeaconPower(float, int8_t) const;
+    bool isTxPowerApplied(int8_t) const;
     virtual bool checkBeaconOutputPower(float, int8_t) const;
     void cacheBeaconRestoreParams();
     Result prepareBeaconTransmit(const mesh::RadioProfileParams&, int8_t);
@@ -197,6 +198,7 @@ int main() {
         assert(!w.restoreAfterDeepInit() && !w._dbm_applied);
         w.power_fail = false;
         assert(w.restoreAfterDeepInit() && w._dbm_applied);
+        assert(w.isTxPowerApplied(20));
         ++cases;
     }
     for (bool dual : {false, true}) for (bool rxps : {false, true}) for (bool mt : {false, true}) {
@@ -210,6 +212,7 @@ int main() {
         w._rx_ps_enabled = w._rx_ps_armed = rxps;
         const auto before = w._profiles;
         assert(w.prepareBeaconTransmit(beacon(mt), 10) == Result::APPLIED);
+        assert(!w._dbm_applied && !w.isTxPowerApplied(20) && !w.isTxPowerApplied(10));
         assert(w._beacon_owned && w.state == STATE_IDLE && w.arms == 0);
         assert(w.modem.freq == 915 && w.modem.power == 10);
         assert(w.modem.preamble == (mt ? 16 : 32));
@@ -224,6 +227,7 @@ int main() {
         assert(!w.isBeaconChannelBusy() && !w.pending && w.state == STATE_IDLE);
         assert(w.restoreBeaconReceive() == Result::APPLIED);
         assert(!w._beacon_owned && w.state == STATE_RX && w._rx_ps_armed == rxps);
+        assert(w.isTxPowerApplied(20));
         assert(w.modem.freq == (dual ? 908 : 906) && w.modem.power == 20);
         assert(w.modem.protocol == mesh::RadioProfileProtocol::MeshCore);
         assert(w.recalibrations == 0 && w.deep_calls == 0);
@@ -247,8 +251,10 @@ int main() {
         if (failure == 1) w.protocol_fail = true;
         if (failure == 2) w.power_fail = true;
         assert(w.prepareBeaconTransmit(beacon(true), 10) == Result::FAILED && w._beacon_owned);
+        assert(!w._dbm_applied && !w.isTxPowerApplied(20));
         w.repair_on_deep = true;
         assert(w.restoreBeaconReceive() == Result::APPLIED && !w._beacon_owned);
+        assert(w.isTxPowerApplied(20));
         assert(w.modem.freq == 906 && w.modem.protocol == mesh::RadioProfileProtocol::MeshCore && w.modem.power == 20);
         ++cases;
     }
@@ -388,6 +394,7 @@ class BeaconRadioTest(unittest.TestCase):
             "void RadioLibWrapper::onSendFinished()",
             "uint32_t RadioLibWrapper::getBeaconAirtime(",
             "bool RadioLibWrapper::validateBeaconPower(",
+            "bool RadioLibWrapper::isTxPowerApplied(",
             "bool RadioLibWrapper::checkBeaconOutputPower(",
             "void RadioLibWrapper::cacheBeaconRestoreParams()",
             "mesh::RadioParamApplyResult RadioLibWrapper::prepareBeaconTransmit(",

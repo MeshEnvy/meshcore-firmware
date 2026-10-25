@@ -82,16 +82,21 @@ int main(){
  for(int stage=1;stage<=10;++stage){
    failure=stage;radio.init();assert(!radio.isEnabled());
    assert(!sdk_active&&wake_refs==0);
-   assert(!radio.isInRecvMode()&&!radio.isSendComplete());
+   assert(!radio.isInRecvMode()&&!radio.isSendComplete()&&!radio.isTxPowerApplied(20));
    radio.end();assert(wake_refs==0); // failed startup and repeated off are safe
  }
  failure=0;WiFi.current=WIFI_OFF;radio.init();
  assert(radio.isEnabled()&&sdk_active&&wake_refs==1&&!WiFi.autoreconnect);
  const int started=init_calls;radio.init();assert(init_calls==started&&wake_refs==1);
  assert(radio.setTxPower(13)&&power==52);
+ assert(radio.isTxPowerApplied(13)&&!radio.isTxPowerApplied(2));
+ assert(radio.isTxPowerValid(2)&&radio.isTxPowerValid(21));
+ assert(!radio.isTxPowerValid(1)&&!radio.isTxPowerValid(22));
+ assert(radio.trySetTxPower(22)==mesh::RadioParamApplyResult::FAILED&&power==52);
  assert(radio.trySetTxPower(14)==mesh::RadioParamApplyResult::APPLIED&&power==56);
  failure=6;
  assert(radio.trySetTxPower(15)==mesh::RadioParamApplyResult::FAILED&&power==56);
+ assert(radio.isTxPowerApplied(14)&&!radio.isTxPowerApplied(15));
  failure=0;
  assert(radio.trySetTxPower(13)==mesh::RadioParamApplyResult::APPLIED&&power==52);
  uint8_t raw[255]={0x15,1,2,3},out[255];
@@ -100,6 +105,7 @@ int main(){
  assert(radio.startSendRaw(raw,sizeof(raw))&&tx_second_pending);
  OnDataSent(nullptr,ESP_NOW_SEND_SUCCESS);
  radio.end();const int sent=send_calls;
+ assert(!radio.isTxPowerApplied(13));
  assert(!radio.isSendComplete()&&!radio.startSendRaw(raw,4)&&send_calls==sent);
  OnDataSent(nullptr,ESP_NOW_SEND_SUCCESS); // callback arriving while disabled
  deliver(raw,4);assert(radio.recvRaw(out,sizeof(out))==0);

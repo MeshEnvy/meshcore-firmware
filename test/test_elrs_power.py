@@ -46,6 +46,7 @@ protected:
   CustomSX1276* _radio;
   int8_t cached = 0;
   virtual int16_t applyCachedTxPower(int8_t dbm) = 0;
+  virtual bool checkBeaconOutputPower(float, int8_t) const = 0;
 public:
   CustomSX1276Wrapper(CustomSX1276& radio, mesh::MainBoard&) : _radio(&radio) {}
   bool setTxPower(int8_t dbm) {

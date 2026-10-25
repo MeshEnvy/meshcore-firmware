@@ -1972,6 +1972,8 @@ void MyMesh::onRadioProfileCopyQueued(mesh::Packet* packet, const mesh::Packet* 
 
 void MyMesh::onSendComplete(mesh::Packet* packet) {
   mesh::Mesh::onSendComplete(packet);
+  // Use the completed packet's idle gap before a busy queue starts another TX.
+  servicePendingTxPower();
   _morse_reply.complete(packet);
 }
 
@@ -3534,8 +3536,7 @@ void MyMesh::finishRadioParamApply(float freq, float bw, uint8_t sf,
     return;
   }
 
-  // Preserve an outstanding power rollback; the full saved-radio recovery
-  // checks both the tuple and TX power before clearing this latch.
+  // Preserve any earlier saved-radio recovery while committing the tuple.
   saved_radio_apply_pending = previous_recovery_pending;
   radio_apply_retry_at = 0;
   radio_apply_failures = 0;
@@ -3546,24 +3547,22 @@ void MyMesh::finishRadioParamApply(float freq, float bw, uint8_t sf,
   writeOKFrame(route);
 }
 
-void MyMesh::deferRadioCommand(uint8_t kind) {
+void MyMesh::deferRadioCommand() {
   command_radio_reply_route = _serial->captureReplyRoute();
   if (command_radio_reply_route == NULL) {
     writeErrFrame(ERR_CODE_BAD_STATE);
     return;
   }
-  command_radio_apply_pending = kind;
+  command_radio_apply_pending = true;
   command_radio_apply_deadline = futureMillis(COMMAND_RADIO_APPLY_TIMEOUT_MS);
 }
 
 void MyMesh::cancelPendingRadioParamApply() {
   if (!command_radio_apply_pending) return;
 
-  const bool restore_tuple = command_radio_apply_pending == 1;
   command_radio_apply_pending = false;
   command_radio_apply_deadline = 0;
   command_radio_reply_route = NULL;
-  if (!restore_tuple) return;
   // The requested tuple was not committed. Reassert the persisted tuple in
   // case a failed hardware apply only restored part of the old configuration.
   saved_radio_apply_pending = true;
@@ -3583,20 +3582,6 @@ void MyMesh::servicePendingRadioParamApply() {
 
   const bool expired = static_cast<int32_t>(static_cast<uint32_t>(
       _ms->getMillis() - command_radio_apply_deadline)) >= 0;
-  if (command_radio_apply_pending == 2) {
-    const auto result = expired ? RadioSettingResult::RadioBusy
-        : applyAndSaveTxPower(static_cast<int8_t>(command_radio_repeat), true);
-    if (result == RadioSettingResult::RadioBusy
-        && !expired) return;
-    if (result == RadioSettingResult::Saved) writeOKFrame(command_radio_reply_route);
-    else writeErrFrame(result == RadioSettingResult::SaveFailed
-        ? ERR_CODE_FILE_IO_ERROR : ERR_CODE_BAD_STATE, command_radio_reply_route);
-    // The checked setter owns any failed-save rollback. Retire this command
-    // without forcing a tuple restore or consuming a pending receive.
-    cancelPendingRadioParamApply();
-    return;
-  }
-
   mesh::RadioParamApplyResult result = tryApplyRadioParams(
       command_radio_freq, command_radio_bw, command_radio_sf, command_radio_cr);
   if (result == mesh::RadioParamApplyResult::APPLIED) {
@@ -5687,9 +5672,10 @@ void MyMesh::execCommand(char* cmd, char* reply) {
       snprintf(reply, 160, "Error: TX -9..%d dBm", MAX_LORA_TX_POWER);
     } else {
       const auto result = applyAndSaveTxPower(static_cast<int8_t>(parsed));
-      strcpy(reply, result == RadioSettingResult::Saved ? "OK"
+      strcpy(reply, result == RadioSettingResult::Saved
+          ? (tx_power_apply_pending ? "OK - saved; pending" : "OK")
           : result != RadioSettingResult::SaveFailed
-              ? "Error: radio busy or TX power rejected"
+              ? "Error: TX power rejected"
               : "Error: TX not saved");
     }
     return;
@@ -6808,7 +6794,7 @@ void MyMesh::handleCmdFrame(size_t len) {
         command_radio_sf = sf;
         command_radio_cr = cr;
         command_radio_repeat = repeat;
-        deferRadioCommand(1);
+        deferRadioCommand();
         MESH_DEBUG_PRINTLN("Deferred CMD_SET_RADIO_PARAMS while radio is busy");
         return;
       }
@@ -6836,15 +6822,8 @@ void MyMesh::handleCmdFrame(size_t len) {
     int8_t power = (int8_t)cmd_frame[1];
     if (power < -9 || power > MAX_LORA_TX_POWER) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    } else if (command_radio_apply_pending) {
-      writeErrFrame(ERR_CODE_BAD_STATE);
     } else {
       const auto result = applyAndSaveTxPower(power);
-      if (result == RadioSettingResult::RadioBusy) {
-        command_radio_repeat = static_cast<uint8_t>(power);
-        deferRadioCommand(2);
-        return;
-      }
       if (result == RadioSettingResult::Saved) writeOKFrame();
       else writeErrFrame(result == RadioSettingResult::RadioRejected
           ? ERR_CODE_BAD_STATE : ERR_CODE_FILE_IO_ERROR);
@@ -8488,30 +8467,45 @@ bool MyMesh::saveAdvertLocation(double latitude, double longitude) {
   return false;
 }
 
-MyMesh::RadioSettingResult MyMesh::applyAndSaveTxPower(int8_t power, bool from_pending) {
-  if (command_radio_apply_pending && !from_pending) return RadioSettingResult::RadioBusy;
+MyMesh::RadioSettingResult MyMesh::applyAndSaveTxPower(int8_t power) {
+  if (!radio_driver.isTxPowerValid(power)) return RadioSettingResult::RadioRejected;
   const int8_t previous = _prefs.tx_power_dbm;
-  if (_radio_available) {
-    const auto result = radio_driver.trySetTxPower(power);
-    if (result != mesh::RadioParamApplyResult::APPLIED) {
-      return result == mesh::RadioParamApplyResult::BUSY
-          ? RadioSettingResult::RadioBusy : RadioSettingResult::RadioRejected;
-    }
+  const auto result = _radio_available && !command_radio_apply_pending
+      ? radio_driver.trySetTxPower(power) : mesh::RadioParamApplyResult::BUSY;
+  if (result == mesh::RadioParamApplyResult::FAILED) {
+    // A rejected SPI transaction may have partly changed the hardware. Keep
+    // the saved setting authoritative and restore it without retuning RX.
+    tx_power_apply_pending = true;
+    tx_power_apply_retry_at = 0;
+    return RadioSettingResult::RadioRejected;
   }
   _prefs.tx_power_dbm = power;
-  if (savePrefs()) return RadioSettingResult::Saved;
+  if (savePrefs()) {
+    tx_power_apply_pending = result != mesh::RadioParamApplyResult::APPLIED;
+    tx_power_apply_retry_at = 0;
+    return RadioSettingResult::Saved;
+  }
 
   _prefs.tx_power_dbm = previous;
-  if (_radio_available && !radio_driver.setTxPower(previous)) {
-    // An RX packet can arrive between the apply and its failed flash commit.
-    // Keep retrying the durable power rather than leaving the rejected value
-    // active until reboot. Recovery also restores the saved tuple, so an
-    // active TempRadio lease deliberately delays it until the lease ends.
-    saved_radio_apply_pending = true;
-    radio_apply_retry_at = 0;
-    radio_apply_failures = 0;
+  // A busy attempt has not changed the earlier pending target or retry time.
+  if (result == mesh::RadioParamApplyResult::APPLIED) {
+    tx_power_apply_pending = !radio_driver.setTxPower(previous);
+    tx_power_apply_retry_at = 0;
   }
   return RadioSettingResult::SaveFailed;
+}
+
+void MyMesh::servicePendingTxPower() {
+  if (!tx_power_apply_pending || !_radio_available || command_radio_apply_pending
+      || (_radio && _radio->isCarrierWaveActive())) return;
+  const uint32_t now = _ms->getMillis();
+  if (tx_power_apply_retry_at
+      && static_cast<int32_t>(now - tx_power_apply_retry_at) < 0) return;
+  const auto result = radio_driver.trySetTxPower(_prefs.tx_power_dbm);
+  if (result == mesh::RadioParamApplyResult::APPLIED) tx_power_apply_pending = false;
+  // Busy admission does not touch RX. Back off actual hardware failures.
+  tx_power_apply_retry_at = result == mesh::RadioParamApplyResult::FAILED
+      ? (now + 1000u ? now + 1000u : 1u) : 0;
 }
 
 bool MyMesh::applyAndSaveFemRxGain(bool enabled) {
@@ -10957,6 +10951,17 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
 
   if (handleLocalControlCommand(command, reply, reply_capacity)) return true;
 
+#if defined(MESH_HIL_TX_FREQ_MHZ)
+  // RF test builds verify active power before permitting any test TX.
+  if (strcmp(command, "get tx.status") == 0) {
+    snprintf(reply, reply_capacity, "> desired=%d,apply=%s", (int)_prefs.tx_power_dbm,
+             !tx_power_apply_pending && _radio_available
+                 && radio_driver.isTxPowerApplied(_prefs.tx_power_dbm)
+                     ? "applied" : "pending");
+    return true;
+  }
+#endif
+
   if (strncmp(command, "set tx ", 7) == 0) {
     int32_t parsed = 0;
     if (!mesh::cli::parseIntegerStrict(command + 7, parsed)) {
@@ -10967,12 +10972,13 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
     } else {
       const int8_t requested = static_cast<int8_t>(parsed);
       const auto result = applyAndSaveTxPower(requested);
-      if (result == RadioSettingResult::RadioRejected || result == RadioSettingResult::RadioBusy) {
-        mesh::cli::formatError(reply, reply_capacity, "radio busy or TX power rejected");
+      if (result == RadioSettingResult::RadioRejected) {
+        mesh::cli::formatError(reply, reply_capacity, "TX power rejected");
       } else if (result == RadioSettingResult::SaveFailed) {
         mesh::cli::formatError(reply, reply_capacity, "TX not saved");
       } else {
-        strcpy(reply, "OK");
+        snprintf(reply, reply_capacity, "%s",
+                 tx_power_apply_pending ? "OK - saved; pending" : "OK");
       }
     }
     return true;
@@ -11618,6 +11624,7 @@ void MyMesh::loop() {
 #endif
   }
   servicePendingRadioParamApply();
+  servicePendingTxPower();
 #if MESH_ENABLE_ONE_KEY_DM
   if (held_dm_count != 0 || verified_pending_count != 0) releaseHeldOneKeyDMs();
 #endif
@@ -11710,7 +11717,7 @@ bool MyMesh::canRecoverUsbLogging() const {
       && !_store->hasPendingAdvertWrites()
 #endif
       && !hasOutbound() && !isAnyTempRadioActive() && !hasPendingOtaApply()
-      && !command_radio_apply_pending && !saved_radio_apply_pending
+      && !command_radio_apply_pending && !saved_radio_apply_pending && !tx_power_apply_pending
       && _scheduled_reboot_at == 0 && !hasPendingReqs()
       && !_delayed_replies.hasBinaryTrace() && sign_data == NULL
 #if COMPANION_FEATURE_TEXT_TERMINAL
@@ -11755,7 +11762,8 @@ mesh::powerdiag::Mask MyMesh::pendingWorkReason() const {
   if (_iter_started && _serial != NULL
       && _serial->isReplyRouteAvailable(_iter_reply_route)) return mask(Reason::SerialIO);
   if (hasPendingOtaApply()) return mask(Reason::Ota);
-  if (command_radio_apply_pending || _scheduled_reboot_at != 0) return mask(Reason::Scheduled);
+  if (command_radio_apply_pending || (tx_power_apply_pending && _radio_available)
+      || _scheduled_reboot_at != 0) return mask(Reason::Scheduled);
   if (hasPendingReqs() || _delayed_replies.hasBinaryTrace()) return mask(Reason::Mesh);
 #if COMPANION_FEATURE_TEXT_TERMINAL
   if (_terminal_trace_pending) return mask(Reason::Mesh);

@@ -173,6 +173,7 @@ void CommonCLI::loop() {
   }
 #endif
   if (!mesh::morseTimingActive(_callbacks->getProfileRadio())) {
+    servicePendingTxPower();
     _radio_profiles.loop();
     loopManagement();
 #if MESH_ENABLE_TX_BEACONS
@@ -195,6 +196,55 @@ bool CommonCLI::hasActiveUserGpioTimer() const {
 #else
   return false;
 #endif
+}
+
+void CommonCLI::servicePendingTxPower() {
+  if (!_tx_power_pending || (_tx_power_retry_at
+      && static_cast<int32_t>(millis() - _tx_power_retry_at) < 0)) return;
+  // A pending normal setting must not become a power-meter sweep if a CW
+  // test started after the setting was accepted.
+  const mesh::Radio* radio = _callbacks->getProfileRadio();
+  if (radio && radio->isCarrierWaveActive()) return;
+  const auto result = _callbacks->trySetTxPower(_prefs->tx_power_dbm);
+  if (result == mesh::RadioParamApplyResult::APPLIED) _tx_power_pending = false;
+  _tx_power_retry_at = result == mesh::RadioParamApplyResult::FAILED
+      ? millis() + 1000 : 0;
+  if (result == mesh::RadioParamApplyResult::FAILED && !_tx_power_retry_at)
+    _tx_power_retry_at = 1;
+}
+
+void CommonCLI::applyAndSaveTxPower(int8_t power, char* reply) {
+  using Result = mesh::RadioParamApplyResult;
+  const int8_t previous = _prefs->tx_power_dbm;
+  const bool previous_pending = _tx_power_pending;
+  const uint32_t previous_retry_at = _tx_power_retry_at;
+  const auto result = _callbacks->trySetTxPower(power);
+  if (result == Result::FAILED) {
+    // A failed SPI write may have changed the hardware partially. Reassert
+    // the saved desired power without accepting or saving the rejected one.
+    _tx_power_pending = true;
+    _tx_power_retry_at = 0;
+    mesh::cli::formatError(reply, 160, "TX power rejected");
+    return;
+  }
+  _prefs->tx_power_dbm = power;
+  if (trySavePrefs()) {
+    _tx_power_pending = result == Result::BUSY;
+    _tx_power_retry_at = 0;
+    strcpy(reply, _tx_power_pending ? "OK - saved; pending" : "OK");
+    return;
+  }
+
+  _prefs->tx_power_dbm = previous;
+  _tx_power_pending = previous_pending;
+  _tx_power_retry_at = previous_retry_at;
+  if (result == Result::APPLIED) {
+    const auto restored = _callbacks->trySetTxPower(previous);
+    _tx_power_pending = restored != Result::APPLIED;
+    _tx_power_retry_at = restored == Result::FAILED ? millis() + 1000 : 0;
+    if (restored == Result::FAILED && !_tx_power_retry_at) _tx_power_retry_at = 1;
+  }
+  mesh::cli::formatError(reply, 160, "TX save unconfirmed; reboot may differ");
 }
 
 // Old fork firmware persisted the (since removed) NodePrefs MQTT fields to /com_prefs
@@ -5322,12 +5372,8 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     } else if (!mesh::isLoRaTxPowerValid(power, _prefs->freq)) {
       sprintf(reply, "Error: TX power range is %d to %d dBm",
               (int)minimum, (int)maximum);
-    } else if (!_callbacks->setTxPower(static_cast<int8_t>(power))) {
-      mesh::cli::formatError(reply, 160, "radio busy or TX power rejected");
     } else {
-      _prefs->tx_power_dbm = static_cast<int8_t>(power);
-      savePrefs();
-      strcpy(reply, "OK");
+      applyAndSaveTxPower(static_cast<int8_t>(power), reply);
     }
   } else if (memcmp(config, "freq ", 5) == 0) {
     float freq = 0.0f;
@@ -6045,6 +6091,12 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     } else {
       strcpy(reply, "> strict");
     }
+#if defined(MESH_HIL_TX_FREQ_MHZ)
+  } else if (configKeyEquals(config, "tx.status")) {
+    sprintf(reply, "> desired=%d,apply=%s", (int)_prefs->tx_power_dbm,
+            !_tx_power_pending && _callbacks->isTxPowerApplied(_prefs->tx_power_dbm)
+                ? "applied" : "pending");
+#endif
   } else if (configKeyEquals(config, "tx")) {
     sprintf(reply, "> %d", (int32_t) _prefs->tx_power_dbm);
   } else if (configKeyEquals(config, "freq")) {

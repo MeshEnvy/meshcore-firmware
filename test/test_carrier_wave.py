@@ -89,7 +89,7 @@ struct Chip {
     standby(); if (power_result) return power_result;
     power=value; rfo=force_rfo; ramp_time=4; return 0;
   }
-  int checkOutputPower(int8_t value, int8_t* clipped, bool force_hp) {
+  int checkOutputPower(int8_t value, int8_t* clipped, bool force_hp=false) {
     const int minimum=frequency>1000 ? -18 : force_hp || value>14 ? -9 : -17;
     const int maximum=frequency>1000 ? 13 : force_hp || value>14 ? 22 : 14;
     if (clipped) *clipped=value<minimum ? minimum : value>maximum ? maximum : value;
@@ -193,6 +193,9 @@ struct RadioLibWrapper : mesh::Radio {
   }
   virtual float getCurrentRSSI() { ++rssi_reads; g_mock_millis+=rssi_latency; return rssi; }
   bool setTxPower(int8_t dbm);
+  bool isTxPowerValid(int8_t dbm) const;
+  bool isTxPowerApplied(int8_t dbm) const;
+  virtual bool checkBeaconOutputPower(float, int8_t) const;
   mesh::RadioParamApplyResult trySetTxPower(int8_t dbm);
   @NATIVE_HOOKS@
 #if MESH_ENABLE_MORSE_RX || !defined(STM32_PLATFORM)
@@ -272,7 +275,9 @@ int main() {
   using Result=mesh::RadioParamApplyResult;
   for (uint8_t profile : {0,1}) {
     RadioLibWrapper w;
+    assert(w.isTxPowerApplied(17));
     assert(w.setCarrierWave(profile,1250)==Result::APPLIED);
+    assert(!w.isTxPowerApplied(17));
     assert(w.frequency==(profile ? 911.5f : 909.5f));
     assert(w.chip.carrier && !w.chip.callback && w.board.before==1 && w.board.awake);
     assert(w.chip.standby_calls==2 && !w._rx_ps_armed && !w._nf_calib_active);
@@ -280,6 +285,7 @@ int main() {
     advance(1249); assert(w.serviceCarrierWave() && w.chip.carrier);
     advance(1); assert(w.serviceCarrierWave() && !w.chip.carrier);
     assert(!w._cw_active && w.isInRecvMode() && w._rx_ps_armed);
+    assert(w.isTxPowerApplied(17));
     assert(w.frequency==909.5f && w.board.after==1 && !w.board.awake && w.chip.callback);
     assert(!w.serviceCarrierWave());
   }
@@ -321,11 +327,13 @@ int main() {
     w.chip.standby_result=-705;
     assert(w.setCarrierWave(0,0)==Result::FAILED);
     assert(w._cw_active && w._cw_stopping && w.board.awake && w.board.after==1);
+    assert(!w._dbm_applied && !w.isTxPowerApplied(17));
     const auto attempts=w.chip.stops;
     advance(99); w.serviceCarrierWave(); assert(w.chip.stops==attempts);
     w.reset_ok=true;
     advance(1); w.serviceCarrierWave();
     assert(!w._cw_active && !w.chip.carrier && w.board.after==1 && w.isInRecvMode());
+    assert(w.isTxPowerApplied(17));
   }
   {
     RadioLibWrapper w; w.setCarrierWave(0,100);
@@ -458,6 +466,9 @@ def production_harness():
     source = (ROOT/'src/helpers/radiolib/RadioLibWrappers.cpp').read_text()
     signatures = ('uint8_t RadioLibWrapper::beginReconfigure(',
                       'bool RadioLibWrapper::setTxPower(',
+                      'bool RadioLibWrapper::isTxPowerValid(',
+                      'bool RadioLibWrapper::isTxPowerApplied(',
+                      'bool RadioLibWrapper::checkBeaconOutputPower(',
                       'mesh::RadioParamApplyResult RadioLibWrapper::trySetTxPower(',
                       'mesh::RadioParamApplyResult RadioLibWrapper::setCarrierWave(',
                       'uint32_t RadioLibWrapper::carrierWaveRemainingMillis(',
@@ -519,7 +530,8 @@ def production_harness():
             'bool validateMorseFrequency(')))
     dac = (ROOT/'src/helpers/radiolib/DacPaSX1276Wrapper.h').read_text()
     code = code.replace('@DAC_METHODS@', '\n'.join(method(dac, s) for s in (
-            'int16_t applyCachedTxPower(', 'uint8_t indexForDbm(')))
+            'int16_t applyCachedTxPower(', 'uint8_t indexForDbm(',
+            'bool checkBeaconOutputPower(')))
     return code
 
 

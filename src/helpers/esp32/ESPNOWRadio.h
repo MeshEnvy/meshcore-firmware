@@ -68,9 +68,23 @@ public:
   bool isCalibratingNoiseFloor() const { return false; }
 
   uint32_t intID();
+  bool isTxPowerValid(int8_t dbm) const {
+    // The SDK accepts 8..84 quarter-dBm units; the public API uses whole dBm.
+    if (dbm < 2 || dbm > 21) return false;
+#ifdef MIN_LORA_TX_POWER
+    if (dbm < MIN_LORA_TX_POWER) return false;
+#endif
+#ifdef MAX_LORA_TX_POWER
+    if (dbm > MAX_LORA_TX_POWER) return false;
+#endif
+    return true;
+  }
+  bool isTxPowerApplied(int8_t dbm) const {
+    return initialized_ && tx_power_dbm_ == dbm;
+  }
   bool setTxPower(int8_t dbm);
   mesh::RadioParamApplyResult trySetTxPower(int8_t dbm) {
-    return setTxPower(dbm) ? mesh::RadioParamApplyResult::APPLIED
+    return isTxPowerValid(dbm) && setTxPower(dbm) ? mesh::RadioParamApplyResult::APPLIED
                            : mesh::RadioParamApplyResult::FAILED;
   }
 };

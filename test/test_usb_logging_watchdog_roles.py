@@ -45,11 +45,15 @@ struct SerialInterface {
  bool isPassthroughMode() const{return passthrough;}
 };
 struct RoleMesh {
+ struct {
+   bool pending=false;
+   bool hasPendingTxPower() const{return pending;}
+ } _cli;
  uint32_t dirty_contacts_expiry=0, _ota_update_at=0, set_radio_at=0,
      _scheduled_reboot_at=0;
  bool outbound=false, temporary=false, ota_apply=false,
      saved_radio_apply_pending=false, temp_radio_handoff_pending=false,
-     command_radio_apply_pending=false,
+     command_radio_apply_pending=false, tx_power_apply_pending=false,
      _iter_started=false, _terminal_trace_pending=false, terminal=true;
  mesh::CompanionDelayedReplies _delayed_replies;
  void* sign_data=nullptr;
@@ -154,6 +158,10 @@ class UsbLoggingWatchdogRoleTests(unittest.TestCase):
                               'bool canRecoverUsbLogging() const')
             callback = method((directory / 'main.cpp').read_text(),
                               'static bool usbLoggingRecoverySafe(void*)')
+            specific += '''
+   the_mesh._cli.pending=true;assert(!usbLoggingRecoverySafe(nullptr));
+   the_mesh._cli.pending=false;
+'''
             command_checks = '''
  reset();command[0]='x';assert(!usbLoggingRecoverySafe(nullptr));
  mesh::status.reader_connected=false;assert(usbLoggingRecoverySafe(nullptr));
@@ -193,6 +201,8 @@ class UsbLoggingWatchdogRoleTests(unittest.TestCase):
         role_checks = r'''
    the_mesh.command_radio_apply_pending=true;assert(!usbLoggingRecoverySafe(nullptr));
    the_mesh.command_radio_apply_pending=false;
+   the_mesh.tx_power_apply_pending=true;assert(!usbLoggingRecoverySafe(nullptr));
+   the_mesh.tx_power_apply_pending=false;
    for(auto slot : {&the_mesh._delayed_replies.request, &the_mesh._delayed_replies.trace}){
      slot->phase=mesh::CompanionDelayedReplies::AwaitRadio;
      assert(!usbLoggingRecoverySafe(nullptr));

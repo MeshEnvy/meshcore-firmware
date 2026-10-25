@@ -77,6 +77,45 @@ def embedded_page():
 
 
 class WebConfigUiRuntimeTest(unittest.TestCase):
+    def test_tx_save_receipt_confirms_durable_save_and_automatic_application(self):
+        for reply, chip, toast in (("OK - saved; pending", "Saved", "Saved; radio changes apply automatically"),
+                                   ("OK", "OK", "Saved [OK]")):
+            with self.subTest(reply=reply):
+                status, config = self.setup_values()
+                status.update(mode="lan", password_supported=False)
+                prelude = r'''<script>
+(function(){
+  var status=%s,config=%s,reply=%s,fieldText="",toastText="";
+  function response(value){return Promise.resolve({ok:true,status:200,json:function(){return Promise.resolve(value)}})}
+  window.fetch=function(path){
+    if(path==="/api/status")return response(status);
+    if(path.indexOf("/api/config/result?")===0)return response({state:"done",reqid:"tx-receipt",all_ok:true,
+      results:[{key:"tx",reply:reply}]});
+    return response(config);
+  };
+  window.addEventListener("load",function(){
+    setTimeout(function(){
+      var input=document.createElement("input");input.setAttribute("data-k","tx");
+      document.getElementById("v-app").appendChild(input);
+      chipFor=function(el,ok,text){fieldText=text};
+      toast=function(text){toastText=text};
+      loadConfigSoft=function(){};
+      st.dirty.tx="17";
+      pollResult(null,0,0,true,"tx-receipt",{tx:"17"},{});
+    },150);
+    setTimeout(function(){
+      document.body.setAttribute("data-test-tx-chip",fieldText);
+      document.body.setAttribute("data-test-tx-toast",toastText);
+      document.body.setAttribute("data-test-tx-clean",!("tx" in st.dirty));
+    },600);
+  });
+})();
+</script>''' % (json.dumps(status), json.dumps(config), json.dumps(reply))
+                dom = self.run_page(prelude, virtual_time=900)
+                self.assertIn('data-test-tx-chip="%s"' % chip, dom)
+                self.assertIn('data-test-tx-toast="%s"' % toast, dom)
+                self.assertIn('data-test-tx-clean="true"', dom)
+
     def test_saved_network_recovery_requires_login_before_setup_wizard(self):
         status, config = self.setup_values()
         status.update(auth=False, mode="setup", needs_setup=False,

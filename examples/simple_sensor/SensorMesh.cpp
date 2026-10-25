@@ -1110,6 +1110,7 @@ bool SensorMesh::handleIncomingMsg(ClientInfo& from, uint32_t timestamp, uint8_t
 #if !MESH_ENABLE_SENSOR_TRACKER
 void SensorMesh::onSendComplete(mesh::Packet* packet) {
   mesh::Mesh::onSendComplete(packet);
+  _cli.servicePendingTxPower();
   _cli.morseReply().complete(packet);
 }
 
@@ -1460,6 +1461,16 @@ bool SensorMesh::setTxPower(int8_t power_dbm) {
   return radio_driver.setTxPower(power_dbm);
 }
 
+mesh::RadioParamApplyResult SensorMesh::trySetTxPower(int8_t power_dbm) {
+  return radio_driver.trySetTxPower(power_dbm);
+}
+
+#if defined(MESH_HIL_TX_FREQ_MHZ)
+bool SensorMesh::isTxPowerApplied(int8_t power_dbm) const {
+  return radio_driver.isTxPowerApplied(power_dbm);
+}
+#endif
+
 bool SensorMesh::setRxPowerSaving(bool enable, uint32_t rx_us, uint32_t sleep_us) {
   return radio_driver.setRxPowerSaving(enable, rx_us, sleep_us);
 }
@@ -1730,7 +1741,7 @@ mesh::powerdiag::Mask SensorMesh::pendingWorkReason() const {
 #endif
   if (!canIdleDualRadio()) return mask(Reason::DualRadio);
   if (hasPendingOtaApply()) return mask(Reason::Ota);
-  if (_cli.hasActiveUserGpioTimer()) return mask(Reason::Scheduled);
+  if (_cli.hasActiveUserGpioTimer() || _cli.hasPendingTxPower()) return mask(Reason::Scheduled);
   if (radio_driver.isWatchdogObserving()) return mask(Reason::RadioWatchdog);
   uint32_t noise_floor_delay_ms;
   if (getNextNoiseFloorWakeDelay(noise_floor_delay_ms) && noise_floor_delay_ms == 0)

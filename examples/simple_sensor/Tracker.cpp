@@ -83,7 +83,8 @@ bool SensorMesh::trackerNeedsRadio() const {
       || board.isRadioTestActive() || mesh::isUsbLoggingWatchdogArmed()
       || isAnyTempRadioActive() || hasPendingOtaApply() || isDualRadioActive()
       || set_radio_at || revert_radio_at || saved_radio_apply_pending
-      || _cli.hasActiveUserGpioTimer() || hasOutbound() || _mgr->getOutboundTotal() != 0)
+      || _cli.hasActiveUserGpioTimer() || _cli.hasPendingTxPower()
+      || hasOutbound() || _mgr->getOutboundTotal() != 0)
     return true;
   uint32_t delay;
   if (hasPendingRadioWork() || getNextRetryWakeDelay(delay)) return true;
@@ -269,6 +270,7 @@ bool SensorMesh::handleTrackerPath(mesh::Packet* packet, uint8_t* path, uint8_t 
 
 void SensorMesh::onSendComplete(mesh::Packet* packet) {
   mesh::Mesh::onSendComplete(packet);
+  _cli.servicePendingTxPower();
   _cli.morseReply().complete(packet);
   if (!tracker_pending || !packet || packet->getPayloadType() != PAYLOAD_TYPE_REQ) return;
   uint8_t hash[MAX_HASH_SIZE];

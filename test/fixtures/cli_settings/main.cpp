@@ -9,6 +9,8 @@
 // Persistence has its own production-parser tests with an in-memory FS.
 // This fixture isolates the actual CommonCLI setting branches and callbacks.
 namespace mesh {
+enum class RadioParamApplyResult : uint8_t { APPLIED, BUSY, FAILED };
+struct Radio { bool isCarrierWaveActive() const { return false; } };
 struct RadioProfileCLI {
   static bool parseSuffix(const char* input, unsigned fields, char* legacy,
                           size_t size, uint16_t& preamble) {
@@ -61,11 +63,18 @@ struct Callbacks {
   bool gain=false;
   void savePrefs() { ++saves; }
   bool setTxPower(int8_t value) { ++tx_calls; if (!accept) return false; power=value; return true; }
+  mesh::RadioParamApplyResult trySetTxPower(int8_t value) {
+    return setTxPower(value) ? mesh::RadioParamApplyResult::APPLIED
+                             : mesh::RadioParamApplyResult::FAILED;
+  }
+  bool isTxPowerApplied(int8_t value) const { return power == value; }
+  const mesh::Radio* getProfileRadio() const { return nullptr; }
   bool setRxBoostedGain(bool value) { ++gain_calls; if (!accept) return false; gain=value; return true; }
   bool configSideDetectors(const uint8_t*,uint8_t,float) { return accept; }
 };
 struct Board { unsigned n_cad_busy=0; };
 bool isValidLoRaBandwidth(float bw) { return bw==125 || bw==62.5f; }
+uint32_t millis() { return 1000; }
 void recalcRxPowerSavingFromLevel(uint8_t,uint8_t,float,uint8_t,uint32_t*,uint32_t*) {}
 void appendRxPowerSavingAdjustmentNote(char*,Prefs*,uint8_t,float) {}
 @KEY_EQUALS@
@@ -78,7 +87,12 @@ public:
   Prefs* _prefs=&prefs;
   Callbacks* _callbacks=&callbacks;
   Board* _board=&board;
+  bool _tx_power_pending=false;
+  uint32_t _tx_power_retry_at=0;
   void savePrefs() { callbacks.savePrefs(); }
+  bool trySavePrefs() { savePrefs(); return true; }
+  void applyAndSaveTxPower(int8_t power, char* reply);
+  void servicePendingTxPower();
   bool savePrimaryRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, uint16_t) {
     prefs.freq=freq; prefs.bw=bw; prefs.sf=sf; prefs.cr=cr;
     prefs.tx_power_dbm=mesh::clampLoRaTxPower(prefs.tx_power_dbm,freq);
@@ -103,6 +117,8 @@ public:
     this->command(sender,command,reply);
   }
 };
+
+@TX_METHODS@
 
 struct Case { const char *key, *value; double expected; };
 int main() {

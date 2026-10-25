@@ -166,7 +166,7 @@ should use command `0x42`. See [Companion radio binary protocol](companion_proto
 | Logging | [`get/set usb.watchdog off\|on\|auto`](usb_logging_watchdog.md) | Current source; recovery requires native USB, live logging, and durable storage; Auto qualifies from USB stats polling | Yes | Yes | Feature |
 | Logging | [`get usb.watchdog.last`](usb_logging_watchdog.md#last-event-review) | Current source; latest USB watchdog event with advisory timestamp, uptime, action, reasons, and durability; native USB required | Yes | Yes | Feature |
 | Radio | [`get radio`; `set radio ...`](cli_commands.md#view-or-change-this-nodes-radio-parameters) | All text CLI roles | Yes | Yes | Yes |
-| Radio | [`get tx`; `set tx <dbm>`](cli_commands.md#view-or-change-this-nodes-transmit-power) | Board TX-power limits apply | Yes | Yes | Yes |
+| Radio | [`get tx`; `set tx <dbm>`](cli_commands.md#view-or-change-this-nodes-transmit-power) | Board TX-power limits apply; busy changes apply automatically | Yes | Yes | Yes |
 | Radio | [`tempradio ...`; `normalradio`](cli_commands.md#change-the-radio-parameters-for-a-set-duration) | Full parser | Yes | Yes | Yes |
 | Radio | [`get/set/del radioat`; `get/set/del tempradioat`](cli_commands.md#schedule-radio-parameter-changes) | Full parser | Yes | Yes | Yes |
 | Radio | [`get freq`; `set freq <mhz>`](cli_commands.md#view-or-change-this-nodes-frequency) | Local or authorized LoRa CLI | Yes | Yes | Yes |
@@ -342,7 +342,7 @@ should use command `0x42`. See [Companion radio binary protocol](companion_proto
 | Logging | [`get/set usb.watchdog off\|on\|auto`](usb_logging_watchdog.md) | Current source; recovery requires native USB, live logging, and durable storage; Auto qualifies from USB stats polling | Yes | Yes | Feature | Yes | Yes |
 | Logging | [`get usb.watchdog.last`](usb_logging_watchdog.md#last-event-review) | Current source; latest USB watchdog event with advisory timestamp, uptime, action, reasons, and durability; native USB required | Yes | Yes | Feature | Yes | Yes |
 | Radio | [`get radio`; `set radio ...`](cli_commands.md#view-or-change-this-nodes-radio-parameters) | All text CLI roles | Yes | Yes | Yes | Yes | Yes |
-| Radio | [`get tx`; `set tx <dbm>`](cli_commands.md#view-or-change-this-nodes-transmit-power) | Board TX-power limits apply | Yes | Yes | Yes | Yes | Yes |
+| Radio | [`get tx`; `set tx <dbm>`](cli_commands.md#view-or-change-this-nodes-transmit-power) | Board TX-power limits apply; busy changes apply automatically | Yes | Yes | Yes | Yes | Yes |
 | Radio | [`tempradio ...`; `normalradio`](cli_commands.md#change-the-radio-parameters-for-a-set-duration) | Full parser | Yes | Yes | Yes | Yes | Yes |
 | Radio | [`get/set/del radioat`; `get/set/del tempradioat`](cli_commands.md#schedule-radio-parameter-changes) | Full parser | Yes | Yes | Yes | Yes | Yes |
 | Radio | [`get freq`; `set freq <mhz>`](cli_commands.md#view-or-change-this-nodes-frequency) | Local or authorized LoRa CLI | Yes | Yes | Yes | Yes | Yes |

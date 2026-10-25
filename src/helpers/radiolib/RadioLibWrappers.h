@@ -355,11 +355,9 @@ protected:
   virtual int16_t applyCachedTxPower(int8_t dbm) {
     return _radio->setOutputPower(dbm);
   }
-#if MESH_ENABLE_TX_BEACONS
   // External amplifiers override this in antenna dBm. The public capability
   // still checks the board's explicit limits before consulting this hook.
   virtual bool checkBeaconOutputPower(float frequency_mhz, int8_t dbm) const;
-#endif
   virtual bool applyRxBoostedGainMode(bool) { return false; }
 #if MESH_ENABLE_CARRIER_TOOLS || !defined(STM32_PLATFORM)
   virtual int16_t enterCarrierWave() { return _radio->transmitDirect(); }
@@ -574,6 +572,8 @@ public:
   bool setParams(float freq, float bw, uint8_t sf, uint8_t cr,
                  const uint32_t* rx_ps_timings = NULL);
   uint32_t getRngSeed();
+  bool isTxPowerValid(int8_t dbm) const;
+  bool isTxPowerApplied(int8_t dbm) const;
   bool setTxPower(int8_t dbm);
   mesh::RadioParamApplyResult trySetTxPower(int8_t dbm);
 

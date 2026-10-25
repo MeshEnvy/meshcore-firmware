@@ -617,6 +617,7 @@ jobs:
           python3 -B test/test_room_sensor_radio_restore.py -v
           python3 -B test/test_common_radio_persistence.py -v
           python3 -B test/test_common_cli_save_results.py -v
+          python3 -B test/test_common_cli_tx_pending.py -v
           python3 -B test/test_common_prefs_uncertain_reply.py -v
           python3 -B test/test_common_prefs_apply_reply.py -v
           python3 -B test/test_common_prefs_commit.py -v

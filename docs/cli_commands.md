@@ -1878,8 +1878,15 @@ minimum and return to it exactly when it is safe.
 
 **Notes:** This setting only controls the power level of the LoRa chip. Some nodes have an additional power amplifier stage which increases the total output. Refer to the node's manual for the correct setting to use. **Setting a value too high may violate the laws in your country.**
 
-The command strictly rejects malformed values and saves the new preference
-only after the active radio driver accepts it. On LR2021, the chip range is
+The command strictly rejects malformed values. It applies power immediately
+when the radio is free. A busy radio returns `OK - saved; pending`; firmware
+then applies the saved value automatically, without another command or reboot.
+A newer successful change replaces the pending value. A failed save is reported
+as an error and does not replace the previous runtime intent. Radio 2 and
+temporary radio profiles do not require a manual retry. Background application
+waits for active Morse, beacons and carrier-wave tests to finish.
+
+On LR2021, the chip range is
 `-9` to `22` dBm below 1500 MHz and `-19` to `12` dBm above 1500 MHz. A lower
 board-specific external-PA limit still takes precedence. A saved profile is
 clamped to the applicable limit when its frequency changes; temporary radio

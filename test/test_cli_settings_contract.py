@@ -63,6 +63,7 @@ COMMON_QUERY_EXCEPTIONS = {
     'radio.rxps.status': 'Live radio status for set radio.rxps',
     'role': 'Build-selected firmware role',
     'rxps.wd': 'Runtime RX power-saving recovery counters',
+    'tx.status': 'HIL-only applied-power verification for guarded RF tests',
     'wifi.pwd': 'Setter is in the observer or standalone-WiFi delegate',
 }
 OBSERVER_QUERY_EXCEPTIONS = {
@@ -84,6 +85,7 @@ class CLISettingsContractTest(unittest.TestCase):
         self.assertIsNotNone(compiler, 'Host C++ compiler required')
         profiles = {
             'minimal': [],
+            'hil': ['MESH_HIL_TX_FREQ_MHZ'],
             'nrf52_gps_sd': ['NRF52_PLATFORM', 'ENV_INCLUDE_GPS', 'OTA_SD_STORE', 'NRF52_POWER_MANAGEMENT'],
             'esp32_web': ['ESP_PLATFORM', 'ESP32_PLATFORM', 'ADMIN_PASSWORD', 'MESH_USB_LOGGING_AVAILABLE'],
             'esp32_g3': ['ESP_PLATFORM', 'ESP32_PLATFORM', 'STATION_G3_ESP32'],
@@ -216,6 +218,7 @@ class CLISettingsContractTest(unittest.TestCase):
             'public.key',                            # Read-only public identity
             'pwrmgt.bootreason', 'role',             # Boot/build facts
             'radio.rxps.config',                     # Detail view of radio.rxps
+            'tx.status',                             # HIL-only applied-power verification
             'wifi.status', 'wifi.ip',                # Live WiFi link state
         })
 
@@ -268,6 +271,10 @@ class CLISettingsContractTest(unittest.TestCase):
                     fixture = fixture.replace('@GET@', ' else '.join(get_blocks))
                     fixture = fixture.replace('@DISPATCH@', dispatch)
                     fixture = fixture.replace('@KEY_EQUALS@', extract_braced(source, 'static bool configKeyEquals('))
+                    fixture = fixture.replace('@TX_METHODS@', '\n'.join(
+                        extract_braced(source, signature).replace('CommonCLI::', 'CLI::')
+                        for signature in ('void CommonCLI::applyAndSaveTxPower(',
+                                          'void CommonCLI::servicePendingTxPower(')))
                     cpp.write_text(fixture, encoding='utf-8')
                     sanitizers = (['-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                                    '-fno-pie', '-no-pie'] if sys.platform.startswith('linux') else [])

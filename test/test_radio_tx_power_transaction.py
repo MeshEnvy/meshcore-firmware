@@ -31,12 +31,16 @@ struct Chip {
     return power_result;
   }
   int transmitDirect() { ++keys; return direct_result; }
+  int checkOutputPower(int8_t requested, int8_t*) const {
+    return requested >= -9 && requested <= 22 ? 0 : -1;
+  }
 };
 struct RadioLibWrapper {
   Chip chip;
   Chip* _radio = &chip;
   uint8_t state = STATE_RX;
   int8_t _cur_dbm = 17;
+  float _cur_freq = 915;
   bool _dbm_valid = true, _dbm_applied = true, _profile_repair_required = false;
   bool _profile_refresh_required = false, _rx_hold_continuous = false;
   bool _rx_ps_armed = true, _cw_active = false, _cw_stopping = false;
@@ -55,10 +59,37 @@ struct RadioLibWrapper {
   uint8_t beginReconfigure();
   void endReconfigure(bool);
   bool setTxPower(int8_t);
+  bool isTxPowerValid(int8_t) const;
+  bool isTxPowerApplied(int8_t) const;
+  virtual bool checkBeaconOutputPower(float, int8_t) const;
   Result trySetTxPower(int8_t);
 };
 @METHODS@
 int main() {
+  // Status needs proof of current normal hardware power, without SPI reads.
+  {
+    RadioLibWrapper radio;
+    assert(radio.isTxPowerApplied(17) && !radio.isTxPowerApplied(2));
+    radio.pending = radio.busy = radio.packet = true;
+    assert(radio.isTxPowerApplied(17));
+    radio._dbm_applied = false;
+    assert(!radio.isTxPowerApplied(17));
+    radio._dbm_applied = true; radio._dbm_valid = false;
+    assert(!radio.isTxPowerApplied(17));
+    radio._dbm_valid = true; radio._profile_repair_required = true;
+    assert(!radio.isTxPowerApplied(17));
+    radio._profile_repair_required = false; radio._cw_active = true;
+    assert(!radio.isTxPowerApplied(17));
+    radio._cw_active = false; radio._beacon_owned = true;
+    assert(!radio.isTxPowerApplied(17));
+    assert(!radio.chip.writes && !radio.chip.standbys && !radio.irq_reads
+           && !radio.busy_reads && !radio.packet_reads && !radio.claims);
+  }
+  {
+    RadioLibWrapper radio; radio.pending = radio.busy = radio.packet = true;
+    assert(!radio.isTxPowerValid(23) && radio.trySetTxPower(23) == Result::FAILED);
+    assert(!radio.chip.writes && !radio.chip.standbys && !radio.irq_reads && !radio.claims);
+  }
   // A temporary receive/TX condition does not become a hardware rejection.
   for (unsigned reason = 0; reason < 4; ++reason) {
     RadioLibWrapper radio;
@@ -76,6 +107,7 @@ int main() {
     assert(radio.trySetTxPower(10) == Result::APPLIED);
     assert(radio.chip.writes == 1 && radio.chip.standbys == 1 && radio.resumes == 1);
     assert(radio._cur_dbm == 10 && radio._dbm_valid && radio._dbm_applied && radio.chip.power == 10);
+    assert(radio.isTxPowerApplied(10) && !radio.isTxPowerApplied(17));
   }
   // App saves can resend the current power while an unread packet owns RX.
   for (unsigned reason = 0; reason < 4; ++reason) {
@@ -132,11 +164,13 @@ int main() {
     radio.chip.power_result = -705; radio.chip.write_before_failure = true;
     assert(radio.trySetTxPower(10) == Result::FAILED);
     assert(radio._cur_dbm == 17 && radio.chip.power == 10 && !radio._dbm_applied);
+    assert(!radio.isTxPowerApplied(17) && !radio.isTxPowerApplied(10));
     radio.busy = true;
     assert(radio.trySetTxPower(17) == Result::BUSY && radio.chip.writes == 1);
     radio.busy = false; radio.chip.power_result = 0;
     assert(radio.trySetTxPower(17) == Result::APPLIED && radio.chip.writes == 2);
     assert(radio.chip.power == 17 && radio._dbm_applied);
+    assert(radio.isTxPowerApplied(17));
     assert(radio.trySetTxPower(17) == Result::APPLIED && radio.chip.writes == 2);
   }
   // Real command and standby failures remain failures, with the requested cache intact.
@@ -157,12 +191,92 @@ int main() {
 
 
 class RadioTxPowerTransactionTests(unittest.TestCase):
+    def test_pure_family_and_board_limits_preserve_band_clipping(self):
+        source = (ROOT / "src/helpers/radiolib/RadioLibWrappers.cpp").read_text()
+        validator = method(source, "bool RadioLibWrapper::isTxPowerValid(")
+        checker = method(source, "bool RadioLibWrapper::checkBeaconOutputPower(")
+        dac = method((ROOT / "src/helpers/radiolib/DacPaSX1276Wrapper.h").read_text(),
+                     "bool checkBeaconOutputPower(")
+        code = r'''
+#include <cassert>
+#include <cstdint>
+#include <helpers/radiolib/LR2021Band.h>
+#define RADIOLIB_ERR_NONE 0
+struct Chip {
+  mutable unsigned checks = 0;
+  int checkOutputPower(int8_t power, int8_t*, bool rfo = false) const {
+    ++checks;
+#if MESH_RADIO_PROFILE_CHIP == 1276 || MESH_RADIO_PROFILE_CHIP == 1272
+    return rfo ? (power >= -4 && power <= 15 ? 0 : -1)
+               : ((power >= 2 && power <= 17) || power == 20 ? 0 : -1);
+#else
+    return power >= -9 && power <= 22 ? 0 : -1;
+#endif
+  }
+};
+using SX1276 = Chip;
+using SX1272 = Chip;
+struct RadioLibWrapper {
+  Chip chip;
+  Chip* _radio = &chip;
+  float _cur_freq = 2440;
+  virtual bool checkBeaconOutputPower(float, int8_t) const;
+  bool isTxPowerValid(int8_t) const;
+};
+@CHECKER@
+@VALIDATOR@
+struct DacWrapper : RadioLibWrapper {
+  int8_t _min_dbm = 17, _max_dbm = 30;
+  @DAC@
+};
+int main() {
+  RadioLibWrapper radio;
+  DacWrapper amplified;
+  for (int power = -128; power <= 127; ++power) {
+    bool board_ok = true;
+#ifdef MIN_LORA_TX_POWER
+    board_ok = board_ok && power >= MIN_LORA_TX_POWER;
+#endif
+#ifdef MAX_LORA_TX_POWER
+    board_ok = board_ok && power <= MAX_LORA_TX_POWER;
+#endif
+#if MESH_RADIO_PROFILE_CHIP == 1121 || MESH_RADIO_PROFILE_CHIP == 2021
+    // Ordinary desired power remains valid on a lower-power temporary band.
+    const bool chip_ok = true;
+#elif MESH_RADIO_PROFILE_CHIP == 1276 || MESH_RADIO_PROFILE_CHIP == 1272
+    const bool chip_ok = (power >= -4 && power <= 17) || power == 20;
+#else
+    const bool chip_ok = power >= -9 && power <= 22;
+#endif
+    assert(radio.isTxPowerValid(int8_t(power)) == (board_ok && chip_ok));
+    assert(amplified.isTxPowerValid(int8_t(power)) ==
+#if MESH_RADIO_PROFILE_CHIP == 1121 || MESH_RADIO_PROFILE_CHIP == 2021
+           board_ok);
+#else
+           (board_ok && power >= 17 && power <= 30));
+#endif
+  }
+#if MESH_RADIO_PROFILE_CHIP == 1121 || MESH_RADIO_PROFILE_CHIP == 2021
+  assert(radio.chip.checks == 0);
+#endif
+  assert(amplified.chip.checks == 0);
+}
+'''
+        code = code.replace("@CHECKER@", checker).replace("@VALIDATOR@", validator).replace("@DAC@", dac)
+        for family in (1262, 1268, 68, 1276, 1272, 1110, 1121, 2021):
+            for limits in ((), ("-DMIN_LORA_TX_POWER=17", "-DMAX_LORA_TX_POWER=30")):
+                with self.subTest(family=family, limits=limits):
+                    compile_run(code, defines=(f"-DMESH_RADIO_PROFILE_CHIP={family}", *limits))
+
     def test_actual_busy_retry_noop_ownership_and_failures(self):
         source = (ROOT / "src/helpers/radiolib/RadioLibWrappers.cpp").read_text()
         methods = "\n".join(method(source, signature) for signature in (
             "uint8_t RadioLibWrapper::beginReconfigure(",
             "void RadioLibWrapper::endReconfigure(",
             "bool RadioLibWrapper::setTxPower(",
+            "bool RadioLibWrapper::isTxPowerValid(",
+            "bool RadioLibWrapper::isTxPowerApplied(",
+            "bool RadioLibWrapper::checkBeaconOutputPower(",
             "mesh::RadioParamApplyResult RadioLibWrapper::trySetTxPower("))
         for carrier_tools in (0, 1):
             with self.subTest(carrier_tools=carrier_tools):

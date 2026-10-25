@@ -564,6 +564,13 @@ public:
   virtual void eraseLogFile() = 0;
   virtual void dumpLogFile() = 0;
   virtual bool setTxPower(int8_t power_dbm) = 0;
+  virtual mesh::RadioParamApplyResult trySetTxPower(int8_t power_dbm) {
+    return setTxPower(power_dbm) ? mesh::RadioParamApplyResult::APPLIED
+                               : mesh::RadioParamApplyResult::FAILED;
+  }
+#if defined(MESH_HIL_TX_FREQ_MHZ)
+  virtual bool isTxPowerApplied(int8_t) const { return false; }
+#endif
   virtual void formatNeighborsReply(char *reply) = 0;
   // A zero-length prefix clears the whole table; pubkey may be null then.
   // Nonempty prefixes must contain 1..PUB_KEY_SIZE bytes.
@@ -941,6 +948,8 @@ class CommonCLI {
   bool _com_prefs_needs_upgrade = false;  // old-format legacy prefs detected; rewrite once after load
   bool _common_save_result_known = false;
   bool _common_save_succeeded = false;
+  bool _tx_power_pending = false;
+  uint32_t _tx_power_retry_at = 0;
   uint32_t _prefs_save_failures = 0;
   mesh::RadioProfileCLI _radio_profiles;
 #if MESH_ENABLE_TX_BEACONS
@@ -961,6 +970,7 @@ class CommonCLI {
       PrefsSaveRouting::Scope scope = PrefsSaveRouting::Scope::Common);
   bool trySavePrefs(
       PrefsSaveRouting::Scope scope = PrefsSaveRouting::Scope::Common);
+  void applyAndSaveTxPower(int8_t power, char* reply);
   bool applyAndSaveAdcMultiplier(float multiplier, char* reply, size_t capacity);
   bool saveObserverPrefs();
   void loadPrefsInt(FILESYSTEM* _fs, const char* filename);
@@ -1051,6 +1061,8 @@ public:
 #endif
   uint8_t batteryPercent(uint16_t mv) const;
   bool hasActiveUserGpioTimer() const;
+  bool hasPendingTxPower() const { return _tx_power_pending; }
+  void servicePendingTxPower();
   void handleCommand(uint32_t sender_timestamp, char* command, char* reply);
   mesh::MainBoard* getBoard() { return _board; }
   uint8_t buildAdvertData(uint8_t node_type, uint8_t* app_data);

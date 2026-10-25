@@ -75,6 +75,8 @@ public:
         == mesh::RadioParamApplyResult::APPLIED;
   }
   void powerOff() {}
+  bool isTxPowerValid(int8_t /*dbm*/) const { return true; }
+  bool isTxPowerApplied(int8_t /*dbm*/) const { return true; }
   bool setTxPower(int8_t /*dbm*/) { return true; }
   mesh::RadioParamApplyResult trySetTxPower(int8_t /*dbm*/) {
     return mesh::RadioParamApplyResult::APPLIED;

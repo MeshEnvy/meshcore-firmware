@@ -87,6 +87,7 @@ struct Fleet {
 };
 struct CLI {
   Fleet fleet;
+  void servicePendingTxPower() {}
   Profiles profiles;
   struct NoMorseReply {
     void complete(const void*) {}

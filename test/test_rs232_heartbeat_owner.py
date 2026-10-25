@@ -144,7 +144,10 @@ struct MyMesh : Callbacks {
 #endif
   }
   struct { bool pending = false; } deferred_cli_command;
-  struct { bool hasActiveUserGpioTimer() const { return false; } } _cli;
+  struct {
+    bool hasActiveUserGpioTimer() const { return false; }
+    bool hasPendingTxPower() const { return false; }
+  } _cli;
   struct {
     bool isWatchdogObserving() const { return false; }
     bool isCalibratingNoiseFloor() const { return false; }

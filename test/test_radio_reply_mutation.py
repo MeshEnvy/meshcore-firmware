@@ -44,6 +44,7 @@ struct Profiles {
 };
 struct CLI {
   Profiles profiles;
+  void servicePendingTxPower() {}
   struct NoMorseReply {
     void complete(const void*) {}
     void fail(const void*) {}
@@ -62,6 +63,7 @@ struct Manager {
 };
 struct MyMesh : mesh::Mesh {
   CLI _cli;
+  void servicePendingTxPower() {}
   Manager manager; Manager* _mgr = &manager;
   mesh::TempRadioReplyBarrier temp_radio_reply_barrier;
   bool radio_reply_secondary = false, primary_radio_mutation_starts_temp = false;

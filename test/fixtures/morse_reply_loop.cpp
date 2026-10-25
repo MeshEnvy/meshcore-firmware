@@ -23,10 +23,11 @@ struct CommonCLI {
   ACL* _acl;
   Callbacks* _callbacks;
   struct Profiles { unsigned loops = 0; void loop() { ++loops; } } _radio_profiles;
-  unsigned management_loops = 0;
+  unsigned management_loops = 0, tx_services = 0;
   CommonCLI(ACL& acl, Callbacks& callbacks) : _acl(&acl), _callbacks(&callbacks) {}
   void loopBatteryForwarding(bool = false) {}
   void loopManagement() { ++management_loops; }
+  void servicePendingTxPower() { ++tx_services; }
   void loop();
 };
 @LOOP@
@@ -56,6 +57,7 @@ int main() {
     assert(radio.rx_starts == unsigned(allowed) && !cli._morse_reply.pending());
     assert(acl.requested_key_size == 32 && cli._radio_profiles.loops == unsigned(allowed ? 1 : 2));
     assert(cli.management_loops == unsigned(allowed ? 1 : 2));
+    assert(cli.tx_services == cli.management_loops);
     mesh::usable = true; mesh::current = mesh::MorseSettings();
   }
 }

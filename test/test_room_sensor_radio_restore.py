@@ -75,6 +75,7 @@ struct Driver {
   uint8_t beginReconfigure();
   void endReconfigure(bool);
   bool setTxPower(int8_t);
+  bool isTxPowerValid(int8_t) const { return true; }
   mesh::RadioParamApplyResult trySetTxPower(int8_t);
 } radio_driver;
 @WRAPPER_METHODS@

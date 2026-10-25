@@ -88,6 +88,7 @@ struct RadioLibWrapper {
   virtual bool supportsMeshtext() const { return false; }
   virtual bool applyProtocol(mesh::RadioProfileProtocol p) { return p == mesh::RadioProfileProtocol::MeshCore; }
   virtual int16_t applyCachedTxPower(int8_t) { return 0; }
+  virtual bool checkBeaconOutputPower(float, int8_t) const { return false; }
   bool setTxPower(int8_t value) { return applyCachedTxPower(value) == 0; }
   bool radioDeepInit() { _radio->resetPacketDefaults(); return true; }
   bool registerInterruptAction() { return true; }

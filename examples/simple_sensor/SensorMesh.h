@@ -73,7 +73,7 @@ public:
   void loop();
   bool canRecoverUsbLogging() const {
     return dirty_contacts_expiry == 0 && !hasOutbound() && !isAnyTempRadioActive()
-        && !hasPendingOtaApply() && !saved_radio_apply_pending
+        && !hasPendingOtaApply() && !saved_radio_apply_pending && !_cli.hasPendingTxPower()
         && set_radio_at == 0;
   }
   void handleCommand(uint32_t sender_timestamp, char* command, char* reply,
@@ -115,6 +115,10 @@ public:
   void eraseLogFile() override { }
   void dumpLogFile() override { }
   bool setTxPower(int8_t power_dbm) override;
+  mesh::RadioParamApplyResult trySetTxPower(int8_t power_dbm) override;
+#if defined(MESH_HIL_TX_FREQ_MHZ)
+  bool isTxPowerApplied(int8_t power_dbm) const override;
+#endif
   bool setRxPowerSaving(bool enable, uint32_t rx_us, uint32_t sleep_us) override;
   void recalibrateNoiseFloor() override { _radio->recalibrateNoiseFloor(); }
   void getRxPsWatchdogCounts(uint32_t* soft, uint32_t* hard) override;

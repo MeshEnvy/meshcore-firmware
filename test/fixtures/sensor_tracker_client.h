@@ -169,6 +169,7 @@ public:
   FakeTrigger* alert_tasks[4] = {&alert1, &alert2};
   int num_alert_tasks = 2;
   struct CLI {
+    void servicePendingTxPower() {}
     bool batteryAllowsForward(bool) const { return true; }
     bool batteryAllowsTransmit(const mesh::Packet*) const { return true; }
     struct NoMorseReply { void complete(const void*) {} void fail(const void*) {} } morse;
@@ -179,6 +180,7 @@ public:
     SensorMesh* owner = nullptr;
     void loop();
     bool hasActiveUserGpioTimer() const { return active; }
+    bool hasPendingTxPower() const { return false; }
   } _cli;
   struct ClockSync { unsigned observed = 0, loops = 0;
     void loop() { ++loops; }

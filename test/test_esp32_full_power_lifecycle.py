@@ -130,6 +130,7 @@ struct RoleCLI {
   Board* getBoard() { return &board; }
   ObserverPrefs* getObserverPrefs() { return &prefs; }
   bool hasActiveUserGpioTimer() const { return false; }
+  bool hasPendingTxPower() const { return false; }
 };
 struct AbstractBridge {
   bool running = false, stopping = false, allow_flash = true;

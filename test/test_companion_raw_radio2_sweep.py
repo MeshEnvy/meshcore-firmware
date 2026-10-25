@@ -19,7 +19,8 @@ SPEC.loader.exec_module(BENCH)
 
 
 class FakePair:
-    def __init__(self, *, loss=False, bad_guard=False, primary_tx=0, conflict=False, inactive=False):
+    def __init__(self, *, loss=False, bad_guard=False, primary_tx=0, conflict=False, inactive=False,
+                 initial_power=21, pending_reads=0):
         self.clock = 100.0
         self.last_source = None
         self.last_payload = None
@@ -34,7 +35,10 @@ class FakePair:
                 self.name, self.preamble = name, 128
                 self.commands, self.requests = [], []
                 self.tx = 0
-                self.tx_power = 21
+                self.tx_power = initial_power
+                self.applied_tx_power = 21 if pending_reads else initial_power
+                self.pending_reads = pending_reads
+                self.tx_verified = False
 
             def channel_name(self, slot):
                 return "mt-conflict" if conflict else "Public"
@@ -49,8 +53,16 @@ class FakePair:
                     return f"> RX=0,0 TX={primary_tx},{self.tx}; active=radio2"
                 if command == "get tx":
                     return f"> {self.tx_power}"
+                if command == "get tx.status":
+                    if self.pending_reads:
+                        self.pending_reads -= 1
+                        return f"> desired={self.tx_power},apply=pending"
+                    self.applied_tx_power = self.tx_power
+                    self.tx_verified = self.applied_tx_power == 2
+                    return f"> desired={self.tx_power},apply=applied"
                 if command == "set tx 2":
                     self.tx_power = 2
+                    return "OK - saved; pending" if self.pending_reads else "OK"
                 if command.startswith("set radio2 "):
                     self.preamble = int(command.rsplit(",", 1)[1])
                 if command == "get radio2":
@@ -62,6 +74,8 @@ class FakePair:
                 return "OK"
 
             def request(self, command, expected):
+                assert all(node.tx_verified and node.applied_tx_power == 2
+                           for node in owner.nodes.values()), "RF before verified low TX power"
                 self.requests.append(command)
                 assert command[:2] == b"\x19\x00"
                 assert expected == (0,)
@@ -222,35 +236,86 @@ class CompanionRawRadio2SweepTest(unittest.TestCase):
         self.assertEqual(result["unexpected_raw"], 1)
         self.assertEqual(result["ignored_frames"], 1)
 
-    def test_existing_low_tx_skips_setter_and_transient_busy_is_bounded(self):
-        node = SimpleNamespace(cli=mock.Mock(return_value="> 2"))
+    def test_existing_low_tx_still_requires_applied_status(self):
+        node = SimpleNamespace(cli=mock.Mock(side_effect=("> 2", "> desired=2,apply=applied")))
         result = BENCH.ensure_low_tx(node)
         self.assertEqual(result["setter_attempts"], 0)
-        node.cli.assert_called_once_with("get tx")
-        node = SimpleNamespace(cli=mock.Mock(side_effect=("> 21",
-            RuntimeError("Companion CLI set tx rejected: Error: radio busy or TX power rejected"), "OK", "> 2")))
-        with mock.patch.object(BENCH.time, "sleep") as sleep:
-            result = BENCH.ensure_low_tx(node)
-        self.assertEqual(result["setter_attempts"], 2)
-        sleep.assert_called_once_with(0.25)
-        self.assertEqual(node.cli.call_args_list[-1], mock.call("get tx"))
+        self.assertEqual(node.cli.call_args_list, [mock.call("get tx"), mock.call("get tx.status")])
 
-    def test_unknown_tx_errors_or_wrong_readback_fail_closed(self):
-        for responses in (("> 21", RuntimeError("Companion CLI set tx rejected: Error: invalid TX power")),
-                          ("> 21", "OK", "> 21")):
+    def test_pending_power_is_polled_without_resubmitting_same_or_changed_desired_value(self):
+        for initial in (2, 21):
+            with self.subTest(initial=initial):
+                responses = [f"> {initial}"]
+                if initial != 2:
+                    responses.append("OK - saved; pending")
+                responses += ["> desired=2,apply=pending"] * 2 + ["> desired=2,apply=applied"]
+                node = SimpleNamespace(cli=mock.Mock(side_effect=responses))
+                with mock.patch.object(BENCH.time, "sleep") as sleep:
+                    result = BENCH.ensure_low_tx(node)
+                expected = [mock.call("get tx")]
+                if initial != 2:
+                    expected.append(mock.call("set tx 2"))
+                expected += [mock.call("get tx.status")] * 3
+                self.assertEqual(node.cli.call_args_list, expected)
+                self.assertEqual(result["setter_attempts"], int(initial != 2))
+                self.assertEqual(result["status_polls"], 3)
+                self.assertEqual(sleep.call_args_list, [mock.call(0.25)] * 2)
+
+    def test_pending_apply_blocks_all_rf_until_both_radios_confirm_low_power(self):
+        for initial in (2, 21):
+            with self.subTest(initial=initial):
+                pair = FakePair(initial_power=initial, pending_reads=2)
+                result, _ = self.run_matrix(pair)
+                self.assertEqual(result["result"], "PASS", result.get("failure"))
+                self.assertEqual(pair.total_sent, 32)
+                for node in pair.nodes.values():
+                    self.assertEqual(node.commands.count("set tx 2"), int(initial != 2))
+                    self.assertEqual(node.commands.count("get tx.status"), 3)
+
+    def test_unapplied_power_times_out_without_setter_resubmission_or_rf(self):
+        for initial in (2, 21):
+            with self.subTest(initial=initial):
+                pair = FakePair(initial_power=initial, pending_reads=1000)
+                result, _ = self.run_matrix(pair)
+                self.assertEqual(result["result"], "FAIL")
+                self.assertIn("bounded setup window", result["failure"]["message"])
+                self.assertEqual(pair.total_sent, 0)
+                for node in pair.nodes.values():
+                    self.assertLessEqual(node.commands.count("set tx 2"), int(initial != 2))
+                    self.assertFalse(any(command.startswith("set radio2 ") for command in node.commands))
+        node = SimpleNamespace(cli=mock.Mock(side_effect=("> 21", "OK - saved; pending",
+            "> desired=2,apply=pending", "> desired=2,apply=pending")))
+        with mock.patch.object(BENCH.time, "sleep"), \
+                mock.patch.object(BENCH.time, "monotonic", side_effect=(0, 1, 8)):
+            with self.assertRaisesRegex(BENCH.Failure, "bounded setup window"):
+                BENCH.ensure_low_tx(node)
+        self.assertEqual(node.cli.call_args_list.count(mock.call("set tx 2")), 1)
+
+    def test_missing_malformed_or_contradictory_status_fails_closed(self):
+        for initial in (2, 21):
+            for status in ("OK", "unknown config", "", "> 2", "> desired=21,apply=applied",
+                           "> desired=21,apply=pending", "> desired=2,apply=unknown",
+                           "> desired=2,apply=applied; desired=21", "> desired=2,apply=applied\nOK"):
+                with self.subTest(initial=initial, status=status):
+                    pair = FakePair(initial_power=initial)
+                    original = pair.nodes["b"].cli
+                    pair.nodes["b"].cli = lambda command: status if command == "get tx.status" else original(command)
+                    result, _ = self.run_matrix(pair)
+                    self.assertEqual(result["result"], "FAIL")
+                    self.assertEqual(pair.total_sent, 0)
+                    self.assertFalse(any(command.startswith("set radio2 ")
+                                         for node in pair.nodes.values() for command in node.commands))
+
+    def test_unknown_tx_setter_errors_or_missing_numeric_readback_fail_closed(self):
+        for responses in (("unknown config",),
+                          ("> 21", RuntimeError("Companion CLI set tx rejected: Error: invalid TX power")),
+                          ("> 21", "Error: radio busy or TX power rejected"),
+                          ("> 21", "unknown config"), ("> 21", "OK but rejected")):
             with self.subTest(responses=responses):
                 node = SimpleNamespace(cli=mock.Mock(side_effect=responses))
                 with self.assertRaises(Exception), mock.patch.object(BENCH.time, "sleep") as sleep:
                     BENCH.ensure_low_tx(node)
                 sleep.assert_not_called()
-        def busy(command):
-            if command == "get tx":
-                return "> 21"
-            raise RuntimeError("Companion CLI set tx rejected: Error: radio busy or TX power rejected")
-        with mock.patch.object(BENCH.time, "sleep"), \
-                mock.patch.object(BENCH.time, "monotonic", side_effect=(0, 1, 8)):
-            with self.assertRaisesRegex(BENCH.Failure, "bounded8-second"):
-                BENCH.ensure_low_tx(SimpleNamespace(cli=busy))
 
     def test_packet_window_rate_excludes_checkpoint_time_but_keeps_loss_timeouts(self):
         packets = [{"received": True, "raw_bytes": 64, "elapsed_seconds": 0.1, "direction": "a_to_b"},

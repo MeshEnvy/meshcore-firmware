@@ -202,6 +202,10 @@ void CommonRadioPrefs::formatRxPowerSavingStatus(char* reply, size_t reply_size)
   RXPowerSavingCLI::get(config, status, sf, bw, reply, reply_size, wire_preamble);
 }
 
+#if defined(NRF52_PLATFORM)
+// Keep shared radio parsing out of the Companion's larger command dispatcher.
+__attribute__((noinline))
+#endif
 bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timestamp, char* reply) {
   (void)sender_timestamp;
   if (command == nullptr || reply == nullptr) return false;

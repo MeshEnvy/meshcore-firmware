@@ -2424,6 +2424,7 @@ void MyMesh::onGroupPacketRecv(mesh::Packet* packet) {
 
 void MyMesh::onSendComplete(mesh::Packet* packet) {
   mesh::Mesh::onSendComplete(packet);
+  _cli.servicePendingTxPower();
   _cli.morseReply().complete(packet);
 #if MESH_ENABLE_FLEET_CONTROL
   if (_cli.fleetChannel()) _cli.fleetChannel()->complete(packet, _cli.radioProfiles());
@@ -3189,6 +3190,16 @@ void MyMesh::servicePendingSerialOutput() {
 bool MyMesh::setTxPower(int8_t power_dbm) {
   return radio_driver.setTxPower(power_dbm);
 }
+
+mesh::RadioParamApplyResult MyMesh::trySetTxPower(int8_t power_dbm) {
+  return radio_driver.trySetTxPower(power_dbm);
+}
+
+#if defined(MESH_HIL_TX_FREQ_MHZ)
+bool MyMesh::isTxPowerApplied(int8_t power_dbm) const {
+  return radio_driver.isTxPowerApplied(power_dbm);
+}
+#endif
 
 bool MyMesh::setRxPowerSaving(bool enable, uint32_t rx_us, uint32_t sleep_us) {
   return radio_driver.setRxPowerSaving(enable, rx_us, sleep_us);
@@ -4489,6 +4500,7 @@ mesh::powerdiag::Mask MyMesh::pendingWorkReason() const {
   using mesh::powerdiag::Reason;
   if (!canIdleDualRadio()) return mask(Reason::DualRadio);
   if (hasPendingOtaApply()) return mask(Reason::Ota);
+  if (_cli.hasPendingTxPower()) return mask(Reason::Scheduled);
 #if defined(ESP32_PLATFORM)
   if (mesh::wifi::networkPower().foregroundActive()) return mask(Reason::Network);
 #endif

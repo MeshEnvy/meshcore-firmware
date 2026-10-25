@@ -1453,16 +1453,18 @@ function pollResult(cb,errs,idles,acked,reqid,submitted,auth){
       fail();return;
     }
     $("#save-btn").disabled=false;
-    var fails=0,radioReboot=false;
+    var fails=0,radioReboot=false,pending=false;
     (r.results||[]).forEach(function(it){
       var ok=/^OK/i.test(it.reply);
+      var deferred=ok&&/\bpending\b/i.test(it.reply);
+      if(deferred)pending=true;
       if(!ok)fails++;
       if(!cb&&ok&&submitted&&(it.key in submitted)&&st.dirty[it.key]===submitted[it.key])delete st.dirty[it.key];
       if(it.key==="radio"){
         if(/reboot/i.test(it.reply))radioReboot=true;
       }
       var el=document.querySelector('#v-app [data-k="'+it.key+'"]');
-      if(el)chipFor(el,ok,ok?"OK":it.reply.replace(/^Err(or)?[:,]?\s*/i,""));
+      if(el)chipFor(el,ok,ok?(deferred?"Saved":"OK"):it.reply.replace(/^Err(or)?[:,]?\s*/i,""));
     });
     $("#radio-warn").classList.toggle("hide",!radioReboot);
     var failed=fails>0||r.all_ok===false;
@@ -1495,7 +1497,7 @@ function pollResult(cb,errs,idles,acked,reqid,submitted,auth){
         false,bluetoothAddressChanged?"Bluetooth address saved [OK] - rebooting":bluetoothStealthChanged?"Bluetooth stealth saved [OK] - rebooting":"Settings saved [OK] - rebooting",r.wifi_ip,rebootSeconds(r));
       reauthAfterReceipt();
       return;
-    }else toast("Saved [OK]");
+    }else toast(pending?"Saved; radio changes apply automatically":"Saved [OK]");
     if(!reauthAfterReceipt())loadConfigSoft();
   }).catch(function(e){
     if(e.message==="auth"){

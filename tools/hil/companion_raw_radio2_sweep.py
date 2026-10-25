@@ -126,35 +126,30 @@ def receive_exact(node, payload, timeout):
 
 
 def ensure_low_tx(node, timeout=8):
-    """Avoid needless radio handoffs; retry only the exact transient rejection."""
-    def read_tx():
-        reply = node.cli("get tx")
-        match = re.fullmatch(r"\s*(?:>\s*)?([+-]?\d+)\s*", reply)
-        require(match is not None, "TX power readback is missing or ambiguous")
-        return int(match[1])
-
-    initial = read_tx()
-    if initial == RF["tx_dbm"]:
-        return {"initial_dbm": initial, "verified_dbm": initial, "setter_attempts": 0}
+    """Accept power once, then prove its hardware application before any RF."""
+    reply = node.cli("get tx")
+    match = re.fullmatch(r"\s*(?:>\s*)?([+-]?\d+)\s*", reply)
+    require(match is not None, "TX power readback is missing or ambiguous")
+    initial = int(match[1])
     deadline = time.monotonic() + timeout
-    attempts = 0
+    attempts = int(initial != RF["tx_dbm"])
+    if attempts:
+        reply = node.cli("set tx 2")
+        require(reply.strip() in ("OK", "OK - saved; pending"), "TX power setter rejected")
+    polls = 0
     while True:
-        attempts += 1
-        try:
-            reply = node.cli("set tx 2")
-        except Exception as error:
-            if not re.fullmatch(r"Companion CLI set tx rejected: Error: radio busy or TX power rejected",
-                                str(error)):
-                raise
-            busy = True
-        else:
-            busy = reply.strip() == "Error: radio busy or TX power rejected"
-            require(busy or not re.match(r"(?:Error|ERR|Err)\b", reply), "TX power setter rejected")
-        if not busy:
-            require(read_tx() == RF["tx_dbm"], "TX power is not verified at2dBm; refusing transmission")
-            return {"initial_dbm": initial, "verified_dbm": RF["tx_dbm"], "setter_attempts": attempts}
+        reply = node.cli("get tx.status")
+        match = re.fullmatch(r"\s*(?:>\s*)?desired=([+-]?\d+),apply=(pending|applied)\s*", reply)
+        require(match is not None, "TX apply status is missing or ambiguous; refusing transmission")
+        require(int(match[1]) == RF["tx_dbm"],
+                "TX desired power is not2dBm; refusing transmission")
+        polls += 1
+        if match[2] == "applied":
+            return {"initial_dbm": initial, "verified_dbm": RF["tx_dbm"],
+                    "setter_attempts": attempts, "status_polls": polls, "verified_status": reply}
         remaining = deadline - time.monotonic()
-        require(remaining > 0 and attempts < 33, "TX power stayed busy for the bounded8-second setup window")
+        require(remaining > 0 and polls < 33,
+                "TX power was not applied within the bounded setup window; refusing transmission")
         time.sleep(min(0.25, remaining))
 
 

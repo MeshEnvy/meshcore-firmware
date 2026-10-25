@@ -43,7 +43,10 @@ struct MyMesh {
   MQTTBridge* bridge = nullptr;
   const AbstractBridge* activeBridge() const { return bridge; }
   struct { bool pending = false; } deferred_cli_command;
-  struct { bool hasActiveUserGpioTimer() const { return false; } } _cli;
+  struct {
+    bool hasActiveUserGpioTimer() const { return false; }
+    bool hasPendingTxPower() const { return false; }
+  } _cli;
   struct { int getNumClients() const { return 0; } } acl;
   struct { bool battery_alert_enabled = false; } _prefs;
   Radio radio_driver;

@@ -1,5 +1,6 @@
 """Compile real Companion command dispatch with local and LoRa callers."""
 from pathlib import Path
+from itertools import product
 import os
 import subprocess
 import tempfile
@@ -34,6 +35,7 @@ PREAMBLE = r'''
 #define TXT_TYPE_CLI_COMMAND 1
 uint32_t millis() { return 0; }
 namespace mesh {
+enum class RadioParamApplyResult { APPLIED, BUSY, FAILED };
 // The real Morse parser, capture paging and ownership are executed by their
 // dedicated tests. This fixture isolates unrelated local/remote CLI access.
 template <typename Radio>
@@ -117,7 +119,19 @@ struct Board {
   bool handleCommand(const char*,uint32_t,char*){return false;}
   void powerOff(){++power_offs;}
 } board;
-struct Radio {bool setTxPower(int){return true;}} radio_driver;
+struct Radio {
+  mesh::RadioParamApplyResult accepted=mesh::RadioParamApplyResult::APPLIED;
+  int8_t power=10;
+  bool power_verified=true;
+  bool isTxPowerValid(int8_t) const {return true;}
+  bool isTxPowerApplied(int8_t requested) const {return power_verified && power==requested;}
+  bool setTxPower(int requested){power=requested;power_verified=true;return true;}
+  mesh::RadioParamApplyResult trySetTxPower(int requested){
+    if(accepted==mesh::RadioParamApplyResult::APPLIED){power=requested;power_verified=true;}
+    if(accepted==mesh::RadioParamApplyResult::FAILED)power_verified=false;
+    return accepted;
+  }
+} radio_driver;
 struct AdvertDataParser {static bool isValidName(const char*){return true;}};
 struct StrHelper {static void strncpy(char* out,const char* in,size_t len){::strncpy(out,in,len);}};
 void recalcRxPowerSavingFromLevel(uint8_t,uint8_t,float,uint8_t,uint32_t*,uint32_t*){}
@@ -145,7 +159,8 @@ struct MyMesh : CompanionFleetFixture {
   int value=0; int* _ms=&value; int* _radio=&value; int* _mgr=&value;
   uint16_t _err_flags=0;
   bool _radio_available=false, save_ok=true;
-  bool saved_radio_apply_pending=false;
+  bool saved_radio_apply_pending=false, command_radio_apply_pending=false, tx_power_apply_pending=false;
+  uint32_t tx_power_apply_retry_at=0;
   unsigned radio_apply_retry_at=0;
   uint8_t radio_apply_failures=0;
   int resets=0, saves=0;
@@ -291,6 +306,40 @@ int main() {
     assert(node.handleCommand(command,0,reply));
     assert(!strcmp(reply,"OK") && board.power_offs==previous+1);
   }
+  // Both directly attached and on-air CLI replies describe accepted durable
+  // intent. Request prefixes and the fixed 160-byte reply boundary survive.
+  node.save_ok=true;node._radio_available=true;
+  radio_driver.accepted=mesh::RadioParamApplyResult::BUSY;
+  for(uint32_t stamp:{0u,100u}) {
+    char bounded[162];memset(bounded,0x5A,sizeof(bounded));
+    assert(node.handleCommand("A7|set tx 17",stamp,bounded+1));
+    assert(!strcmp(bounded+1,"A7|OK - saved; pending"));
+    assert(bounded[0]==0x5A && bounded[161]==0x5A);
+    assert(node._prefs.tx_power_dbm==17 && node.tx_power_apply_pending);
+#if defined(MESH_HIL_TX_FREQ_MHZ)
+    assert(node.handleCommand("A7|get tx.status",stamp,bounded+1));
+    assert(!strcmp(bounded+1,"A7|> desired=17,apply=pending"));
+    assert(bounded[0]==0x5A && bounded[161]==0x5A);
+#else
+    assert(!node.handleCommand("A7|get tx.status",stamp,bounded+1));
+#endif
+    node.onCLICommandRecv(ContactInfo{},nullptr,stamp,"B8|set tx 12",reply);
+    assert(!strcmp(reply,"B8|OK - saved; pending") && node._prefs.tx_power_dbm==12);
+  }
+  radio_driver.accepted=mesh::RadioParamApplyResult::APPLIED;
+  assert(node.handleCommand("set tx 15",0,reply) && !strcmp(reply,"OK"));
+  assert(!node.tx_power_apply_pending);
+#if defined(MESH_HIL_TX_FREQ_MHZ)
+  assert(node.handleCommand("get tx.status",0,reply) && !strcmp(reply,"> desired=15,apply=applied"));
+  radio_driver.power_verified=false;
+  assert(node.handleCommand("get tx.status",0,reply) && !strcmp(reply,"> desired=15,apply=pending"));
+  radio_driver.power_verified=true;node._radio_available=false;
+  assert(node.handleCommand("get tx.status",0,reply) && !strcmp(reply,"> desired=15,apply=pending"));
+  node._radio_available=true;
+  assert(node.handleCommand("get tx.status",0,reply) && !strcmp(reply,"> desired=15,apply=applied"));
+#else
+  assert(!node.handleCommand("get tx.status",0,reply));
+#endif
   // Exercise the real timezone dispatch and typed transaction helper, not a
   // fixture-only setter: a failed save must preserve the exact fraction.
   node.save_ok=true;
@@ -429,14 +478,15 @@ int main() {
         header = (ROOT / "examples/companion_radio/MyMesh.h").read_text()
         preamble = PREAMBLE.replace("@SAVE_PREFERENCE@", extract_braced(
             header, "template <typename T> bool savePreference("))
-        for export, webconfig in ((0, False), (1, False), (0, True), (1, True)):
-            with self.subTest(export=export, webconfig=webconfig), tempfile.TemporaryDirectory() as temp:
+        for export, webconfig, hil in product((0, 1), (False, True), (False, True)):
+            with self.subTest(export=export, webconfig=webconfig, hil=hil), tempfile.TemporaryDirectory() as temp:
                 binary = Path(temp) / "test"
                 result = subprocess.run([
                     "c++", "-std=c++17", "-x", "c++", "-", "-I"+str(ROOT / "src"),
                     "-I"+str(ROOT / "test/fixtures"),
                     "-DENABLE_PRIVATE_KEY_EXPORT="+str(export),
                     "-DMESH_ENABLE_LOST_REPLY=1",
+                    *(["-DMESH_HIL_TX_FREQ_MHZ=907.125f"] if hil else []),
                     *(["-DWITH_WEBCONFIG=1"] if webconfig else []),
                     *SANITIZER_FLAGS, "-o", str(binary),
                 ], input=preamble+implementation+SCENARIOS, text=True, capture_output=True)

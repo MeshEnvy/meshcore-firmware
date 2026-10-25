@@ -4376,6 +4376,7 @@ bool MyMesh::sendRepeatersFloodText(const char* text, const TransportKey* scope,
 
 void MyMesh::onSendComplete(mesh::Packet* packet) {
   mesh::Mesh::onSendComplete(packet);
+  _cli.servicePendingTxPower();
   _cli.morseReply().complete(packet);
 #if MESH_ENABLE_FLEET_CONTROL
   if (_cli.fleetChannel()) _cli.fleetChannel()->complete(packet, _cli.radioProfiles());
@@ -5881,6 +5882,16 @@ void MyMesh::servicePendingSerialOutput() {
 bool MyMesh::setTxPower(int8_t power_dbm) {
   return radio_driver.setTxPower(power_dbm);
 }
+
+mesh::RadioParamApplyResult MyMesh::trySetTxPower(int8_t power_dbm) {
+  return radio_driver.trySetTxPower(power_dbm);
+}
+
+#if defined(MESH_HIL_TX_FREQ_MHZ)
+bool MyMesh::isTxPowerApplied(int8_t power_dbm) const {
+  return radio_driver.isTxPowerApplied(power_dbm);
+}
+#endif
 
 bool MyMesh::setRxPowerSaving(bool enable, uint32_t rx_us, uint32_t sleep_us) {
   bool ok = radio_driver.setRxPowerSaving(enable, rx_us, sleep_us);
@@ -14791,7 +14802,8 @@ mesh::powerdiag::Mask MyMesh::pendingWorkReason() const {
 #if defined(WITH_WEBCONFIG) || defined(ETHERNET_ENABLED)
   if (_local_cli_output.busy()) return mask(Reason::SerialIO);
 #endif
-  if (deferred_cli_command.pending || pending_self_advert || _cli.hasActiveUserGpioTimer()) return mask(Reason::Scheduled);
+  if (deferred_cli_command.pending || pending_self_advert || _cli.hasActiveUserGpioTimer()
+      || _cli.hasPendingTxPower()) return mask(Reason::Scheduled);
 #if defined(WITH_BRIDGE)
   const AbstractBridge* active_bridge = activeBridge();
   if (active_bridge && active_bridge->isRunning()) {

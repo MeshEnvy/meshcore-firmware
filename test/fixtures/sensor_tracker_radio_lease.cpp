@@ -95,6 +95,7 @@ struct CLI {
   bool scheduled = false;
   unsigned attempts = 0;
   bool hasActiveUserGpioTimer() const { return false; }
+  bool hasPendingTxPower() const { return false; }
   void loop();
 };
 class SensorMesh : public mesh::Mesh {

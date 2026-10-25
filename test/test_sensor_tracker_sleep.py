@@ -31,7 +31,11 @@ struct Radio {bool watchdog=false,calibration=false;
  bool isWatchdogObserving()const{return watchdog;}
  bool isCalibratingNoiseFloor()const{return calibration;}
 } radio_driver;
-struct Cli {bool gpio=false;bool hasActiveUserGpioTimer()const{return gpio;}};
+struct Cli {
+ bool gpio=false,tx_pending=false;
+ bool hasActiveUserGpioTimer()const{return gpio;}
+ bool hasPendingTxPower()const{return tx_pending;}
+};
 struct Manager {int queued=0;int getOutboundTotal()const{return queued;}};
 struct Clock {uint32_t now=100;uint32_t getCurrentTime()const{return now;}};
 class SensorMesh {
@@ -94,7 +98,7 @@ int main(){
  s.tracker_storage_fault=false;s.tracker_next_check=1900;
  // All standard radio/console/update owners veto RF sleep.
  for(bool* busy:{&s.board.usb,&s.board.ota,&s.board.test,&logging,&s.temp,&s.ota,
-                  &s.dual,&s._cli.gpio,&s.outbound}){
+                  &s.dual,&s._cli.gpio,&s._cli.tx_pending,&s.outbound}){
   *busy=true;assert(s.trackerNeedsRadio());*busy=false;
  }
  s.manager.queued=1;assert(s.trackerNeedsRadio());s.manager.queued=0;
@@ -103,7 +107,7 @@ int main(){
  s.saved_radio_apply_pending=true;assert(s.trackerNeedsRadio());
  s.saved_radio_apply_pending=false;
 #endif
- for(bool* due:{&s.dual,&s.ota,&s._cli.gpio,&radio_driver.watchdog,
+ for(bool* due:{&s.dual,&s.ota,&s._cli.gpio,&s._cli.tx_pending,&radio_driver.watchdog,
                  &radio_driver.calibration,&s.queue_due,&s.retry_due}){
   *due=true;assert(s.hasPendingWork()&&s.getPowerSaveSleepSeconds(30)==0);*due=false;
  }

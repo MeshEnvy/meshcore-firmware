@@ -324,8 +324,33 @@ bool RadioLibWrapper::setTxPower(int8_t dbm) {
   return trySetTxPower(dbm) == mesh::RadioParamApplyResult::APPLIED;
 }
 
+bool RadioLibWrapper::isTxPowerValid(int8_t dbm) const {
+#ifdef MIN_LORA_TX_POWER
+  if (dbm < MIN_LORA_TX_POWER) return false;
+#endif
+#ifdef MAX_LORA_TX_POWER
+  if (dbm > MAX_LORA_TX_POWER) return false;
+#endif
+#if MESH_RADIO_PROFILE_CHIP == 1121 || MESH_RADIO_PROFILE_CHIP == 2021
+  // These drivers intentionally clip desired power to the physically selected
+  // band's PA limit. A temporary/radio2 band must not reject saved intent.
+  return true;
+#else
+  return checkBeaconOutputPower(_cur_freq, dbm);
+#endif
+}
+
+bool RadioLibWrapper::isTxPowerApplied(int8_t dbm) const {
+#if MESH_ENABLE_TX_BEACONS
+  if (_beacon_owned) return false;
+#endif
+  return !_cw_active && _dbm_valid && _dbm_applied && _cur_dbm == dbm
+      && !_profile_repair_required;
+}
+
 mesh::RadioParamApplyResult RadioLibWrapper::trySetTxPower(int8_t dbm) {
   using Result = mesh::RadioParamApplyResult;
+  if (!isTxPowerValid(dbm)) return Result::FAILED;
 #if MESH_ENABLE_TX_BEACONS
   if (_beacon_owned) return Result::BUSY;
 #endif
@@ -348,7 +373,8 @@ mesh::RadioParamApplyResult RadioLibWrapper::trySetTxPower(int8_t dbm) {
     // Permit meter sweeps through the board's normal power/PA calibration.
     // SX127x's power setter enters standby, so re-key without resetting the
     // modem or extending the original CW deadline.
-    if (applyCachedTxPower(dbm) != RADIOLIB_ERR_NONE) {
+    _dbm_applied = applyCachedTxPower(dbm) == RADIOLIB_ERR_NONE;
+    if (!_dbm_applied) {
       stopCarrierWave();
       return Result::FAILED;
     }
@@ -882,6 +908,7 @@ bool RadioLibWrapper::validateBeaconPower(float frequency_mhz, int8_t power) con
   return isfinite(frequency_mhz) && mesh::isLoRaTxPowerValid(power, frequency_mhz)
       && checkBeaconOutputPower(frequency_mhz, power);
 }
+#endif
 
 bool RadioLibWrapper::checkBeaconOutputPower(float frequency_mhz, int8_t power) const {
   (void)frequency_mhz;
@@ -911,6 +938,7 @@ bool RadioLibWrapper::checkBeaconOutputPower(float frequency_mhz, int8_t power) 
 #endif
 }
 
+#if MESH_ENABLE_TX_BEACONS
 uint32_t RadioLibWrapper::getBeaconAirtime(const mesh::RadioProfileParams& p, int length) {
   if (length <= 0 || length > MAX_TRANS_UNIT || !validateProfile(p)) return 0;
   const uint16_t preamble = p.protocol == mesh::RadioProfileProtocol::Meshtext
@@ -967,6 +995,7 @@ mesh::RadioParamApplyResult RadioLibWrapper::prepareBeaconTransmit(
   // an exclusive lease until the ordinary receiver has been restored.
   _beacon_restore_profile = _active_profile;
   _beacon_owned = true;
+  _dbm_applied = false;
   _beacon_restore_at = 0;
   _beacon_cad_timeout = cadScanTimeoutMillis(p.sf, p.bw);
   _physical_preamble = p.protocol == mesh::RadioProfileProtocol::Meshtext
@@ -1019,7 +1048,7 @@ mesh::RadioParamApplyResult RadioLibWrapper::restoreBeaconReceive() {
 #if MESH_ENABLE_MESHTEXT_WIRE || MESH_ENABLE_ETHERNET_WIRE
   restored = restored && applyProtocol(p.protocol);
 #endif
-  restored = restored && applyCachedTxPower(_cur_dbm) == RADIOLIB_ERR_NONE;
+  restored = _dbm_applied = restored && applyCachedTxPower(_cur_dbm) == RADIOLIB_ERR_NONE;
   endProfileRetune(restored);
   if (restored) {
     // No RX ran on the beacon tuple, so any remaining event belongs to its
@@ -2163,6 +2192,7 @@ bool RadioLibWrapper::stopCarrierWave() {
   if (_morse_rx_owned && _morse_rx) _morse_rx->stop(static_cast<uint32_t>(millis()));
 #endif
   _cw_stopping = true;
+  _dbm_applied = false;
   // Deassert external TX even if SPI fails. SX127x must also rebuild its LoRa
   // modem after FSK direct mode before normal packet work can resume.
   const int16_t status = _radio->finishTransmit();
@@ -2184,6 +2214,7 @@ bool RadioLibWrapper::stopCarrierWave() {
     restored = status == RADIOLIB_ERR_NONE || standby_status == RADIOLIB_ERR_NONE
         ? restoreCarrierWaveModem() : restoreAfterDeepInit();
   }
+  _dbm_applied = restored && _dbm_valid;
   if (!restored) {
     _cw_retry_at = static_cast<uint32_t>(millis()) + 100;
     return false;  // hold normal work until stopping the carrier is confirmed
