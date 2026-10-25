@@ -47,7 +47,7 @@ struct Driver {
   bool _rx_ps_armed = false, _cw_active = false;
   bool _profile_repair_required = false, _profile_refresh_required = false;
   bool _rx_hold_continuous = false;
-  bool _dbm_valid = true, _rx_boosted_gain_valid = false;
+  bool _dbm_valid = true, _dbm_applied = true, _rx_boosted_gain_valid = false;
   int8_t _cur_dbm = 7;
   bool _cur_rx_boosted_gain = false;
   unsigned power_commands = 0, gain_commands = 0;
@@ -75,6 +75,7 @@ struct Driver {
   uint8_t beginReconfigure();
   void endReconfigure(bool);
   bool setTxPower(int8_t);
+  mesh::RadioParamApplyResult trySetTxPower(int8_t);
 } radio_driver;
 @WRAPPER_METHODS@
 struct Prefs {
@@ -280,7 +281,8 @@ def harness(role, mutation=None):
     wrapper = (ROOT / "src/helpers/radiolib/RadioLibWrappers.cpp").read_text()
     signatures = ["uint8_t RadioLibWrapper::beginReconfigure()",
                   "void RadioLibWrapper::endReconfigure(bool resume_rx)",
-                  "bool RadioLibWrapper::setTxPower(int8_t dbm)"]
+                  "bool RadioLibWrapper::setTxPower(int8_t dbm)",
+                  "mesh::RadioParamApplyResult RadioLibWrapper::trySetTxPower(int8_t dbm)"]
     if role == "room":
         signatures.append("bool RadioLibWrapper::setRxBoostedGainMode(bool enabled)")
     methods = "\n".join(body(wrapper, signature) for signature in signatures)

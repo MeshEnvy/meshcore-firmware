@@ -108,6 +108,7 @@ protected:
   int8_t _cur_dbm;
   bool _cur_rx_boosted_gain;
   bool _params_valid, _dbm_valid, _rx_boosted_gain_valid;
+  bool _dbm_applied = false;
   mesh::RadioProfiles _profiles;
   uint8_t _active_profile = 0;
   uint16_t _physical_preamble = 0;
@@ -574,6 +575,7 @@ public:
                  const uint32_t* rx_ps_timings = NULL);
   uint32_t getRngSeed();
   bool setTxPower(int8_t dbm);
+  mesh::RadioParamApplyResult trySetTxPower(int8_t dbm);
 
   virtual float getCurrentRSSI() =0;
   virtual uint8_t getSpreadingFactor() const { return LORA_SF; }

@@ -69,6 +69,10 @@ public:
 
   uint32_t intID();
   bool setTxPower(int8_t dbm);
+  mesh::RadioParamApplyResult trySetTxPower(int8_t dbm) {
+    return setTxPower(dbm) ? mesh::RadioParamApplyResult::APPLIED
+                           : mesh::RadioParamApplyResult::FAILED;
+  }
 };
 
 #if ESPNOW_DEBUG_LOGGING && ARDUINO

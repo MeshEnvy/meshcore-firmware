@@ -246,6 +246,12 @@ catalog; bytes `0x2C`-`0x31` are parked and `0x35` is unused.
 The sections below detail the most common frames. Refer to the source named
 above for command bodies that are not expanded here.
 
+Radio changes (`0x0B`, `0x0C`) can wait briefly for a safe radio window before
+replying. TX power waits up to three seconds when reception or transmission is
+busy. Its OK response confirms both hardware acceptance and a saved setting;
+timeout or disconnect discards a waiting power change. Successful settings
+commands are saved independently, so an error does not undo earlier commands.
+
 ### Private text when only the sender knows the recipient
 
 Clients continue to send an ordinary `CMD_SEND_TXT_MSG` (`0x02`) with

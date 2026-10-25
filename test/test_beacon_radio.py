@@ -81,7 +81,7 @@ struct RadioLibWrapper {
     float _cur_freq = 906, _cur_bw = 62.5;
     uint8_t _cur_sf = 7, _cur_cr = 5;
     int8_t _cur_dbm = 20;
-    bool _params_valid = true, _dbm_valid = true;
+    bool _params_valid = true, _dbm_valid = true, _dbm_applied = true;
     bool _cw_active = false, pending = false, packet = false, busy = false, calibrating = false;
     bool _rx_ps_enabled = false, _rx_ps_armed = false, _rx_hold_continuous = false;
     bool _rx_ps_continuous_fallback = false, _nf_calib_active = false;
@@ -190,6 +190,15 @@ mesh::RadioProfileParams beacon(bool meshtext = false) {
 }
 int main() {
     unsigned cases = 0;
+    {
+        RadioLibWrapper w; w.deep_ok = false;
+        assert(!w.restoreAfterDeepInit() && !w._dbm_applied);
+        w.deep_ok = true; w.power_fail = true;
+        assert(!w.restoreAfterDeepInit() && !w._dbm_applied);
+        w.power_fail = false;
+        assert(w.restoreAfterDeepInit() && w._dbm_applied);
+        ++cases;
+    }
     for (bool dual : {false, true}) for (bool rxps : {false, true}) for (bool mt : {false, true}) {
         RadioLibWrapper w; now_ms = 100;
         if (dual) {

@@ -243,6 +243,7 @@ void RadioLibWrapper::begin() {
 #if MESH_ENABLE_TX_BEACONS
   if (_beacon_owned) return;
 #endif
+  _dbm_applied = false;
 #if MESH_HIL_PROFILE_TIMING
   mesh::profiletiming::initializeClock();
 #endif
@@ -320,8 +321,13 @@ uint32_t RadioLibWrapper::getRngSeed() {
 }
 
 bool RadioLibWrapper::setTxPower(int8_t dbm) {
+  return trySetTxPower(dbm) == mesh::RadioParamApplyResult::APPLIED;
+}
+
+mesh::RadioParamApplyResult RadioLibWrapper::trySetTxPower(int8_t dbm) {
+  using Result = mesh::RadioParamApplyResult;
 #if MESH_ENABLE_TX_BEACONS
-  if (_beacon_owned) return false;
+  if (_beacon_owned) return Result::BUSY;
 #endif
 #if MESH_ENABLE_CARRIER_TOOLS || MESH_ENABLE_MORSE_RX
   // A CW power-meter sweep may re-key the carrier. During Morse that would
@@ -331,37 +337,42 @@ bool RadioLibWrapper::setTxPower(int8_t dbm) {
 #if MESH_ENABLE_MORSE_RX
       || _morse_rx_owned
 #endif
-      ) && _cw_active) return false;
+      ) && _cw_active) return Result::BUSY;
 #if MESH_ENABLE_CARRIER_TOOLS
   if (_cw_active) {
-    if (_cw_stopping) return false;
+    if (_cw_stopping) return Result::BUSY;
 #if defined(MESH_HIL_TX_FREQ_MHZ)
     if (!hilPacketTransmitAllowed() || _cw_profile != _active_profile
-        || _cw_generation != _profile_generation) return false;
+        || _cw_generation != _profile_generation) return Result::FAILED;
 #endif
     // Permit meter sweeps through the board's normal power/PA calibration.
     // SX127x's power setter enters standby, so re-key without resetting the
     // modem or extending the original CW deadline.
     if (applyCachedTxPower(dbm) != RADIOLIB_ERR_NONE) {
       stopCarrierWave();
-      return false;
+      return Result::FAILED;
     }
     if (_radio->transmitDirect() != RADIOLIB_ERR_NONE) {
       stopCarrierWave();
-      return false;
+      return Result::FAILED;
     }
     _cur_dbm = dbm;
     _dbm_valid = true;
-    return true;
+    return Result::APPLIED;
   }
 #else
-  if (_cw_active) return false;
+  if (_cw_active) return Result::BUSY;
 #endif
 #endif
+  // Settings screens also submit TX power when only another field changed.
+  // The verified normal power needs no SPI, standby, or interruption of RX.
+  if (_dbm_valid && _dbm_applied && _cur_dbm == dbm
+      && !_profile_repair_required) return Result::APPLIED;
   const uint8_t resume_rx = beginReconfigure();
-  if (resume_rx > 1) return false;
+  if (resume_rx > 1) return resume_rx == 2 ? Result::BUSY : Result::FAILED;
 
   const int16_t status = applyCachedTxPower(dbm);
+  _dbm_applied = status == RADIOLIB_ERR_NONE;
   if (status == RADIOLIB_ERR_NONE) {
     _cur_dbm = dbm;
     _dbm_valid = true;
@@ -370,7 +381,7 @@ bool RadioLibWrapper::setTxPower(int8_t dbm) {
                        (int)dbm, (int)status);
   }
   endReconfigure(resume_rx);
-  return status == RADIOLIB_ERR_NONE;
+  return status == RADIOLIB_ERR_NONE ? Result::APPLIED : Result::FAILED;
 }
 
 uint8_t RadioLibWrapper::beginReconfigure() {
@@ -516,6 +527,7 @@ bool RadioLibWrapper::restoreAfterDeepInit() {
 #if MESH_ENABLE_TX_BEACONS
   if (_beacon_owned) cacheBeaconRestoreParams();
 #endif
+  _dbm_applied = false;
   if (!radioDeepInit()) return false;
 
   _rx_ps_armed = false;
@@ -533,7 +545,8 @@ bool RadioLibWrapper::restoreAfterDeepInit() {
   restored = restored && applyProtocol(_physical_protocol);
 #endif
   if (_dbm_valid) {
-    restored = applyCachedTxPower(_cur_dbm) == RADIOLIB_ERR_NONE && restored;
+    _dbm_applied = applyCachedTxPower(_cur_dbm) == RADIOLIB_ERR_NONE;
+    restored = _dbm_applied && restored;
   }
   if (_rx_boosted_gain_valid) {
     restored = applyRxBoostedGainMode(_cur_rx_boosted_gain) && restored;

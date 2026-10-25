@@ -40,7 +40,7 @@ struct FakeWiFi {
  bool mode(wifi_mode_t value){if(failure==1)return false;current=value;return true;}
 } WiFi;
 namespace mesh {
- enum class RadioParamApplyResult {APPLIED};
+ enum class RadioParamApplyResult {APPLIED,BUSY,FAILED};
  namespace wifi {
   constexpr uint8_t kProtocolMask=15,kLongRangeRadioOwner=1,kLongRangeBridgeOwner=2;
   void setLongRangeOwner(uint8_t,bool){}
@@ -89,6 +89,11 @@ int main(){
  assert(radio.isEnabled()&&sdk_active&&wake_refs==1&&!WiFi.autoreconnect);
  const int started=init_calls;radio.init();assert(init_calls==started&&wake_refs==1);
  assert(radio.setTxPower(13)&&power==52);
+ assert(radio.trySetTxPower(14)==mesh::RadioParamApplyResult::APPLIED&&power==56);
+ failure=6;
+ assert(radio.trySetTxPower(15)==mesh::RadioParamApplyResult::FAILED&&power==56);
+ failure=0;
+ assert(radio.trySetTxPower(13)==mesh::RadioParamApplyResult::APPLIED&&power==52);
  uint8_t raw[255]={0x15,1,2,3},out[255];
  deliver(raw,4);assert(radio.recvRaw(out,sizeof(out))==4&&!memcmp(raw,out,4));
  // Stop in the middle of a fragmented TX: do not report success or send fragment 2.

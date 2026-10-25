@@ -16,6 +16,9 @@
 #include "CompanionBluetooth.h"
 #include "CompanionWireless.h"
 #include "CompanionWiFi.h"
+#if defined(MESH_PRIMARY_ESPNOW) && MESH_PRIMARY_ESPNOW
+#include <WiFi.h>
+#endif
 #if COMPANION_FEATURE_USB_MOTA_SOURCE || COMPANION_FEATURE_BLE_MOTA_SOURCE
 #include <helpers/ota/MotaSourceSerial.h>
 #include <helpers/ota/OtaContext.h>

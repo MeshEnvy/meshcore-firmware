@@ -76,6 +76,9 @@ public:
   }
   void powerOff() {}
   bool setTxPower(int8_t /*dbm*/) { return true; }
+  mesh::RadioParamApplyResult trySetTxPower(int8_t /*dbm*/) {
+    return mesh::RadioParamApplyResult::APPLIED;
+  }
   uint32_t getRngSeed() { return _simRandom(); }
   uint32_t getPacketsRecv() const { return n_recv; }
   uint32_t getPacketsSent() const { return n_sent; }

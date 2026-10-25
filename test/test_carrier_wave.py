@@ -159,7 +159,7 @@ struct RadioLibWrapper : mesh::Radio {
   float frequency=909.5;
   float _cur_freq=909.5;
   int8_t _cur_dbm=17;
-  bool _dbm_valid=true;
+  bool _dbm_valid=true, _dbm_applied=true;
   RadioLibWrapper() {
     g_mock_millis=100; state=STATE_RX;
     _profiles.primary.freq=909.5;
@@ -193,6 +193,7 @@ struct RadioLibWrapper : mesh::Radio {
   }
   virtual float getCurrentRSSI() { ++rssi_reads; g_mock_millis+=rssi_latency; return rssi; }
   bool setTxPower(int8_t dbm);
+  mesh::RadioParamApplyResult trySetTxPower(int8_t dbm);
   @NATIVE_HOOKS@
 #if MESH_ENABLE_MORSE_RX || !defined(STM32_PLATFORM)
   @RX_HOOKS@
@@ -230,9 +231,11 @@ struct RadioLibWrapper : mesh::Radio {
   }
   bool restoreAfterDeepInit() {
     ++resets;
+    _dbm_applied=false;
     if (reset_ok) {
       chip.carrier=false; chip.fsk=false; chip.stop_result=chip.standby_result=0;
-      return applyCachedTxPower(_cur_dbm)==0;
+      _dbm_applied=applyCachedTxPower(_cur_dbm)==0;
+      return _dbm_applied;
     }
     return reset_ok;
   }
@@ -455,6 +458,7 @@ def production_harness():
     source = (ROOT/'src/helpers/radiolib/RadioLibWrappers.cpp').read_text()
     signatures = ('uint8_t RadioLibWrapper::beginReconfigure(',
                       'bool RadioLibWrapper::setTxPower(',
+                      'mesh::RadioParamApplyResult RadioLibWrapper::trySetTxPower(',
                       'mesh::RadioParamApplyResult RadioLibWrapper::setCarrierWave(',
                       'uint32_t RadioLibWrapper::carrierWaveRemainingMillis(',
                       'bool RadioLibWrapper::stopCarrierWave(',

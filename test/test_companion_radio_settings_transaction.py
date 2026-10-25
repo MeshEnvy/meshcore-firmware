@@ -52,14 +52,15 @@ void recalcRxPowerSavingFromLevel(uint8_t,uint8_t sf,float bw,uint8_t,
 struct Driver {
   int8_t power=3;
   unsigned calls=0;
-  std::deque<bool> accepted;
-  bool setTxPower(int8_t requested) {
+  std::deque<Apply> accepted;
+  Apply trySetTxPower(int8_t requested) {
     ++calls;
-    bool ok=true;
-    if (!accepted.empty()) { ok=accepted.front(); accepted.pop_front(); }
-    if (ok) power=requested;
-    return ok;
+    Apply result=Apply::APPLIED;
+    if (!accepted.empty()) { result=accepted.front(); accepted.pop_front(); }
+    if (result==Apply::APPLIED) power=requested;
+    return result;
   }
+  bool setTxPower(int8_t requested) { return trySetTxPower(requested)==Apply::APPLIED; }
   bool supportsRxBoostedGainMode() const { return false; }
   bool setRxBoostedGainMode(bool) { return true; }
   bool supportsRxPowerSaving() const { return false; }
@@ -74,7 +75,8 @@ struct MyMesh {
   bool storage_accepts=true, _radio_available=true, outbound=false;
   unsigned saves=0, applies=0;
   std::deque<Apply> accepted;
-  bool saved_radio_apply_pending=false, command_radio_apply_pending=false;
+  bool saved_radio_apply_pending=false;
+  uint8_t command_radio_apply_pending=0;
   uint32_t radio_apply_retry_at=0, command_radio_apply_deadline=0;
   uint8_t radio_apply_failures=0;
   float command_radio_freq=0, command_radio_bw=0;
@@ -100,8 +102,9 @@ struct MyMesh {
     return result;
   }
   bool applySavedRadioParams();
-  RadioSettingResult applyAndSaveTxPower(int8_t);
+  RadioSettingResult applyAndSaveTxPower(int8_t,bool from_pending=false);
   void finishRadioParamApply(float,float,uint8_t,uint8_t,uint8_t,BaseSerialInterface* = nullptr);
+  void deferRadioCommand(uint8_t);
   void servicePendingRadioParamApply();
   void cancelPendingRadioParamApply();
   void frame(size_t len) { @FRAME_BRANCHES@ }
@@ -122,6 +125,11 @@ struct MyMesh {
     frame(12);
   }
   void expectError(uint8_t code,BaseSerialInterface* route=nullptr) {
+    if(replies.size()!=1 || replies[0].error!=code) {
+      fprintf(stderr,"Expected reply %u; count=%zu first=%u pending=%u saves=%u now=%u\n",
+              unsigned(code),replies.size(),replies.empty()?255u:unsigned(replies[0].error),
+              unsigned(command_radio_apply_pending),saves,unsigned(now_ms));
+    }
     assert(replies.size()==1 && replies[0].error==code);
     assert(replies[0].route==(route?route:&original));
   }
@@ -133,11 +141,12 @@ struct MyMesh {
 };
 @METHODS@
 int main() {
-  // Reject unavailable/busy hardware before either persisting or reporting it.
+  // A real hardware rejection remains an immediate error, without a save.
   {
-    MyMesh m;radio_driver.accepted={false};m.powerFrame(17);
+    MyMesh m;radio_driver.accepted={Apply::FAILED};m.powerFrame(17);
     m.expectError(ERR_CODE_BAD_STATE);
-    assert(m.saves==0 && m._prefs.tx_power_dbm==3 && radio_driver.power==3);
+    assert(!m.command_radio_apply_pending && m.saves==0);
+    assert(m._prefs.tx_power_dbm==3 && m.durable.tx_power_dbm==3 && radio_driver.power==3);
   }
   for (int value : {-10,23}) {
     MyMesh m;m.powerFrame(uint8_t(value));m.expectError(ERR_CODE_ILLEGAL_ARG);
@@ -155,6 +164,137 @@ int main() {
     MyMesh m;m._radio_available=false;m.powerFrame(17);m.expectError(0);
     assert(m.durable.tx_power_dbm==17 && radio_driver.calls==0);
   }
+  // App settings can reach power while an RX packet is in progress. Keep the
+  // original requester and acknowledge only after the hardware and save pass.
+  for (int power : {-9,17,22}) {
+    MyMesh m;radio_driver.accepted={Apply::BUSY,Apply::BUSY,Apply::APPLIED};
+    m.powerFrame(uint8_t(power));
+    assert(m.replies.empty() && m.command_radio_apply_pending==2 && m.saves==0);
+    assert(m.command_radio_reply_route==&m.original);
+    assert(int8_t(m.command_radio_repeat)==power);
+    assert(m.command_radio_apply_deadline==now_ms+COMMAND_RADIO_APPLY_TIMEOUT_MS);
+    assert(m._prefs.tx_power_dbm==3 && m.durable.tx_power_dbm==3 && radio_driver.power==3);
+    m.serial.current=&m.other;
+    m.servicePendingRadioParamApply();
+    assert(m.replies.empty() && m.command_radio_apply_pending==2 && m.saves==0);
+    m.servicePendingRadioParamApply();m.expectError(0);
+    assert(!m.command_radio_apply_pending && m.saves==1);
+    assert(m.command_radio_reply_route==nullptr && m.command_radio_apply_deadline==0);
+    assert(m._prefs.tx_power_dbm==power && m.durable.tx_power_dbm==power);
+    assert(radio_driver.power==power);
+  }
+  // Reproduce the app's multi-command settings save: the tuple is durable
+  // before the following power command encounters a temporary receive lease.
+  {
+    MyMesh m;m.tupleFrame();m.expectError(0);m.replies.clear();
+    radio_driver.accepted={Apply::BUSY,Apply::APPLIED};m.powerFrame(17);
+    assert(m.replies.empty() && m.command_radio_apply_pending==2 && m.saves==1);
+    assert(m.durable.freq==920 && m.durable.tx_power_dbm==3);
+    m.servicePendingRadioParamApply();m.expectError(0);
+    assert(m.saves==2 && m.durable.freq==920 && m.durable.tx_power_dbm==17);
+  }
+  // Wait for reply-queue headroom before applying or committing the candidate.
+  {
+    MyMesh m;radio_driver.accepted={Apply::BUSY,Apply::APPLIED};m.powerFrame(17);
+    m.serial.current=&m.other;m.serial.busy=true;
+    const unsigned calls=radio_driver.calls;
+    m.servicePendingRadioParamApply();
+    assert(m.replies.empty() && m.saves==0 && radio_driver.calls==calls);
+    assert(m.command_radio_apply_pending==2 && m.durable.tx_power_dbm==3);
+    m.serial.busy=false;m.servicePendingRadioParamApply();m.expectError(0);
+    assert(!m.command_radio_apply_pending && m.durable.tx_power_dbm==17);
+  }
+  // A second settings request cannot replace the pending candidate or route.
+  for (bool tuple_request : {false,true}) {
+    MyMesh m;radio_driver.accepted={Apply::BUSY,Apply::APPLIED};m.powerFrame(17);
+    m.serial.current=&m.other;
+    if(tuple_request)m.tupleFrame();else m.powerFrame(12);
+    m.expectError(ERR_CODE_BAD_STATE,&m.other);
+    assert(m.command_radio_apply_pending==2 && m.command_radio_repeat==17);
+    assert(m.command_radio_reply_route==&m.original && m.saves==0 && radio_driver.calls==1);
+    char reply[160]={};
+    assert(m.command("set tx 12",reply) && strstr(reply,"Error"));
+    assert(m.command_radio_apply_pending==2 && m.command_radio_repeat==17);
+    assert(m.saves==0 && radio_driver.calls==1 && m._prefs.tx_power_dbm==3);
+    m.replies.clear();m.servicePendingRadioParamApply();m.expectError(0);
+    assert(m.durable.tx_power_dbm==17);
+  }
+  // The power request also respects a tuple already occupying the shared slot.
+  {
+    MyMesh m;m.accepted={Apply::BUSY,Apply::APPLIED};m.tupleFrame();
+    assert(m.command_radio_apply_pending==1);
+    m.serial.current=&m.other;m.powerFrame(17);m.expectError(ERR_CODE_BAD_STATE,&m.other);
+    assert(m.command_radio_apply_pending==1 && radio_driver.calls==0 && m.saves==0);
+    m.replies.clear();m.servicePendingRadioParamApply();m.expectError(0);
+    assert(m.durable.freq==920 && m.durable.tx_power_dbm==3);
+  }
+  // Losing the original route cancels the unsaved power, even when another
+  // transport supplies commands before the deferred operation is serviced.
+  {
+    MyMesh m;radio_driver.accepted={Apply::BUSY,Apply::APPLIED};m.powerFrame(17);
+    m.serial.current=&m.other;m.serial.disconnected=&m.original;
+    m.servicePendingRadioParamApply();
+    assert(!m.command_radio_apply_pending && m.replies.empty() && m.saves==0);
+    assert(!m.saved_radio_apply_pending);
+    assert(m._prefs.tx_power_dbm==3 && m.durable.tx_power_dbm==3 && radio_driver.power==3);
+    assert(radio_driver.calls==1);
+  }
+  {
+    MyMesh m;m.serial.current=nullptr;radio_driver.accepted={Apply::BUSY};m.powerFrame(17);
+    assert(m.replies.size()==1 && m.replies[0].error==ERR_CODE_BAD_STATE);
+    assert(!m.command_radio_apply_pending && m.saves==0 && radio_driver.power==3);
+  }
+  // Sustained busy hardware times out once on the captured route. Check both
+  // the ordinary clock and a deadline that crosses the millis rollover.
+  for (uint32_t start : {100u,UINT32_MAX-1000u}) {
+    MyMesh m;now_ms=start;
+    radio_driver.accepted={Apply::BUSY,Apply::BUSY,Apply::BUSY};m.powerFrame(17);
+    m.serial.current=&m.other;
+    const uint32_t deadline=m.command_radio_apply_deadline;
+    now_ms=deadline-1;m.servicePendingRadioParamApply();
+    assert(m.replies.empty() && m.command_radio_apply_pending==2 && m.saves==0);
+    now_ms=deadline;m.servicePendingRadioParamApply();m.expectError(ERR_CODE_BAD_STATE);
+    assert(!m.command_radio_apply_pending && !m.saved_radio_apply_pending && m.saves==0);
+    assert(m._prefs.tx_power_dbm==3 && m.durable.tx_power_dbm==3 && radio_driver.power==3);
+    m.servicePendingRadioParamApply();assert(m.replies.size()==1);
+  }
+  // Expiry must not commit a late success, including when queue backpressure
+  // prevented the timeout reply until after its original deadline.
+  for (bool blocked_queue : {false,true}) {
+    MyMesh m;radio_driver.accepted={Apply::BUSY,Apply::APPLIED};m.powerFrame(17);
+    m.serial.current=&m.other;now_ms=m.command_radio_apply_deadline;
+    if(blocked_queue) {
+      m.serial.busy=true;m.servicePendingRadioParamApply();
+      assert(m.replies.empty() && m.saves==0 && radio_driver.calls==1);
+      m.serial.busy=false;++now_ms;
+    }
+    m.servicePendingRadioParamApply();m.expectError(ERR_CODE_BAD_STATE);
+    assert(!m.command_radio_apply_pending && !m.saved_radio_apply_pending);
+    assert(m.saves==0 && radio_driver.calls==1);
+    assert(m.durable.tx_power_dbm==3 && radio_driver.power==3);
+  }
+  // A later hardware rejection must not be mistaken for another busy retry.
+  {
+    MyMesh m;radio_driver.accepted={Apply::BUSY,Apply::FAILED};m.powerFrame(17);
+    m.serial.current=&m.other;m.servicePendingRadioParamApply();m.expectError(ERR_CODE_BAD_STATE);
+    assert(!m.command_radio_apply_pending && !m.saved_radio_apply_pending && m.saves==0);
+    assert(m.durable.tx_power_dbm==3 && radio_driver.power==3);
+  }
+  // Deferred commits retain the same storage-failure rollback as immediate
+  // requests, and cannot send a later success after reporting the failure.
+  for (bool rollback_busy : {false,true}) {
+    MyMesh m;m.storage_accepts=false;
+    radio_driver.accepted={Apply::BUSY,Apply::APPLIED,
+                          rollback_busy?Apply::BUSY:Apply::APPLIED,Apply::APPLIED};
+    m.powerFrame(17);assert(m.replies.empty() && m.saves==0);
+    m.serial.current=&m.other;m.servicePendingRadioParamApply();m.expectError(ERR_CODE_FILE_IO_ERROR);
+    assert(!m.command_radio_apply_pending && m.saves==1);
+    assert(m._prefs.tx_power_dbm==3 && m.durable.tx_power_dbm==3);
+    assert(m.saved_radio_apply_pending==rollback_busy);
+    if(rollback_busy)m.recover();
+    assert(!m.saved_radio_apply_pending && radio_driver.power==3 && m.replies.size()==1);
+    m.servicePendingRadioParamApply();assert(m.replies.size()==1);
+  }
   // A failed commit restores RAM and the physical output-power setting.
   {
     MyMesh m;m.storage_accepts=false;m.powerFrame(17);m.expectError(ERR_CODE_FILE_IO_ERROR);
@@ -164,7 +304,8 @@ int main() {
   // RX may become busy during flash I/O. Retain recovery through a rejected
   // rollback and through a later successful tuple restore but failed power apply.
   {
-    MyMesh m;m.storage_accepts=false;radio_driver.accepted={true,false,false,true};
+    MyMesh m;m.storage_accepts=false;
+    radio_driver.accepted={Apply::APPLIED,Apply::BUSY,Apply::FAILED,Apply::APPLIED};
     m.powerFrame(17);m.expectError(ERR_CODE_FILE_IO_ERROR);
     assert(m._prefs.tx_power_dbm==3 && radio_driver.power==17 && m.saved_radio_apply_pending);
     m.recover();assert(m.saved_radio_apply_pending && radio_driver.power==17);
@@ -176,7 +317,8 @@ int main() {
   }
   // ASCII and framed setters share identical hardware/durability semantics.
   {
-    MyMesh m;char reply[160]={};radio_driver.accepted={false};
+    MyMesh m;char reply[160]={};radio_driver.accepted={Apply::FAILED,Apply::BUSY};
+    assert(m.command("set tx 17",reply) && strstr(reply,"Error"));
     assert(m.command("set tx 17",reply) && strstr(reply,"Error"));
     assert(m.saves==0 && m._prefs.tx_power_dbm==3);
     m.storage_accepts=false;
@@ -253,7 +395,8 @@ struct ContactStore {
 struct MyMesh {
   ContactStore store;
   ContactStore* _store=&store;
-  bool _radio_available=true, _iter_started=false, command_radio_apply_pending=false;
+  bool _radio_available=true, _iter_started=false;
+  uint8_t command_radio_apply_pending=0;
   bool saved_radio_apply_pending=false, _terminal_trace_pending=false;
   uint32_t radio_apply_retry_at=0, _scheduled_reboot_at=0;
   uint32_t emergency_client_repeat_send_at=0, dirty_contacts_expiry=0;
@@ -282,6 +425,11 @@ struct MyMesh {
 @PENDING_WORK@
 int main() {
   MyMesh m;
+  assert(!m.hasPendingWork());
+  m.command_radio_apply_pending=2;
+  assert(m.hasPendingWork()); // Deferred power must keep the retry loop awake.
+  assert(m.pendingWorkReason()==mesh::powerdiag::mask(mesh::powerdiag::Reason::Scheduled));
+  m.command_radio_apply_pending=0;
   assert(!m.hasPendingWork());
   m.store._contact_recovery=ContactStore::ContactRecoveryPending;
   assert(m.hasPendingWork()); // Storage repair still needs the outer loop.
@@ -376,6 +524,7 @@ class CompanionRadioSettingsTransactionTests(unittest.TestCase):
             'bool MyMesh::applySavedRadioParams(',
             'MyMesh::RadioSettingResult MyMesh::applyAndSaveTxPower(',
             'void MyMesh::finishRadioParamApply(',
+            'void MyMesh::deferRadioCommand(',
             'void MyMesh::cancelPendingRadioParamApply(',
             'void MyMesh::servicePendingRadioParamApply(',
         ))

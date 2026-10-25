@@ -3546,12 +3546,24 @@ void MyMesh::finishRadioParamApply(float freq, float bw, uint8_t sf,
   writeOKFrame(route);
 }
 
+void MyMesh::deferRadioCommand(uint8_t kind) {
+  command_radio_reply_route = _serial->captureReplyRoute();
+  if (command_radio_reply_route == NULL) {
+    writeErrFrame(ERR_CODE_BAD_STATE);
+    return;
+  }
+  command_radio_apply_pending = kind;
+  command_radio_apply_deadline = futureMillis(COMMAND_RADIO_APPLY_TIMEOUT_MS);
+}
+
 void MyMesh::cancelPendingRadioParamApply() {
   if (!command_radio_apply_pending) return;
 
+  const bool restore_tuple = command_radio_apply_pending == 1;
   command_radio_apply_pending = false;
   command_radio_apply_deadline = 0;
   command_radio_reply_route = NULL;
+  if (!restore_tuple) return;
   // The requested tuple was not committed. Reassert the persisted tuple in
   // case a failed hardware apply only restored part of the old configuration.
   saved_radio_apply_pending = true;
@@ -3569,6 +3581,22 @@ void MyMesh::servicePendingRadioParamApply() {
   // Leave enough queue headroom for the eventual command response.
   if (_serial->isReplyRouteWriteBusy(command_radio_reply_route)) return;
 
+  const bool expired = static_cast<int32_t>(static_cast<uint32_t>(
+      _ms->getMillis() - command_radio_apply_deadline)) >= 0;
+  if (command_radio_apply_pending == 2) {
+    const auto result = expired ? RadioSettingResult::RadioBusy
+        : applyAndSaveTxPower(static_cast<int8_t>(command_radio_repeat), true);
+    if (result == RadioSettingResult::RadioBusy
+        && !expired) return;
+    if (result == RadioSettingResult::Saved) writeOKFrame(command_radio_reply_route);
+    else writeErrFrame(result == RadioSettingResult::SaveFailed
+        ? ERR_CODE_FILE_IO_ERROR : ERR_CODE_BAD_STATE, command_radio_reply_route);
+    // The checked setter owns any failed-save rollback. Retire this command
+    // without forcing a tuple restore or consuming a pending receive.
+    cancelPendingRadioParamApply();
+    return;
+  }
+
   mesh::RadioParamApplyResult result = tryApplyRadioParams(
       command_radio_freq, command_radio_bw, command_radio_sf, command_radio_cr);
   if (result == mesh::RadioParamApplyResult::APPLIED) {
@@ -3585,8 +3613,7 @@ void MyMesh::servicePendingRadioParamApply() {
   } else if (result == mesh::RadioParamApplyResult::FAILED) {
     writeErrFrame(ERR_CODE_ILLEGAL_ARG, command_radio_reply_route);
     cancelPendingRadioParamApply();
-  } else if (command_radio_apply_deadline == _ms->getMillis()
-             || millisHasNowPassed(command_radio_apply_deadline)) {
+  } else if (expired) {
     writeErrFrame(ERR_CODE_BAD_STATE, command_radio_reply_route);
     cancelPendingRadioParamApply();
   }
@@ -3608,7 +3635,7 @@ bool MyMesh::scheduleTempRadio(float freq, float bw, uint8_t sf, uint8_t cr,
                                uint32_t timeout_mins, char* reply,
                                size_t reply_size) {
   if (command_radio_apply_pending) {
-    snprintf(reply, reply_size, "ERR companion radio change is already pending");
+    snprintf(reply, reply_size, "ERR radio change pending");
     return false;
   }
 
@@ -5648,13 +5675,13 @@ void MyMesh::execCommand(char* cmd, char* reply) {
   if (strcmp(key, "tx") == 0) {
     long parsed;
     if (!wcParseLong(value, -9, MAX_LORA_TX_POWER, parsed)) {
-      snprintf(reply, 160, "Error: TX power must be -9 to %d", MAX_LORA_TX_POWER);
+      snprintf(reply, 160, "Error: TX -9..%d dBm", MAX_LORA_TX_POWER);
     } else {
       const auto result = applyAndSaveTxPower(static_cast<int8_t>(parsed));
       strcpy(reply, result == RadioSettingResult::Saved ? "OK"
-          : result == RadioSettingResult::RadioRejected
+          : result != RadioSettingResult::SaveFailed
               ? "Error: radio busy or TX power rejected"
-              : "Error: TX power could not be saved");
+              : "Error: TX not saved");
     }
     return;
   }
@@ -6767,18 +6794,12 @@ void MyMesh::handleCmdFrame(size_t len) {
         // Capture this requester instead of relying on the mutable last-RX
         // route. This remains correct if a contact stream later unlocks or a
         // different transport supplies another command before completion.
-        command_radio_reply_route = _serial->captureReplyRoute();
-        if (command_radio_reply_route == NULL) {
-          writeErrFrame(ERR_CODE_BAD_STATE);
-          return;
-        }
-        command_radio_apply_pending = true;
         command_radio_freq = new_freq;
         command_radio_bw = new_bw;
         command_radio_sf = sf;
         command_radio_cr = cr;
         command_radio_repeat = repeat;
-        command_radio_apply_deadline = futureMillis(COMMAND_RADIO_APPLY_TIMEOUT_MS);
+        deferRadioCommand(1);
         MESH_DEBUG_PRINTLN("Deferred CMD_SET_RADIO_PARAMS while radio is busy");
         return;
       }
@@ -6806,8 +6827,15 @@ void MyMesh::handleCmdFrame(size_t len) {
     int8_t power = (int8_t)cmd_frame[1];
     if (power < -9 || power > MAX_LORA_TX_POWER) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    } else if (command_radio_apply_pending) {
+      writeErrFrame(ERR_CODE_BAD_STATE);
     } else {
       const auto result = applyAndSaveTxPower(power);
+      if (result == RadioSettingResult::RadioBusy) {
+        command_radio_repeat = static_cast<uint8_t>(power);
+        deferRadioCommand(2);
+        return;
+      }
       if (result == RadioSettingResult::Saved) writeOKFrame();
       else writeErrFrame(result == RadioSettingResult::RadioRejected
           ? ERR_CODE_BAD_STATE : ERR_CODE_FILE_IO_ERROR);
@@ -8451,10 +8479,15 @@ bool MyMesh::saveAdvertLocation(double latitude, double longitude) {
   return false;
 }
 
-MyMesh::RadioSettingResult MyMesh::applyAndSaveTxPower(int8_t power) {
+MyMesh::RadioSettingResult MyMesh::applyAndSaveTxPower(int8_t power, bool from_pending) {
+  if (command_radio_apply_pending && !from_pending) return RadioSettingResult::RadioBusy;
   const int8_t previous = _prefs.tx_power_dbm;
-  if (_radio_available && !radio_driver.setTxPower(power)) {
-    return RadioSettingResult::RadioRejected;
+  if (_radio_available) {
+    const auto result = radio_driver.trySetTxPower(power);
+    if (result != mesh::RadioParamApplyResult::APPLIED) {
+      return result == mesh::RadioParamApplyResult::BUSY
+          ? RadioSettingResult::RadioBusy : RadioSettingResult::RadioRejected;
+    }
   }
   _prefs.tx_power_dbm = power;
   if (savePrefs()) return RadioSettingResult::Saved;
@@ -10924,15 +10957,15 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
     if (!mesh::cli::parseIntegerStrict(command + 7, parsed)) {
       mesh::cli::formatError(reply, reply_capacity, "invalid TX power");
     } else if (parsed < -9 || parsed > MAX_LORA_TX_POWER) {
-      snprintf(reply, reply_capacity, "Error: TX power must be -9 to %d",
+      snprintf(reply, reply_capacity, "Error: TX -9..%d dBm",
                MAX_LORA_TX_POWER);
     } else {
       const int8_t requested = static_cast<int8_t>(parsed);
       const auto result = applyAndSaveTxPower(requested);
-      if (result == RadioSettingResult::RadioRejected) {
+      if (result == RadioSettingResult::RadioRejected || result == RadioSettingResult::RadioBusy) {
         mesh::cli::formatError(reply, reply_capacity, "radio busy or TX power rejected");
       } else if (result == RadioSettingResult::SaveFailed) {
-        mesh::cli::formatError(reply, reply_capacity, "TX power could not be saved");
+        mesh::cli::formatError(reply, reply_capacity, "TX not saved");
       } else {
         strcpy(reply, "OK");
       }

@@ -675,8 +675,8 @@ private:
   bool applyAndSaveFemRxGain(bool enabled);
   bool applyAndSaveFemTxGain(bool enabled);
   bool applyAndSaveRxBoostedGain(bool enabled);
-  enum class RadioSettingResult { Saved, RadioRejected, SaveFailed };
-  RadioSettingResult applyAndSaveTxPower(int8_t power);
+  enum class RadioSettingResult { Saved, RadioRejected, SaveFailed, RadioBusy };
+  RadioSettingResult applyAndSaveTxPower(int8_t power, bool from_pending = false);
   bool handleCadCommand(const char* command, char* reply, size_t reply_size);
   bool saveBluetoothNameOverride(const char* name);
   bool applyAndSaveBluetoothName(const char* value, char* reply,
@@ -749,6 +749,7 @@ private:
   void finishRadioParamApply(float freq, float bw, uint8_t sf, uint8_t cr,
                              uint8_t repeat,
                              BaseSerialInterface* route = nullptr);
+  void deferRadioCommand(uint8_t kind);
   void cancelPendingRadioParamApply();
   void servicePendingRadioParamApply();
   void servicePendingSerialReply();
@@ -912,7 +913,8 @@ private:
   bool _radio_available;
   unsigned long radio_apply_retry_at;
   uint8_t radio_apply_failures;
-  bool command_radio_apply_pending;
+  // 0: none, 1: modulation tuple, 2: TX power (stored in the repeat byte).
+  uint8_t command_radio_apply_pending;
   float command_radio_freq;
   float command_radio_bw;
   uint8_t command_radio_sf;

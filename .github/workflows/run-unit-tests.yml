@@ -201,9 +201,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Setup Build Environment
         uses: ./.github/actions/setup-build-environment
-      - name: Compile RP2040 contact storage and Arduino 3 ESP32-C6 room services
+      - name: Compile RP2040 contacts, ESP32-C6 rooms and ESP-NOW Companion
         # One process: PlatformIO environments share this checkout's build tree.
-        run: pio run -e Xiao_rp2040_companion_radio_usb -e LilyGo_Tlora_C6_room_server_
+        run: >-
+          pio run -e Xiao_rp2040_companion_radio_usb
+          -e LilyGo_Tlora_C6_room_server_ -e Generic_ESPNOW_comp_radio_usb
 
   management-reports:
     runs-on: ubuntu-latest
@@ -736,6 +738,7 @@ jobs:
           python3 -B test/test_radio_profile_scan.py
           python3 -B test/test_radio_profile_clock.py -v
           python3 -B test/test_radio_profile_repair.py -v
+          python3 -B test/test_radio_tx_power_transaction.py -v
           python3 -B test/test_radio_profile_runtime_recommendation.py -v
           python3 -B test/test_radio_profile_idle_dispatcher.py -v
           python3 -B test/test_radio_rxps_rejection.py -v

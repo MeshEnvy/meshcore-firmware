@@ -75,7 +75,7 @@ struct LLCC68 : PhysicalLayer { int16_t setCRC(uint8_t length) { return setCrc(l
 struct RadioLibWrapper {
   PhysicalLayer* _radio;
   mesh::MainBoard* _board;
-  bool _params_valid = true, _rx_ps_armed = true, _dbm_valid = false, _rx_boosted_gain_valid = false;
+  bool _params_valid = true, _rx_ps_armed = true, _dbm_valid = false, _dbm_applied = false, _rx_boosted_gain_valid = false;
   bool _profile_repair_required = false;
   int state = 1;
   float _cur_freq = 906.875f, _cur_bw = 250;

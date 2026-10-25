@@ -324,7 +324,7 @@ struct RadioLibWrapper {
   bool _profile_repair_required=false;
   bool supported=true;
   bool supportsMeshtext() const { return supported; }
-  bool _rx_ps_armed=true,_params_valid=true,_dbm_valid=false,_rx_boosted_gain_valid=false;
+  bool _rx_ps_armed=true,_params_valid=true,_dbm_valid=false,_dbm_applied=false,_rx_boosted_gain_valid=false;
   int state=1;uint8_t _cur_sf=11,_cur_cr=5;float _cur_freq=906.875,_cur_bw=250;
   int8_t _cur_dbm=22;bool _cur_rx_boosted_gain=false;
   mesh::RadioProfileProtocol _physical_protocol=mesh::RadioProfileProtocol::Meshtext;
