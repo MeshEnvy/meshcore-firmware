@@ -35,6 +35,7 @@ class TestFS : public MemoryFS {
 #include <helpers/HilStartupTrace.h>
 #include <helpers/MQTTPrefsAtomicStore.h>
 #include <helpers/CLICommandUtils.h>
+#include <helpers/DiscoveryResponsePrefs.h>
 #include <helpers/RepeaterRadioTiming.h>
 #include <helpers/GpsPowerPolicy.h>
 #if defined(ESP32_PLATFORM)

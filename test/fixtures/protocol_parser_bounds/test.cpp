@@ -8,6 +8,7 @@
 #include <helpers/AdvertDataHelpers.h>
 #include <helpers/ClientPathObservation.h>
 #include <helpers/DatagramPayloadLimits.h>
+#include <helpers/DiscoveryResponsePrefs.h>
 #include <helpers/RoutingPolicy.h>
 #include "examples/simple_repeater/RateLimiter.h"
 #include "production_constants.inc"
@@ -34,6 +35,7 @@ struct MyMesh {
     char node_name[32] = "Bellevue";
     char owner_info[80] = "owner";
     bool disable_fwd = false;
+    uint8_t discovery_responses = 3;
   } _prefs;
   struct Clock {
     uint32_t now = 123456;
@@ -160,6 +162,87 @@ static void checkAnonymousHandlers() {
           require(timestamp == mesh.rtc_clock.now, "reply clock changed");
         }
       }
+    }
+  }
+}
+
+static void checkDiscoveryResponseSwitches() {
+  const mesh::Identity sender;
+  const uint8_t secret[PUB_KEY_SIZE] = {};
+  mesh::Packet request;
+  request.header = (PAYLOAD_TYPE_ANON_REQ << PH_TYPE_SHIFT) | ROUTE_TYPE_DIRECT;
+  const uint8_t path[] = {0x42, 0x11, 0x22, 0x33, 0x44};
+  for (uint8_t node : {0, 1}) {
+    for (uint8_t region : {0, 1}) {
+      MyMesh mesh;
+      mesh._prefs.discovery_responses = node | (region << 1);
+      mesh.reply_path_len = 0x02;
+      memset(mesh.reply_data, 0xc7, sizeof(mesh.reply_data));
+      const auto limiter_before = mesh.anon_limiter;
+      const uint8_t length = mesh.handleAnonRegionsReq(sender, 42, path, sizeof(path));
+      require((length != 0) == (region != 0),
+              "node and region discovery choices are not independent");
+      if (!region) {
+        require(mesh.reply_path_len == 0x02, "disabled region request changed reply route");
+        for (uint8_t byte : mesh.reply_path)
+          require(byte == 0xa5, "disabled region request changed reply path bytes");
+        for (uint8_t byte : mesh.reply_data)
+          require(byte == 0xc7, "disabled region request changed reply payload");
+        require(mesh.region_map.exports == 0, "disabled region request exported names");
+        // Compare future decisions from the real limiter, instead of relying
+        // on the private counter representation or an access-order mock.
+        auto expected = limiter_before;
+        for (unsigned count = 0; count < 10001; ++count) {
+          require(mesh.anon_limiter.allow(mesh.rtc_clock.now)
+                      == expected.allow(mesh.rtc_clock.now),
+                  "disabled region request consumed anonymous quota");
+        }
+      } else {
+        require(mesh.reply_path_len == path[0] && mesh.region_map.exports == 1,
+                "enabled region response lost the requested path or names");
+      }
+
+      // Exercise the real receive dispatcher too: no allocation or RF send
+      // may happen for a disabled query, including an already-known caller.
+      MyMesh dispatched;
+      dispatched._prefs.discovery_responses = node | (region << 1);
+      dispatched.acl.present = true;
+      dispatched.acl.client.out_path_len = 0;
+      dispatched.reply_path_len = 0x02;
+      memset(dispatched.reply_data, 0xc7, sizeof(dispatched.reply_data));
+      uint8_t bytes[11] = {42, 0, 0, 0, ANON_REQ_TYPE_REGIONS,
+                           0x42, 0x11, 0x22, 0x33, 0x44, 0};
+      dispatched.onAnonDataRecv(&request, secret, sender, bytes, 10);
+      require(dispatched.allocations == unsigned(region)
+                  && dispatched.direct_sends == unsigned(region)
+                  && dispatched.flood_sends == 0 && dispatched.logins == 0,
+              "disabled region query generated TX or fell through to login");
+      if (!region) {
+        require(dispatched.reply_path_len == 0x02,
+                "disabled dispatched region query changed pending reply route");
+        for (uint8_t byte : dispatched.reply_path)
+          require(byte == 0xa5, "disabled dispatched query changed reply path bytes");
+        for (uint8_t byte : dispatched.reply_data)
+          require(byte == 0xc7, "disabled dispatched query changed reply payload");
+      }
+
+      // The switches apply only to public discovery. Both anonymous metadata
+      // services and login remain reachable with all four combinations.
+      for (unsigned type : {ANON_REQ_TYPE_OWNER, ANON_REQ_TYPE_BASIC}) {
+        MyMesh metadata;
+        metadata._prefs.discovery_responses = node | (region << 1);
+        bytes[4] = type;
+        metadata.onAnonDataRecv(&request, secret, sender, bytes, 10);
+        require(metadata.allocations == 1 && metadata.direct_sends == 1
+                    && metadata.logins == 0,
+                "discovery switches disabled owner or clock metadata");
+      }
+      MyMesh login;
+      login._prefs.discovery_responses = node | (region << 1);
+      uint8_t credentials[] = {42, 0, 0, 0, 'x', 0};
+      login.onAnonDataRecv(&request, secret, sender, credentials, 5);
+      require(login.logins == 1 && login.allocations == 1,
+              "discovery switches disabled administrator login");
     }
   }
 }
@@ -302,5 +385,6 @@ int main() {
   checkAdverts();
   checkAnonymousHandlers();
   checkAnonymousDispatch();
+  checkDiscoveryResponseSwitches();
   std::puts("PASS: production protocol parser bounds");
 }

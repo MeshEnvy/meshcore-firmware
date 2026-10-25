@@ -13,6 +13,7 @@
 #include <helpers/CommonRadioPrefs.h>
 #include <helpers/DynamicConfigSerializer.h>
 #include <helpers/RepeaterRadioTiming.h>
+#include <helpers/DiscoveryResponsePrefs.h>
 #include <helpers/RadioProfileCLI.h>
 #include <helpers/MorseReplyHandoff.h>
 #include <helpers/WirelessControl.h>
@@ -203,6 +204,9 @@ public:
   // Repeater-only opt-in for routed trace diagnostics while repeat is off.
   // Appended after usb_debug in /com_prefs; existing images stay disabled.
   uint8_t trace_when_repeat_off = 0;
+  // Independent repeater reply gates: bit 0=node, bit 1=anonymous regions.
+  // Stored in a checked extension before the platform-specific EOF footer.
+  uint8_t discovery_responses = 3;
   // Runtime UART choice for merged RS-232 repeater artifacts. Appended at
   // /com_prefs offset 862; single-UART builds keep their compiled port here.
   uint8_t bridge_uart = 0;
@@ -472,6 +476,7 @@ protected:
     def("lat", node_lat);
     def("lon", node_lon);
     def("disc_mod", discovery_mod_timestamp);
+    def("disc_responses", discovery_responses);
     def("ota_ch", ota_channel);   // WiFi OTA release channel selector
     def("radio", radio);
     def("bridge", bridge);

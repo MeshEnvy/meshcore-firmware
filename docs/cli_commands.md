@@ -636,6 +636,44 @@ require MQTT or PSRAM.
 
 ---
 
+### Enable or disable discovery responses
+
+**Availability:** Repeater firmware in newer source builds. These switches are
+not included in the existing published **1.18.0.1** binaries. They do not require
+MQTT or PSRAM and are not Companion, Room Server, or Sensor settings.
+
+```text
+get discovery.node.responses
+set discovery.node.responses on
+set discovery.node.responses off
+get discovery.region.responses
+set discovery.region.responses on
+set discovery.region.responses off
+```
+
+| Setting | Default | What `off` does |
+| --- | --- | --- |
+| `discovery.node.responses` | `on` | Stops replies to normal zero-hop node-discovery requests. |
+| `discovery.region.responses` | `on` | Stops replies to anonymous region/scope queries, even while adverts remain enabled. |
+
+The two choices are independent. They apply immediately after a successful
+save and survive reboot; no reboot is needed. Fresh installations and upgrades
+without saved choices keep both on, preserving the previous behavior. Use a
+local console or authenticated administrator CLI to change them.
+
+Enabling node responses still honors the existing hidden-node rule: when both
+`advert.interval` and `flood.advert.interval` are `0`, the repeater does not
+answer normal discovery requests. Enabling a response switch also retains the
+normal request-validation and rate limits.
+
+These switches do not stop the node's own adverts, outgoing
+`discover.neighbors` or `discover.scopes` commands, or automatic
+[MQTT neighbor discovery](#view-or-change-periodic-neighbors-publishing-mqtt-observer-neighbors-feature).
+They do not restrict an authorized administrator's `region` CLI commands.
+Use `set mqtt.neighbors off` to stop the periodic outgoing MQTT discovery pass.
+
+---
+
 ### Discover neighbor scopes (MQTT observer, neighbors feature)
 
 Refreshes the zero-hop neighbor table, then queries each neighbor for its region
@@ -648,6 +686,10 @@ scopes and publishes the assembled table to the MQTT `neighbors` topic once.
 (all PSRAM boards, plus non-PSRAM boards built with `MQTT_NEIGHBORS_WITHOUT_PSRAM`).
 Elsewhere it replies `Err - neighbors not enabled in this build`. If a
 `discover.neighbors` refresh is already in flight, the scope pass is queued behind it.
+
+This is an outgoing query. A repeater's separate
+[discovery response switches](#enable-or-disable-discovery-responses) control
+whether that repeater answers other nodes' requests.
 
 ---
 
@@ -6398,6 +6440,12 @@ default-off updates keep the existing record size.
 > loop - no restart required; enabling it triggers a discovery on the next pass.
 > While enabled, `get mqtt.status` gains a trailing `nbr: <next>/<last>` field
 > (time to next publish, and how the last publish went).
+
+This setting controls this node's outgoing periodic discovery and MQTT
+publication. It does not control replies to requests from other nodes. Newer
+repeater source builds have separate
+[node and region response switches](#enable-or-disable-discovery-responses),
+both defaulting to on; those switches are not in the published 1.18.0.1 images.
 
 ---
 

@@ -22,6 +22,7 @@ HARNESS = r'''
 #include <string>
 #include <vector>
 #include <helpers/GuestLoginSettings.h>
+#include <helpers/DiscoveryResponsePrefs.h>
 #include <helpers/ClientLoginPersistence.h>
 #include <helpers/ClientPathObservation.h>
 #include <helpers/ClientPathPersistence.h>
@@ -119,7 +120,11 @@ struct MyMesh {
   ClientACL acl;
   Clock clock;
   RNG rng;
-  struct Prefs { char password[16] = "admin"; char guest_password[16] = ""; } _prefs;
+  struct Prefs {
+    char password[16] = "admin";
+    char guest_password[16] = "";
+    uint8_t discovery_responses = 3;
+  } _prefs;
   unsigned long dirty_contacts_expiry = 0;
   uint8_t contacts_save_failures = 0, reply_data[160]{};
   int matching_peer_indexes[MAX_CLIENTS]{};
@@ -573,7 +578,7 @@ class RepeaterGuestAccessTests(unittest.TestCase):
             "static bool isFilterMgrAllowed(",
         ))
         dispatch = extract_braced(source, "void MyMesh::handleCommand(uint32_t sender_timestamp,")
-        call = dispatch.index("if (handleGuestCommand(command, reply, 157)")
+        call = dispatch.index("handleGuestCommand(command, reply, 157)")
         guard_start = dispatch.rindex("if (sender && !sender->isAdmin())", 0, call)
         guard = extract_braced(dispatch[guard_start:], "if (sender && !sender->isAdmin())")
         # Exercise the actual authorization branch and setter, excluding unrelated

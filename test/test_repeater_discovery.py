@@ -24,8 +24,14 @@ HARNESS = r'''
 #include <initializer_list>
 #include "examples/simple_repeater/RateLimiter.h"
 #include "src/RadioProfiles.h"
+#include "src/helpers/DiscoveryResponsePrefs.h"
 @CONSTANTS@
 #define MESH_DEBUG_PRINTLN(...) ((void)0)
+struct CountedLimiter : RateLimiter {
+  using RateLimiter::RateLimiter;
+  unsigned calls = 0;
+  bool allow(uint32_t now) { ++calls; return RateLimiter::allow(now); }
+};
 static uint32_t now_ms = 100;
 bool millisHasNowPassed(uint32_t deadline) {
   return static_cast<int32_t>(now_ms - deadline) > 0;
@@ -71,13 +77,14 @@ struct MyMesh {
   struct {
     uint16_t advert_interval = 30, flood_advert_interval = 0;
     bool disable_fwd = false;
+    uint8_t discovery_responses = 3;
     uint32_t discovery_mod_timestamp = 500;
   } _prefs;
   struct Clock {
     uint32_t now = 1000;
     uint32_t getCurrentTime() const { return now; }
   } rtc_clock;
-  RateLimiter @LIMITER@;
+  CountedLimiter @LIMITER@;
   mesh::Radio radio;
   mesh::Radio* _radio = &radio;
   mesh::Identity self_id, neighbour;
@@ -206,6 +213,53 @@ static void gates() {
   unrelated.onControlDataRecv(&packet);
   require(unrelated.create_attempts == 0, "unrelated control type produced a reply");
 }
+static void response_switches() {
+  for (uint8_t node : {0, 1}) {
+    for (uint8_t region : {0, 1}) {
+      for (unsigned flags = 0; flags < 4; ++flags) {
+        MyMesh receiver;
+        receiver._prefs.discovery_responses = node | (region << 1);
+        receiver.response.payload_len = 17;
+        receiver.response.tx_radio = mesh::RADIO_TX_BOTH;
+        std::memset(receiver.response.payload, 0xa5, sizeof(receiver.response.payload));
+        auto packet = request(flags & 1, 0, false, flags & 2);
+        for (unsigned count = 0; count < 8; ++count) {
+          receiver.onControlDataRecv(&packet);
+        }
+        if (node) {
+          require(receiver.sent_packets == 4 && receiver.create_attempts == 4,
+                  "region response choice affected normal node discovery");
+        } else {
+          require(receiver.discover_limiter.calls == 0,
+                  "disabled node discovery consumed rate-limit quota");
+          require(receiver.sent_packets == 0 && receiver.create_attempts == 0,
+                  "disabled node discovery allocated or transmitted a reply");
+          require(receiver.response.payload_len == 17
+                      && receiver.response.tx_radio == mesh::RADIO_TX_BOTH,
+                  "disabled node discovery changed pending reply metadata");
+          for (uint8_t byte : receiver.response.payload) {
+            require(byte == 0xa5, "disabled node discovery changed reply bytes");
+          }
+          // Turning the live switch back on must admit the complete original
+          // quota: rejected requests did not secretly exhaust the limiter.
+          receiver._prefs.discovery_responses |= 1;
+          for (unsigned count = 1; count <= 5; ++count) {
+            receiver.onControlDataRecv(&packet);
+            require(receiver.sent_packets == (count < 5 ? count : 4),
+                    "disabled requests exhausted the later enabled quota");
+          }
+        }
+        // Enabling responses must not override the legacy hidden-node rule.
+        MyMesh hidden;
+        hidden._prefs.discovery_responses = node | (region << 1);
+        hidden._prefs.advert_interval = hidden._prefs.flood_advert_interval = 0;
+        hidden.onControlDataRecv(&packet);
+        require(hidden.create_attempts == 0 && hidden.discover_limiter.calls == 0,
+                "response setting bypassed hidden-node protection");
+      }
+    }
+  }
+}
 static void wire() {
   for (bool prefix : {false, true}) {
     MyMesh receiver;
@@ -333,7 +387,10 @@ static void radio2_disabled() {
   }
 }
 static void received() {
+ for (uint8_t node : {0, 1}) {
+  for (uint8_t region : {0, 1}) {
   MyMesh receiver;
+  receiver._prefs.discovery_responses = node | (region << 1);
   receiver._prefs.advert_interval = 0;
   receiver._prefs.flood_advert_interval = 0;
   receiver.pending_discover_tag = 0x78563412;
@@ -363,11 +420,15 @@ static void received() {
   receiver.onControlDataRecv(&packet);
   require(receiver.neighbours == 1 && receiver.pending_discover_tag == 0,
           "expired discovery response retained its pending request");
+  now_ms = 100;
+  }
+ }
 }
 int main(int argc, char** argv) {
   if (argc != 2) return 2;
   if (std::strcmp(argv[1], "policy") == 0) policy();
   else if (std::strcmp(argv[1], "gates") == 0) gates();
+  else if (std::strcmp(argv[1], "response_switches") == 0) response_switches();
   else if (std::strcmp(argv[1], "wire") == 0) wire();
   else if (std::strcmp(argv[1], "radio2_wire") == 0) radio2_wire();
   else if (std::strcmp(argv[1], "radio2_disabled") == 0) radio2_disabled();
@@ -440,6 +501,10 @@ class RepeaterDiscoveryTests(unittest.TestCase):
 
     def test_prefix_full_reply_bytes_delay_and_allocation_failure(self):
         checked = self.run_case("wire")
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+
+    def test_saved_response_switches_are_independent_and_reject_before_quota(self):
+        checked = self.run_case("response_switches")
         self.assertEqual(checked.returncode, 0, checked.stderr)
 
     def test_hidden_nodes_still_process_matching_discovery_responses(self):

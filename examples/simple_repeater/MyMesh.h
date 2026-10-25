@@ -399,6 +399,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   mesh::GuestLoginSettings guest_login;
   mesh::LoginHistory login_history;
   bool handleGuestCommand(const char* command, char* reply, size_t capacity);
+  bool handleDiscoveryResponseCommand(const char* command, char* reply, size_t capacity);
   ClientACL  acl;
   CommonCLI _cli;
 #if defined(ESP32_PLATFORM) || defined(USER_GPIO_CONTROL)

@@ -19,6 +19,7 @@ HARNESS = r'''
 #define ATOMIC_FILE_WRITER_IMPLEMENTATION
 #include <helpers/AtomicFileWriter.h>
 #include <helpers/PrefsSaveRouting.h>
+#include <helpers/DiscoveryResponsePrefs.h>
 #include <helpers/GpsPowerPolicy.h>
 #include <helpers/radiolib/RXPowerSaving.h>
 #if defined(ESP32_PLATFORM)
@@ -76,6 +77,7 @@ struct CommonCLI {
     prefs.freq=910; prefs.bw=62.5f; prefs.sf=7; prefs.cr=5;
     prefs.tx_power_dbm=30; prefs.primary_radio_preamble=48;
     prefs.espnow_bridge_enabled=1;
+    prefs.discovery_responses=3;
     prefs.gps_sync_interval_hours=336;
     prefs.rx_ps_rx_us=111; prefs.rx_ps_sleep_us=222;
   }

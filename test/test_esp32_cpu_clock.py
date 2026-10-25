@@ -248,6 +248,7 @@ inline char* utoa(unsigned value,char* out,int base){
 #include <vector>
 #include <helpers/esp32/CpuClockPolicy.h>
 #include <helpers/bridges/RS232PowerSettings.h>
+#include <helpers/DiscoveryResponsePrefs.h>
 @CONSTANTS@
 struct NodePrefs { @FIELDS@ };
 @MARKER@
@@ -269,6 +270,7 @@ void non_mqtt(File& file,NodePrefs* _prefs){ @SCALAR@ }
 int main(){
  using namespace mesh::esp32::cpuclock;
  NodePrefs prefs{};prefs.freq=910.525f;prefs.bw=62.5f;prefs.sf=7;prefs.cr=5;
+ prefs.discovery_responses=3;
  prefs.powersaving_enabled=1;strcpy(prefs.node_name,"unchanged prefix");
  File legacy;assert(writeCommonPrefsImage(legacy,&prefs));
  File nonlegacy;non_mqtt(nonlegacy,&prefs);assert(nonlegacy.bytes==legacy.bytes);

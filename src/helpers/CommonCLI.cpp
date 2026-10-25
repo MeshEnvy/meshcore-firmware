@@ -832,6 +832,7 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
 #endif
   _prefs->usb_debug_enabled = 0;
   _prefs->trace_when_repeat_off = 0;
+  _prefs->discovery_responses = mesh::discovery::DEFAULT_RESPONSES;
   _prefs->ota_channel = 0;
 #ifdef WITH_RS232_BRIDGE
   _prefs->rs232_heartbeat = 1;
@@ -1105,6 +1106,7 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
   // from a previous load of a newer image.
   _prefs->usb_debug_enabled = 0;
   _prefs->trace_when_repeat_off = 0;
+  _prefs->discovery_responses = mesh::discovery::DEFAULT_RESPONSES;
   _prefs->gps_sync_interval_hours = 0;
   _prefs->ota_channel = 0;
   _prefs->rs232_bridge_enabled = 0;
@@ -1809,6 +1811,9 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     ensureRxPowerSavingDefaults(&_prefs->rx_ps_rx_us, &_prefs->rx_ps_sleep_us);
     recalculateRxPowerSavingFromLevel(_prefs); // retune supported level-based timings to loaded SF/BW
 
+    // Read reply controls independently of the current UART profile. Older
+    // images have no record and retain both replies enabled.
+    _prefs->discovery_responses = mesh::discovery::readPrefs(file);
     // Read the footer independently of optional legacy UART tails/profile.
 #if defined(RAK_4631)
     _prefs->peripherals_shared = mesh::peripherals::readCommonMode(file);
@@ -1983,6 +1988,11 @@ static bool writeCommonPrefsImage(Writer& writer, NodePrefs* prefs) {
                                       prefs->rs232_idle_seconds);
   WRITE_COMMON_PREFS_BYTES(power_tail, sizeof(power_tail));
 #endif
+  if (prefs->discovery_responses != mesh::discovery::DEFAULT_RESPONSES) {
+    uint8_t discovery_tail[mesh::discovery::PREFS_SIZE];
+    mesh::discovery::encodePrefs(discovery_tail, prefs->discovery_responses);
+    WRITE_COMMON_PREFS_BYTES(discovery_tail, sizeof(discovery_tail));
+  }
 #if defined(RAK_4631)
   uint8_t peripheral_footer[mesh::peripherals::FooterSize];
   mesh::peripherals::encodeFooter(peripheral_footer, prefs->peripherals_shared);
@@ -2078,6 +2088,8 @@ void CommonCLI::savePrefs(FILESYSTEM* fs, PrefsSaveRouting::Scope scope) {
     _common_save_succeeded = false;
     _prefs->usb_debug_enabled = _prefs->usb_debug_enabled == 1 ? 1 : 0;
     _prefs->trace_when_repeat_off = _prefs->trace_when_repeat_off == 1 ? 1 : 0;
+    if (_prefs->discovery_responses > mesh::discovery::DEFAULT_RESPONSES)
+      _prefs->discovery_responses = mesh::discovery::DEFAULT_RESPONSES;
 #if defined(ESP32_PLATFORM)
     if (!mesh::esp32::cpuclock::validSelection(_prefs->cpu_freq_mhz)
         || (_prefs->cpu_freq_mhz && !_board->supportsCpuFrequencyMHz(_prefs->cpu_freq_mhz)))
@@ -2234,6 +2246,11 @@ void CommonCLI::savePrefs(FILESYSTEM* fs, PrefsSaveRouting::Scope scope) {
                                         _prefs->rs232_idle_seconds);
     file.write(power_tail, sizeof(power_tail));
 #endif
+    if (_prefs->discovery_responses != mesh::discovery::DEFAULT_RESPONSES) {
+      uint8_t discovery_tail[mesh::discovery::PREFS_SIZE];
+      mesh::discovery::encodePrefs(discovery_tail, _prefs->discovery_responses);
+      file.write(discovery_tail, sizeof(discovery_tail));
+    }
 #if defined(RAK_4631)
     uint8_t peripheral_footer[mesh::peripherals::FooterSize];
     mesh::peripherals::encodeFooter(peripheral_footer, _prefs->peripherals_shared);

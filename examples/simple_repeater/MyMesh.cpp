@@ -748,6 +748,7 @@ static bool hasCompleteAnonReplyPath(const uint8_t* data, size_t data_len) {
 
 uint8_t MyMesh::handleAnonRegionsReq(const mesh::Identity& sender, uint32_t sender_timestamp,
                                     const uint8_t* data, size_t data_len) {
+  if (!(_prefs.discovery_responses & mesh::discovery::REGION_RESPONSES)) return 0;
   if (!hasCompleteAnonReplyPath(data, data_len)) return 0;
   if (anon_limiter.allow(rtc_clock.getCurrentTime())) {
     // request data has: {reply-path-len}{reply-path}
@@ -2832,6 +2833,8 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
     memcpy(&timestamp, data, 4);
 
     data[len] = 0;  // ensure null terminator
+    if (data[4] == ANON_REQ_TYPE_REGIONS
+        && !(_prefs.discovery_responses & mesh::discovery::REGION_RESPONSES)) return;
     const bool login_request = data[4] == 0 || data[4] >= ' ';
     uint8_t reply_len;
 
@@ -3579,6 +3582,7 @@ bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t 
 void MyMesh::onControlDataRecv(mesh::Packet* packet) {
   uint8_t type = packet->payload[0] & 0xF0;    // just test upper 4 bits
   if (type == CTL_TYPE_NODE_DISCOVER_REQ && packet->payload_len >= 6
+      && (_prefs.discovery_responses & mesh::discovery::NODE_RESPONSES)
       && !isHiddenNode()   // this node wishes to NOT be discoverable
       && discover_limiter.allow(rtc_clock.getCurrentTime())
   ) {
@@ -5584,6 +5588,43 @@ void MyMesh::dumpLogFile() {
 #else
 void MyMesh::dumpLogFile() { }
 #endif
+
+bool MyMesh::handleDiscoveryResponseCommand(const char* command, char* reply, size_t capacity) {
+  const bool get = strncmp(command, "get ", 4) == 0;
+  const bool set = strncmp(command, "set ", 4) == 0;
+  if (!get && !set) return false;
+  const char* name = command + 4;
+  const char* setting;
+  uint8_t flag;
+  if (strncmp(name, "discovery.node.responses", 24) == 0) {
+    setting = "discovery.node.responses";
+    flag = mesh::discovery::NODE_RESPONSES;
+  } else if (strncmp(name, "discovery.region.responses", 26) == 0) {
+    setting = "discovery.region.responses";
+    flag = mesh::discovery::REGION_RESPONSES;
+  } else {
+    return false;
+  }
+  const char* value = name + strlen(setting);
+  if (*value && *value != ' ' && *value != '\t') return false;
+  while (*value == ' ' || *value == '\t') ++value;
+  if ((get && *value) || (set && strcmp(value, "on") && strcmp(value, "off"))) {
+    snprintf(reply, capacity, "Err - use get %s or set %s on|off", setting, setting);
+  } else if (get) {
+    snprintf(reply, capacity, "> %s", (_prefs.discovery_responses & flag) ? "on" : "off");
+  } else {
+    const uint8_t previous = _prefs.discovery_responses;
+    if (strcmp(value, "on") == 0) _prefs.discovery_responses |= flag;
+    else _prefs.discovery_responses &= ~flag;
+    if (_cli.saveCommonPrefs()) {
+      snprintf(reply, capacity, "OK - %s %s", setting, value);
+    } else {
+      _prefs.discovery_responses = previous;
+      snprintf(reply, capacity, "Err - save unconfirmed; reboot may differ");
+    }
+  }
+  return true;
+}
 
 bool MyMesh::handleGuestCommand(const char* command, char* reply, size_t capacity) {
   const bool get = strncmp(command, "get guest", 9) == 0;
@@ -12762,7 +12803,8 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, ClientInfo* sender, char *
       return;
     }
   }
-  if (handleGuestCommand(command, reply, 157)
+  if (handleDiscoveryResponseCommand(command, reply, 157)
+      || handleGuestCommand(command, reply, 157)
       || mesh::cli::handleGuestsGet(acl, command, reply, 157)
       || mesh::cli::handleLoginsGet(login_history, command, reply, 157)) return;
   _cli.handleCommand(sender_timestamp, command, reply);
@@ -12785,7 +12827,8 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, ClientInfo* sender, char *
     }
   }
 
-  if (handleGuestCommand(command, reply, 157)
+  if (handleDiscoveryResponseCommand(command, reply, 157)
+      || handleGuestCommand(command, reply, 157)
       || mesh::cli::handleGuestsGet(acl, command, reply, 157)
       || mesh::cli::handleLoginsGet(login_history, command, reply, 157)) return;
 
