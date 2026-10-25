@@ -20,12 +20,16 @@ def guest_dispatch(source):
     zero_guard = re.search(r"if \([^\n]+sender_timestamp == 0\) sender_timestamp = 1;", body).group()
     prefix = extract_braced(body, "if (strlen(command) > 4 && command[2] == '|')")
     dispatches = list(re.finditer(
-        r"if \(handleGuestCommand\(command, reply, 157\)\s*"
+        r"if \(handleDiscoveryResponseCommand\(command, reply, 157\)\s*"
+        r"\|\| handleGuestCommand\(command, reply, 157\)\s*"
         r"\|\| mesh::cli::handleGuestsGet\(acl, command, reply, 157\)\s*"
         r"\|\| mesh::cli::handleLoginsGet\(login_history, command, reply, 157\)\) return;", body))
     if not dispatches:
         raise AssertionError("guest/login command dispatch is absent")
     generated = '#include <helpers/FloodCommandAliases.h>\n'
+    # Keep the real guarded dispatch chain. Discovery settings have their own
+    # production-handler tests and do not handle these guest/login queries.
+    generated += 'static bool handleDiscoveryResponseCommand(const char*, char*, size_t) { return false; }\n'
     for signature in (
         "static bool commandFamilyMatches(", "static bool commandListMatches(",
         "static bool isCommonManagerReadOnlyAllowed(",

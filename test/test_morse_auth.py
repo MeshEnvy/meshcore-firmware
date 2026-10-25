@@ -23,8 +23,8 @@ struct ClientInfo {
   bool isFilterMgr() const { return (permissions & FilterManager) != 0; }
 };
 
-// Guest authorization has its own real-handler suite. These unrelated
-// dispatch targets must not consume any of the Morse commands below.
+// Guest and discovery behavior have their own real-handler suites. These
+// unrelated dispatch targets must not consume any of the Morse commands below.
 namespace mesh { namespace cli {
 bool handleGuestsGet(int, const char*, char*, size_t) { return false; }
 bool handleLoginsGet(int, const char*, char*, size_t) { return false; }
@@ -48,6 +48,11 @@ struct LegacyPortable {
   CommonCLI _cli;
   int acl = 0;
   int login_history = 0;
+  unsigned discovery_calls = 0;
+  bool handleDiscoveryResponseCommand(const char*, char*, size_t) {
+    ++discovery_calls;
+    return false;
+  }
   bool handleGuestCommand(const char*, char*, size_t) { return false; }
   void dispatch(ClientInfo* sender, uint32_t sender_timestamp,
                 const char* command, char* reply) {
@@ -60,11 +65,13 @@ static void denied(LegacyPortable& node, ClientInfo* sender, const char* command
     const unsigned calls = node._cli.calls;
     const unsigned rf = node._cli.rf_actions;
     const unsigned settings = node._cli.settings;
+    const unsigned discovery_calls = node.discovery_calls;
     char reply[160] = {};
     node.dispatch(sender, timestamp, command, reply);
     assert(!strcmp(reply, "Err - not permitted"));
     assert(node._cli.calls == calls);
     assert(node._cli.rf_actions == rf && node._cli.settings == settings);
+    assert(node.discovery_calls == discovery_calls);
   }
 }
 
@@ -103,7 +110,9 @@ int main() {
     for (ClientInfo* sender : {&region, &filter, &combined, &admin}) allowed(node, sender, command);
     allowed(node, nullptr, command);
   }
-  for (const char* command : {"get password", "get guest.password", "get wifi.pwd", "get bridge.secret"}) {
+  for (const char* command : {"get password", "get guest.password", "get wifi.pwd", "get bridge.secret",
+      "get discovery.node.responses", "get discovery.region.responses",
+      "set discovery.node.responses off", "set discovery.region.responses off"}) {
     for (ClientInfo* sender : {&guest, &region, &filter, &combined}) denied(node, sender, command);
     allowed(node, &admin, command);
     allowed(node, nullptr, command);
