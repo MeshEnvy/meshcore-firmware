@@ -1191,10 +1191,10 @@ public:
         mesh::ui::drawTextCenteredEllipsized(
             display, layout.pairing, layout.pairing_label_y, pairing_label);
         display.setTextSize(pairing_value_size);
-        mesh::ui::drawTextCenteredEllipsized(
+        const bool value_drawn = mesh::ui::drawTextCenteredEllipsized(
             display, layout.pairing, layout.pairing_value_y, pairing_value);
         _pairing_pin_visible = pairing_value == pairing_pin
-            && display.getTextWidth(pairing_value) <= layout.pairing.width
+            && value_drawn
             && layout.pairing_value_y + display.textLineHeight() <= display.height();
       } else if (expanded_home) {
         display.setColor(UIColor::secondary_txt);

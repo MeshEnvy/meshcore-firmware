@@ -250,10 +250,12 @@ int main() {
 #define PRESS_LABEL "Press"
 int UITask::getPreviewCount() const { return 12; }
 const char* UITask::inboxTitle() const { return "HISTORY"; }
-void renderHome(DisplayDriver& display, UITask* _task) {
+bool renderHome(DisplayDriver& display, UITask* _task) {
+  bool _pairing_pin_visible = false;
   char tmp[80];
   const int body_top = 14;
 '''+ first_page + r'''
+  return _pairing_pin_visible;
 }
 struct MeasuredDisplay : Display {
   int size = 1;
@@ -276,7 +278,8 @@ int main() {
       MeasuredDisplay display(dims.first, dims.second);
       UITask task(display);
       task._msgcount = 0; task.connected = true; task.client = client;
-      renderHome(display, &task);
+      const bool pairing_pin_visible = renderHome(display, &task);
+      assert(pairing_pin_visible == display.contains("123456"));
       assert(display.contains("HISTORY: 12"));
       assert(display.contains("Pending: 0"));
       if (task.hasBluetoothConnection()) {

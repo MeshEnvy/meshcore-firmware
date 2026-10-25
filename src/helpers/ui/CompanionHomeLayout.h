@@ -144,16 +144,19 @@ inline void clearDisplayRegion(DisplayDriver& display,
 // Center short text inside the supplied region and ellipsize long text from
 // the region's left edge.  In both cases the rendered row is horizontally
 // bounded by the region and cannot run into an adjacent UI block.
-inline void drawTextCenteredEllipsized(DisplayDriver& display,
+// Return true when the complete text was drawn, without measuring it again.
+inline bool drawTextCenteredEllipsized(DisplayDriver& display,
                                        const DisplayRegion& region, int y,
                                        const char* text) {
-  if (text == nullptr || text[0] == 0 || region.width <= 0) return;
+  if (text == nullptr || text[0] == 0 || region.width <= 0) return false;
   const int text_width = display.getTextWidth(text);
   if (text_width <= region.width) {
     display.setCursor(region.x + (region.width - text_width) / 2, y);
     display.print(text);
+    return true;
   } else {
     display.drawTextEllipsized(region.x, y, region.width, text);
+    return false;
   }
 }
 
@@ -196,8 +199,9 @@ public:
 // including native 160x80 T096 and 250x122 MeshPocket panels. The caller must
 // not draw ordinary instructions/network rows in this same area.
 // Return true only when the complete value fits and was drawn.
-inline bool drawBottomPairingBlock(DisplayDriver& display, int content_top,
-                                    const char* label, const char* value) {
+// Keep this layout separate from the large home renderer to reduce flash use.
+__attribute__((noinline)) inline bool drawBottomPairingBlock(
+    DisplayDriver& display, int content_top, const char* label, const char* value) {
   const int bottom = display.height() - (display.height() > 64 ? 2 : 0);
   const int available = bottom - content_top;
   const int margin = display.width() >= 16 ? 4 : 0;
@@ -227,8 +231,7 @@ inline bool drawBottomPairingBlock(DisplayDriver& display, int content_top,
     drawTextCenteredEllipsized(display, region, region.y, label);
   }
   display.setTextSize(value_size);
-  drawTextCenteredEllipsized(display, region, bottom - value_height, value);
-  return display.getTextWidth(value) <= width;
+  return drawTextCenteredEllipsized(display, region, bottom - value_height, value);
 }
 
 }  // namespace ui
