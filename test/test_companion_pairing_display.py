@@ -14,6 +14,7 @@ HARNESS = r'''
 #include <helpers/ui/DisplayDriver.h>
 #include <helpers/ui/BluetoothPairingUiPolicy.h>
 #include <helpers/ui/CompanionHomeLayout.h>
+#include <algorithm>
 #include <cassert>
 #include <string>
 #include <vector>
@@ -24,7 +25,7 @@ constexpr unsigned long BLE_PAIRING_DISPLAY_MILLIS = 120000;
 struct TestDisplay : DisplayDriver {
   bool on = false;
   std::vector<std::string> text;
-  TestDisplay() : DisplayDriver(128, 64) {}
+  TestDisplay(int width, int height) : DisplayDriver(width, height) {}
   bool isOn() override { return on; }
   void turnOn() override { on = true; }
   void turnOff() override { on = false; }
@@ -50,7 +51,11 @@ struct Interfaces {
   bool takePairingRequest() { bool result = pending; pending = false; return result; }
 };
 struct UIScreen {};
-struct HomeScreen : UIScreen { void showFirstPage() {} };
+struct HomeScreen : UIScreen {
+  bool first = true;
+  bool isFirstPage() const { return first; }
+  void showFirstPage() { first = true; }
+};
 struct MsgPreviewScreen : UIScreen { bool hasMessages() const { return false; } };
 struct Mesh {
   uint32_t pin = 246810;
@@ -94,14 +99,39 @@ static void homePairing(UITask* _task, TestDisplay& display) {
   const int home_content_top = 20;
   @HOME_SELECTION@
 }
-int main() {
+static void checkPairingPresentation(UITask& ui, TestDisplay& display) {
+  display.text.clear();
+  homePairing(&ui, display);
+  ui.renderPairingBanner();
+#if defined(HELTEC_T096)
+  if (display.height() > 64) {
+    assert(std::count(display.text.begin(), display.text.end(), "246810") == 1);
+    assert(std::count(display.text.begin(), display.text.end(), "PAIR PIN 246810") == 0);
+    // Another home page or asynchronous screen still needs the top PIN.
+    ui.home_screen.first = false;
+    display.text.clear();
+    ui.renderPairingBanner();
+    assert(display.text.back() == "PAIR PIN 246810");
+    ui.home_screen.showFirstPage();
+    ui.curr = ui.msg_preview;
+    display.text.clear();
+    ui.renderPairingBanner();
+    assert(display.text.back() == "PAIR PIN 246810");
+    ui.curr = ui.home;
+    return;
+  }
+#endif
+  assert(display.text.back() == "PAIR PIN 246810");
+}
+int main(int argc, char** argv) {
   using namespace mesh::ui;
   g_mock_millis = 100;
   displayPowerPrefs() = DisplayPowerPrefs();
   displayPowerPrefs().usb.mode = DisplayMode::ButtonPairing;
   Board board;
   Interfaces interfaces;
-  TestDisplay display;
+  TestDisplay display(argc > 1 ? atoi(argv[1]) : 128,
+                      argc > 2 ? atoi(argv[2]) : 64);
   UITask ui{&display, &board, &interfaces};
   ui.servicePairingState();
   assert(!display.isOn() && !ui.isPairingScreenActive());
@@ -109,8 +139,7 @@ int main() {
   ui.servicePairingState();
   assert(display.isOn() && ui.isPairingScreenActive());
   assert(!ui._pairing_from_button && interfaces.usb && !interfaces.ble);
-  ui.renderPairingBanner();
-  assert(display.text.back() == "PAIR PIN 246810");
+  checkPairingPresentation(ui, display);
   ui.navigation('n'); // Navigation may not steal a real phone pairing prompt.
   assert(ui.isPairingScreenActive());
   g_mock_millis += 120000;
@@ -121,8 +150,7 @@ int main() {
   assert(ui.checkDisplayOn('n') == 0);
   assert(display.isOn() && ui.isPairingScreenActive() && ui._pairing_from_button);
   assert(ui._pairing_screen_until - millis() == 15000);
-  ui.renderPairingBanner();
-  assert(display.text.back() == "PAIR PIN 246810");
+  checkPairingPresentation(ui, display);
   ui.navigation('n');
   assert(!ui.isPairingScreenActive() && !ui._pairing_from_button);
   display.text.clear();
@@ -184,17 +212,25 @@ class CompanionPairingDisplayTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="mesh-pairing-display-") as temp:
             cpp, binary = Path(temp) / "test.cpp", Path(temp) / "test"
             cpp.write_text(program)
-            result = subprocess.run([
-                "c++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
-                "-Wno-unused-parameter",
-                "-fsanitize=address,undefined", "-fno-pie", "-no-pie",
-                "-isystem", str(ROOT / "test/mocks"), "-I", str(ROOT / "src"),
-                str(cpp), str(ROOT / "src/helpers/ui/DisplayDriver.cpp"),
-                "-o", str(binary),
-            ], text=True, capture_output=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            result = subprocess.run([str(binary)], text=True, capture_output=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
+            for profile, flags, sizes in (
+                ("oled", [], [(128, 64)]),
+                ("t096", ["-DHELTEC_T096=1"], [(160, 80), (80, 160), (128, 64)]),
+            ):
+                with self.subTest(profile=profile):
+                    result = subprocess.run([
+                        "c++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
+                        "-Wno-unused-parameter", *flags,
+                        "-fsanitize=address,undefined", "-fno-pie", "-no-pie",
+                        "-isystem", str(ROOT / "test/mocks"), "-I", str(ROOT / "src"),
+                        str(cpp), str(ROOT / "src/helpers/ui/DisplayDriver.cpp"),
+                        "-o", str(binary),
+                    ], text=True, capture_output=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    for width, height in sizes:
+                        with self.subTest(width=width, height=height):
+                            result = subprocess.run([str(binary), str(width), str(height)],
+                                                    text=True, capture_output=True)
+                            self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

@@ -960,6 +960,8 @@ public:
 #endif
     _page = HomePage::FIRST;
   }
+  bool isFirstPage() const { return _page == HomePage::FIRST; }
+
 #if COMPANION_FEATURE_READER
   bool isRadioPage() const {
     return _page == HomePage::RADIO || _page == HomePage::RADIO2;
@@ -2615,6 +2617,11 @@ void UITask::renderPairingBanner() {
   if (_display == NULL || !isPairingScreenActive()) return;
   const uint32_t pairing_pin = the_mesh.getBLEPin();
   if (pairing_pin == 0) return;
+#if defined(HELTEC_T096)
+  // The native T096 home page already shows the larger PIN at the bottom.
+  if (curr == home && static_cast<HomeScreen*>(home)->isFirstPage()
+      && _display->height() > 64) return;
+#endif
 
   char prompt[24];
   snprintf(prompt, sizeof(prompt), "PAIR PIN %06u",
