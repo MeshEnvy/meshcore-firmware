@@ -555,6 +555,9 @@ protected:
   void onContactResponse(const ContactInfo &contact, const uint8_t *data, uint8_t len) override;
   void onControlDataRecv(mesh::Packet *packet) override;
   void onRawDataRecv(mesh::Packet *packet) override;
+  // The profile a received packet arrived on, for a frame's reserved byte
+  // (see rxViaTag in MyMesh.cpp).
+  uint8_t rxViaTag(const mesh::Packet *pkt, uint8_t none) const;
   void onTraceRecv(mesh::Packet *packet, uint32_t tag, uint32_t auth_code, uint8_t flags,
                    const uint8_t *path_snrs, const uint8_t *path_hashes, uint8_t path_len) override;
 

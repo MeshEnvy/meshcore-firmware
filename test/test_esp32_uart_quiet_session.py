@@ -92,6 +92,7 @@ struct MyMesh {
     if(pending_route==route)pending_route=nullptr;
   }
   int findChannelIdxForPacket(const mesh::GroupChannel&,mesh::Packet*) const { return 0; }
+  uint8_t rxViaTag(const mesh::Packet*,uint8_t none) const { return none; }
   int getOfflineQueueCapacity() const;
   Frame& offlineQueueFrameAt(int);
   bool addToOfflineQueue(const uint8_t*,int);

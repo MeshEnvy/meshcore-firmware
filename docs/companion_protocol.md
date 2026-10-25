@@ -715,7 +715,8 @@ Inbound group datagrams (radio-level `PAYLOAD_TYPE_GRP_DATA`, 0x06) are forwarde
 ```
 Byte 0:                 0x1B (packet type)
 Byte 1:                 SNR (signed int8, scaled x4 - divide by 4.0 to recover dB)
-Bytes 2-3:              Reserved (clients MUST ignore)
+Byte 2:                 Receive profile while radio2 is on: 0xA0 primary, 0xA1 radio2; otherwise or for UDP bridge ingress, 0 (reserved)
+Byte 3:                 Reserved (clients MUST ignore)
 Byte 4:                 Channel index (0 through max_channels - 1)
 Byte 5:                 Path Length (actual path length when flooded, otherwise 0xFF for direct)
 Bytes 6-7:              Data Type (uint16 little-endian)
@@ -1036,7 +1037,7 @@ Byte values are authoritative; names are aliases. When reading firmware source, 
 | `0x81` | `PUSH_CODE_PATH_UPDATED` | A contact path changed. |
 | `0x82` | `PUSH_CODE_SEND_CONFIRMED` | A sent message was acknowledged. |
 | `0x83` | `PUSH_CODE_MSG_WAITING` | One or more offline frames are waiting. |
-| `0x84` | `PUSH_CODE_RAW_DATA` | Raw application data received. |
+| `0x84` | `PUSH_CODE_RAW_DATA` | Raw application data received: `[0x84][SNR x4][RSSI][profile][payload]`. `profile` is 0xA0 (primary) or 0xA1 (radio2) while radio2 is on. Otherwise, and for UDP bridge ingress, it remains 0xFF (reserved). |
 | `0x85` / `0x86` | `PUSH_CODE_LOGIN_SUCCESS` / `PUSH_CODE_LOGIN_FAIL` | Server login result. |
 | `0x87` | `PUSH_CODE_STATUS_RESPONSE` | Server status response. |
 | `0x88` | `PUSH_CODE_LOG_RX_DATA` | Radio receive log data. |

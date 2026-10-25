@@ -2366,7 +2366,7 @@ void MyMesh::onChannelDataRecv(const mesh::GroupChannel &channel, mesh::Packet *
   int i = 0;
   out_frame[i++] = RESP_CODE_CHANNEL_DATA_RECV;
   out_frame[i++] = (int8_t)(pkt->getSNR() * 4);
-  out_frame[i++] = 0; // reserved1
+  out_frame[i++] = rxViaTag(pkt, 0); // reserved1: the profile it arrived on, while radio2 is on
   out_frame[i++] = 0; // reserved2
 
   const int selected_channel = findChannelIdxForPacket(channel, pkt);
@@ -2715,6 +2715,21 @@ void MyMesh::onControlDataRecv(mesh::Packet *packet) {
   }
 }
 
+// Which profile a received packet arrived on, for the app, in a frame byte that
+// stock firmware leaves reserved: 0xA0 the primary, 0xA1 radio2. MeshCore Open
+// TAK shows it under a MediaMesh photo or voice clip ("Received via MediaMesh",
+// "via main mesh", or both); Wadamesh standalones send the same tags. While
+// radio2 is off everything is the primary, so the stock value (`none`) stays,
+// as it does for a packet that came in over the UDP bridge.
+uint8_t MyMesh::rxViaTag(const mesh::Packet *pkt, uint8_t none) const {
+  const mesh::RadioProfiles *profiles = _radio ? _radio->profiles() : nullptr;
+  if (!pkt || !profiles || !profiles->enabled()) return none;
+#if defined(WITH_UDP_BRIDGE)
+  if (pkt->udp_bridge_ingress) return none;
+#endif
+  return pkt->radio_origin == 1 ? 0xA1 : 0xA0;
+}
+
 void MyMesh::onRawDataRecv(mesh::Packet *packet) {
   if (packet->payload_len + 4 > MAX_FRAME_SIZE) {
     MESH_DEBUG_PRINTLN("onRawDataRecv(), payload_len too long: %d", packet->payload_len);
@@ -2724,7 +2739,7 @@ void MyMesh::onRawDataRecv(mesh::Packet *packet) {
   out_frame[i++] = PUSH_CODE_RAW_DATA;
   out_frame[i++] = (int8_t)(packet->getSNR() * 4);
   out_frame[i++] = (int8_t)packet->getRSSI();
-  out_frame[i++] = 0xFF; // reserved (possibly path_len in future)
+  out_frame[i++] = rxViaTag(packet, 0xFF); // reserved: the profile it arrived on, while radio2 is on
   memcpy(&out_frame[i], packet->payload, packet->payload_len);
   i += packet->payload_len;
 

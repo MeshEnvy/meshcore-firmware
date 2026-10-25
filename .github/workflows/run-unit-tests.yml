@@ -589,6 +589,7 @@ jobs:
           python3 -B test/test_companion_prefs_transactions.py -v
           python3 -B test/test_companion_primary_radio_persistence.py -v
           python3 -B test/test_companion_response_bounds.py -v
+          python3 -B test/test_companion_rx_via.py -v
           python3 -B test/test_companion_ack_delivery.py -v
           python3 -B test/test_companion_lost_reply.py -v
           python3 -B test/test_companion_delayed_reply_delivery.py -v
