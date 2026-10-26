@@ -252,7 +252,8 @@ static void pushCases() {
   assert(mesh.sent[0].retry_enabled && !mesh.sent[1].retry_enabled && mesh.retry_timestamp == 700);
   assert(c.extra.room.push_post_timestamp == 700 && c.extra.room.pending_topic_revision == 22);
   assert(c.extra.room.pending_ack != 0 && c.extra.room.ack_timeout == ticks + PUSH_TIMEOUT_BASE + 2 * PUSH_ACK_TIMEOUT_FACTOR);
-  assert(mesh.sent[0].packet.radio_reply && mesh.sent[1].packet.radio_reply);
+  // Room posts use their delivery routes, not the admin CLI tx.reply override.
+  assert(!mesh.sent[0].packet.radio_reply && !mesh.sent[1].packet.radio_reply);
   assert(memcmp(mesh.sent[0].packet.payload, mesh.sent[1].packet.payload, mesh.sent[0].packet.payload_len) == 0);
   MyMesh failed; failed.send_ok = false;
   assert(!failed.pushRoomTextToClient(&failed.acl.clients[0], 700, author, "hello room", 22));
