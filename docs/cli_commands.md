@@ -1928,6 +1928,8 @@ settings use a safe effective power without replacing the saved preference.
 #### Change the radio parameters for a set duration
 **Usage:** 
 - `tempradio <freq>,<bw>,<sf>,<cr>,<timeout_mins>`
+- `set tempradio <freq>,<bw>,<sf>,<cr>,<timeout_mins>` (alias)
+- `get tempradio`
 - `normalradio`
 
 **Parameters:**
@@ -1939,6 +1941,14 @@ settings use a safe effective power without replacing the saved preference.
 
 **Notes:**
 - `tempradio` is not saved to preferences and clears on reboot.
+- Application starts after two seconds and waits for the radio/reply handoff.
+  `get tempradio` shows the live temporary RF tuple when active, `pending` while
+  waiting to start, and `off` when neither applies. A pending replacement keeps
+  showing the old live tuple until the switch. `get tempradioat all` lists
+  primary scheduled entries.
+- On LR2021 boards such as W12, extra-SF receive detectors that conflict with
+  the temporary SF/bandwidth pause for that session. Their saved settings return
+  with the normal radio tuple. Compatible detectors keep working.
 - On repeaters, remote `tempradio` and `normalradio` wait for their exact reply
   copies to finish, with at least one transmitted. This also covers the `set`
   alias, case-insensitive verbs, and client correlation prefixes. Failed replies
@@ -1950,9 +1960,9 @@ settings use a safe effective power without replacing the saved preference.
   minutes) and the watchdog policy for that session. For example:
 
 ```text
-OK - temp params for 1440 mins (1d0h0m); rx.watchdog=12hours
-OK - temp params for 3075 mins (2d3h15m); rx.watchdog=12hours
-OK - temp params for 180 mins (0d3h0m); rx.watchdog=off (temp<12hours)
+OK - temp params for 1440 mins (1d0h0m); applying in 2s; rx.watchdog=12hours
+OK - temp params for 3075 mins (2d3h15m); applying in 2s; rx.watchdog=12hours
+OK - temp params for 180 mins (0d3h0m); applying in 2s; rx.watchdog=off (temp<12hours)
 ```
 
 Repeater timing overrides apply only while a temporary window is running:

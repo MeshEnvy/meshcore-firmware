@@ -1058,6 +1058,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   void formatScheduledRadioSetting(char* reply, int setting_idx, int display_idx) const;
 
 protected:
+  bool isTempRadioPending() const override;
   uint32_t getTempRadioDurationSeconds() const override { return radio_timing.tempDuration(); }
   void appendTempRadioTimingNote(char* reply, size_t size, uint32_t seconds) const override {
     mesh::RepeaterRadioTiming::appendTempWatchdogNote(reply, size, seconds);

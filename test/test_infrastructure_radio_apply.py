@@ -172,6 +172,79 @@ class InfrastructureRadioApplyTest(unittest.TestCase):
                                 str(cpp), '-o', str(binary)], check=True)
                 subprocess.run([str(binary)], check=True)
 
+    def test_temp_query_distinguishes_pending_active_and_off(self):
+        common = (ROOT / 'src/helpers/CommonCLI.cpp').read_text()
+        query = method(common, 'if (!strcmp(command, "get tempradio") ||')
+        setting = method((ROOT / 'examples/simple_repeater/MyMesh.h').read_text(),
+                         'struct ScheduledRadioSetting {') + ';'
+        for folder, cls, filename in (
+                ('simple_repeater', 'MyMesh', 'MyMesh'),
+                ('simple_room_server', 'MyMesh', 'MyMesh'),
+                ('simple_sensor', 'SensorMesh', 'SensorMesh')):
+            with self.subTest(role=folder), tempfile.TemporaryDirectory() as temp:
+                if folder == 'simple_repeater':
+                    source = (ROOT / 'examples' / folder / (filename + '.cpp')).read_text()
+                    pending = method(source, f'bool {cls}::isTempRadioPending() const')
+                    pending = pending.replace(cls + '::', '')
+                    fields = setting + '\nScheduledRadioSetting scheduled_radio_settings[8]{};'
+                    set_pending = ('void pending(bool value) {scheduled_radio_settings[0].active=value;'
+                                   'scheduled_radio_settings[0].temporary=value;'
+                                   'scheduled_radio_settings[0].started=false;}')
+                else:
+                    source = (ROOT / 'examples' / folder / (filename + '.h')).read_text()
+                    pending = method(source, 'bool isTempRadioPending() const override').replace(' override', '')
+                    fields = 'uint32_t set_radio_at=0;'
+                    set_pending = 'void pending(bool value) {set_radio_at=value ? 2000 : 0;}'
+                code = r'''
+#include <cassert>
+#include <cstdio>
+#include <cstring>
+#include <RadioProfiles.h>
+struct Radio {
+  mesh::RadioProfiles state;
+  const mesh::RadioProfiles* profiles() const {return &state;}
+  uint16_t profilePreamble(uint8_t) const {return 32;}
+};
+struct Callback {
+  Radio radio;
+  bool temp_radio_applied=false;
+  @FIELDS@
+  @PENDING@
+  @SET_PENDING@
+  const Radio* getProfileRadio() const {return &radio;}
+};
+struct CommonCLI {
+  Callback* _callbacks;
+  void get(char* reply, const char* command) { @QUERY@ }
+};
+void get(Callback& callbacks, char* reply, const char* command="get tempradio") {
+  CommonCLI cli{&callbacks};cli.get(reply,command);
+}
+int main() {
+  Callback callbacks;char reply[160];
+  get(callbacks,reply);assert(!strcmp(reply,"> off"));
+  callbacks.pending(true);
+  get(callbacks,reply);assert(!strcmp(reply,"> pending"));
+  get(callbacks,reply,"tempradio");assert(!strcmp(reply,"> pending"));
+  callbacks.pending(false);callbacks.radio.state.primary_temporary=true;callbacks.temp_radio_applied=true;
+  auto& p=callbacks.radio.state.primary;
+  p.freq=910.539978f;p.bw=62.5f;p.sf=7;p.cr=5;
+  get(callbacks,reply);assert(!strcmp(reply,"> 910.540,62.500,7,5,32"));
+  // A replacement or future schedule must not hide the currently live tuple.
+  callbacks.pending(true);get(callbacks,reply);assert(!strcmp(reply,"> 910.540,62.500,7,5,32"));
+  callbacks.pending(false);callbacks.radio.state.primary_temporary=false;callbacks.temp_radio_applied=false;
+  get(callbacks,reply);assert(!strcmp(reply,"> off"));
+}
+'''
+                code = code.replace('@FIELDS@', fields).replace('@PENDING@', pending)
+                code = code.replace('@SET_PENDING@', set_pending).replace('@QUERY@', query)
+                cpp = Path(temp) / 'query.cpp'
+                binary = Path(temp) / 'query'
+                cpp.write_text(code)
+                subprocess.run(['c++', '-std=c++17', '-I'+str(ROOT/'src'), str(cpp),
+                                '-o', str(binary)], check=True)
+                subprocess.run([str(binary)], check=True)
+
     def test_screens_show_applied_tuple_with_radio2_off_or_on(self):
         # Compile the actual render/signature/dashboard selection blocks. A
         # saved edit must not move the screen before the PHY accepts it.

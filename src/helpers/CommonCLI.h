@@ -607,6 +607,8 @@ public:
   virtual bool saveIdentity(const mesh::LocalIdentity& new_id) = 0;
   virtual void clearStats() = 0;
   virtual void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins, uint16_t preamble = 0) = 0;
+  // Status is pending only when no temporary primary tuple is already running.
+  virtual bool isTempRadioPending() const { return false; }
   virtual uint32_t getTempRadioDurationSeconds() const { return 0; }
   virtual void appendTempRadioTimingNote(char* reply, size_t size, uint32_t seconds) const { }
   // Cancel pending/active temporary-radio windows and restore the saved tuple

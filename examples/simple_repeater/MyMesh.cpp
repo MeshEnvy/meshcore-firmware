@@ -4686,6 +4686,14 @@ bool MyMesh::isTempRadioActive() const {
   return temp_radio_applied;
 }
 
+bool MyMesh::isTempRadioPending() const {
+  if (temp_radio_applied) return false;
+  for (const auto& setting : scheduled_radio_settings) {
+    if (setting.active && setting.temporary && !setting.started) return true;
+  }
+  return false;
+}
+
 int MyMesh::findFreeScheduledRadioSlot() const {
   for (int i = 0; i < MAX_SCHEDULED_RADIO_SETTINGS; i++) {
     if (!scheduled_radio_settings[i].active) {

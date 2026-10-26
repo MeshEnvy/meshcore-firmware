@@ -3541,6 +3541,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       return;
     }
     if (!strcmp(command, "get tempradio") || !strcmp(command, "tempradio")) {
+      if (_callbacks->isTempRadioPending()) {
+        strcpy(reply, "> pending");
+        return;
+      }
       const auto* radio = _callbacks->getProfileRadio();
       if (!radio || !radio->profiles() || !radio->profiles()->primary_temporary) strcpy(reply, "> off");
       else {
@@ -3816,15 +3820,13 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
               + (uint64_t)temp_timeout_mins * 60 <= UINT32_MAX
           && mesh::cli::parseDecimalStrict(parts[0], freq)
           && mesh::cli::parseDecimalStrict(parts[1], bw)
-          && freq >= 150.0f && freq <= 2500.0f
-          && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8
-          && isValidLoRaBandwidth(bw)
-          && _radio_profiles.acceptsPrimary(freq, bw, sf, cr, preamble)) {
+          && sf <= 12 && cr <= 8
+          && acceptsPrimaryRadioParams(freq, bw, sf, cr, preamble)) {
         _callbacks->applyTempRadioParams(freq, bw, sf, cr, temp_timeout_mins, preamble);
         char duration[64];
         const uint32_t seconds = (uint32_t)temp_timeout_mins * 60UL;
         mesh::RepeaterRadioTiming::formatDuration(duration, sizeof(duration), seconds);
-        snprintf(reply, 160, "OK - temp params for %s", duration);
+        snprintf(reply, 160, "OK - temp params for %s; applying in 2s", duration);
         _radio_profiles.appendPrimaryChirpWarning(reply, 160, sf, bw, preamble);
         _callbacks->appendTempRadioTimingNote(reply, 160, seconds);
         appendRxPowerSavingAdjustmentNote(reply, _prefs, sf, bw);

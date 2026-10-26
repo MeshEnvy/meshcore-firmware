@@ -190,6 +190,7 @@ public:
   void processScheduledRadioSettings(bool tx_gap = false);
   void applyTempRadioParams(float, float, uint8_t, uint8_t, int, uint16_t = 0);
   bool scheduleNormalRadio();
+  bool isTempRadioPending() const;
   void clearScheduledRadioSetting(int, bool);
   int findFreeScheduledRadioSlot() const;
   int countScheduledRadioSettings(bool) const;
@@ -206,6 +207,24 @@ static void startTemp(MyMesh& m, int minutes) {
   assert(m.temp_radio_applied);
 }
 int main() {
+  {
+    MyMesh m;
+    assert(!m.isTempRadioPending());
+    m.applyTempRadioParams(910.539978f, 62.5f, 7, 5, 30);
+    assert(m.isTempRadioPending());
+    m.advance(1);m.processScheduledRadioSettings();
+    assert(m.isTempRadioPending() && m.applies==0);
+    m.apply_success=false;
+    m.advance(1);m.processScheduledRadioSettings();
+    assert(m.isTempRadioPending() && !m.temp_radio_applied);
+    m.apply_success=true;
+    m.advance(1);m.processScheduledRadioSettings();
+    assert(!m.isTempRadioPending() && m.temp_radio_applied);
+    m.applyTempRadioParams(911, 125, 8, 5, 30);
+    assert(!m.isTempRadioPending()); // keep reporting the old live tuple
+    m.scheduleNormalRadio();
+    assert(!m.isTempRadioPending());
+  }
   for (uint32_t start : {100U, 0xFFFFFC18U, 0xFFFFF830U}) {
     MyMesh m;
     now_ms = start;
@@ -524,6 +543,7 @@ struct Callbacks {
 void appendRxPowerSavingAdjustmentNote(char*, const void*, uint8_t, float) {}
 void handle(const char* command, char* reply) {
   mesh::RadioProfileCLI _radio_profiles;
+  @ACCEPT_PRIMARY@
   char tmp[160];
   Callbacks* _callbacks = &callbacks;
   const void* _prefs = nullptr;
@@ -534,10 +554,10 @@ void handle(const char* command, char* reply) {
 int main() {
   struct Reply { char text[160]; char guard = '!'; } reply;
   handle("tempradio 910,250,5,5,1440", reply.text);
-  assert(!strcmp(reply.text, "OK - temp params for 1440 mins (1d0h0m); rx.watchdog=12hours"));
+  assert(!strcmp(reply.text, "OK - temp params for 1440 mins (1d0h0m); applying in 2s; rx.watchdog=12hours"));
   assert(!strncmp(reply.text, "OK - temp params for ", 21)); // exact reply-barrier marker
   handle("tempradio 910,250,5,5,90", reply.text);
-  assert(!strcmp(reply.text, "OK - temp params for 90 mins (0d1h30m); rx.watchdog=off (temp<12hours)"));
+  assert(!strcmp(reply.text, "OK - temp params for 90 mins (0d1h30m); applying in 2s; rx.watchdog=off (temp<12hours)"));
   assert(callbacks.calls == 2 && callbacks.duration == 5400);
   for (const char* minutes : {"0", "-1", "12oops", "1.5", "4294967295", "4294967296"}) {
     char command[100];
@@ -545,6 +565,13 @@ int main() {
     handle(command, reply.text);
     assert(!strcmp(reply.text, "Error, invalid params"));
     assert(callbacks.calls == 2);
+  }
+  for (const char* command : {"tempradio 910,250,261,5,30",
+      "tempradio 910,250,7,261,30", "tempradio 910,250,0,5,30",
+      "tempradio 910,250,7,4,30", "tempradio 149,250,7,5,30",
+      "tempradio 910,123,7,5,30"}) {
+    handle(command, reply.text);
+    assert(!strcmp(reply.text, "Error, invalid params") && callbacks.calls == 2);
   }
   assert(reply.guard == '!');
   puts("production TempRadio replies and duration validation passed");
@@ -615,6 +642,7 @@ int main() {
             "void MyMesh::processScheduledRadioSettings(bool tx_gap)",
             "void MyMesh::applyTempRadioParams(",
             "bool MyMesh::scheduleNormalRadio()",
+            "bool MyMesh::isTempRadioPending() const",
             "void MyMesh::clearScheduledRadioSetting(",
             "int MyMesh::findFreeScheduledRadioSlot() const",
             "int MyMesh::countScheduledRadioSettings(",
@@ -688,6 +716,10 @@ int main() {
         utils = (ROOT / "src/Utils.cpp").read_text(encoding="utf-8")
         parts = method(utils, "int Utils::parseTextParts(")
         self.compile_and_run(CLI_HARNESS.replace("@PARSERS@", parsers)
+                             .replace("@ACCEPT_PRIMARY@", method(source,
+                                      "bool CommonCLI::acceptsPrimaryRadioParams(")
+                                      .replace("bool CommonCLI::acceptsPrimaryRadioParams",
+                                               "auto acceptsPrimaryRadioParams = [&]") + ";")
                              .replace("@BRANCH@", source[start:end])
                              .replace("@PARTS@", parts))
 

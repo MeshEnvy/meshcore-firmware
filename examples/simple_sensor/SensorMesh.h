@@ -143,6 +143,7 @@ public:
   void clearStats() override { }
   mesh::Radio* getProfileRadio() override { return _radio; }
   void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins, uint16_t preamble = 0) override;
+  bool isTempRadioPending() const override { return set_radio_at != 0 && !temp_radio_applied; }
   bool scheduleNormalRadio() override;
   void startRegionsLoad() override;
   bool saveRegions() override;

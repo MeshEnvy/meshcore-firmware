@@ -199,6 +199,12 @@ protected:
       return ((CustomLR2021 *)_radio)->setSideDetector(nullptr, 0) == RADIOLIB_ERR_NONE;
     }
     if (!mesh::lr2021::validateSideDetectorSFs(_sideDetSFs, _numSideDet, primary_sf, bw)) {
+      // Extra SFs belong to the saved receive tuple. A temporary primary can
+      // make that list illegal; suspend it without discarding the saved set.
+      // Applying the normal tuple enables the same detectors again.
+      if (_profiles.primary_temporary) {
+        return ((CustomLR2021 *)_radio)->setSideDetector(nullptr, 0) == RADIOLIB_ERR_NONE;
+      }
       return false;
     }
     LR2021LoRaSideDetector_t config[mesh::lr2021::MAX_SIDE_DETECTORS] = {};
@@ -214,6 +220,12 @@ protected:
     const uint8_t rx_primary_sf = getSpreadingFactor();
     float bw = _params_valid ? _cur_bw : radio->getBandwidthKhz();
     if (bw <= 0.0f) bw = static_cast<float>(LORA_BW);
+    // Incompatible saved detectors are suspended for TempRadio. CAD must scan
+    // only the running primary, not the inactive detector list in the cache.
+    if (_profiles.primary_temporary && !mesh::lr2021::validateSideDetectorSFs(
+        _sideDetSFs, _numSideDet, rx_primary_sf, bw)) {
+      return RadioLibWrapper::performChannelScan();
+    }
 
     int16_t status = radio->standby();
     if (status != RADIOLIB_ERR_NONE) return status;

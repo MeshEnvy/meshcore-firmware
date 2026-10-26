@@ -132,9 +132,14 @@ int main() {
         source = (ROOT / "src/helpers/radiolib/CustomLR2021Wrapper.h").read_text()
         build = method(source, "static void buildSideDetectorConfig(")
         side = method(source, "bool applySideDetectorConfig(")
+        scan = method(source, "int16_t performChannelScan()").replace(" override", "")
         power = method(source, "int16_t applyCachedTxPower(").replace(" override", "")
         code = COMMON + r'''
 #define USE_LR2021 1
+#define LORA_BW 125
+#define RADIOLIB_ERR_UNKNOWN -1
+#define RADIOLIB_CHANNEL_FREE -2
+#define MESH_DEBUG_PRINTLN(...) ((void)0)
 #include <helpers/radiolib/LR2021SideDetectorConfig.h>
 #include <helpers/radiolib/RadioPowerLimits.h>
 struct LR2021LoRaSideDetector_t {
@@ -147,6 +152,9 @@ struct CustomLR2021 {
   size_t count = 0;
   bool fail = false;
   float frequency = 906;
+  float bandwidth = 125;
+  uint8_t sf = 7;
+  unsigned sf_changes = 0;
   int8_t power = 0;
   LR2021LoRaSideDetector_t values[3];
   int16_t setSideDetector(const LR2021LoRaSideDetector_t* config, size_t size) {
@@ -156,17 +164,46 @@ struct CustomLR2021 {
   }
   float getFreqMHz() const { return frequency; }
   int16_t setOutputPower(int8_t value) { power = value; return 0; }
+  float getBandwidthKhz() const { return bandwidth; }
+  int16_t standby() { return 0; }
+  int16_t setSpreadingFactor(uint8_t value) { sf = value; ++sf_changes; return 0; }
 };
-struct Wrapper {
+struct RadioLibWrapper {
+  unsigned primary_scans = 0;
+  int16_t performChannelScan() { ++primary_scans; return RADIOLIB_CHANNEL_FREE; }
+};
+struct Board {
+  unsigned watchdog_services = 0;
+  void serviceWatchdog() { ++watchdog_services; }
+};
+struct Wrapper : RadioLibWrapper {
   CustomLR2021 chip;
   CustomLR2021* _radio = &chip;
+  Board board;
+  Board* _board = &board;
   mesh::RadioProfiles _profiles;
   bool beacon_owned = false, _beacon_restoring = false;
+  bool _params_valid = true;
+  float _cur_bw = 125;
   uint8_t _sideDetSFs[3] = {8, 9, 10};
   size_t _numSideDet = 3;
+  uint8_t scanned_sfs[4] = {};
+  unsigned multi_scans = 0;
+  uint8_t getSpreadingFactor() const { return chip.sf; }
+  int16_t performChannelScanWithTimeout(uint32_t timeout) {
+    assert(timeout > 0 && multi_scans < 4);
+    scanned_sfs[multi_scans++] = chip.sf;
+    return RADIOLIB_CHANNEL_FREE;
+  }
+  uint32_t cadScanTimeoutMillis(uint8_t sf, float bw) {
+    assert(sf >= 5 && sf <= 12 && bw > 0);
+    return 100;
+  }
+  bool restoreAfterDeepInit() { assert(false); return false; }
   bool isBeaconRadioOwned() const { return beacon_owned; }
   @BUILD@
   @SIDE@
+  @SCAN@
   @POWER@
 };
 int main() {
@@ -197,10 +234,55 @@ int main() {
   assert(wrapper.applyCachedTxPower(22) == 0 && wrapper.chip.power == 12);
   wrapper.chip.frequency = 906;
   assert(wrapper.applyCachedTxPower(22) == 0 && wrapper.chip.power == 22);
+
+  // Temporary SF11 cannot use the saved SF8/9/10 list. Keep the saved list,
+  // disable its hardware detectors, and scan only SF11 while it is suspended.
+  Wrapper temporary;
+  temporary._profiles.primary_temporary = true;
+  temporary.chip.sf = 11;
+  assert(temporary.applySideDetectorConfig(11, 250) && temporary.chip.count == 0);
+  assert(temporary._numSideDet == 3 && temporary._sideDetSFs[0] == 8);
+  assert(temporary.performChannelScan() == RADIOLIB_CHANNEL_FREE);
+  assert(temporary.primary_scans == 1 && temporary.multi_scans == 0);
+  assert(temporary.chip.sf == 11 && temporary.chip.sf_changes == 0);
+  // A failed disable must remain a real apply failure, even during TempRadio.
+  temporary.chip.fail = true;
+  assert(!temporary.applySideDetectorConfig(11, 250));
+  assert(temporary._numSideDet == 3 && temporary._sideDetSFs[2] == 10);
+  temporary.chip.fail = false;
+  temporary._profiles.primary_temporary = false;
+  assert(!temporary.applySideDetectorConfig(11, 250)); // permanent validation remains strict
+  // Expiry or cancellation restores the complete saved detector list and CAD.
+  temporary.chip.sf = 7;
+  assert(temporary.applySideDetectorConfig(7, 125) && temporary.chip.count == 3);
+  assert(temporary.performChannelScan() == RADIOLIB_CHANNEL_FREE);
+  assert(temporary.multi_scans == 4 && temporary.chip.sf == 7);
+  for (unsigned i = 0; i < 4; ++i) assert(temporary.scanned_sfs[i] == 7 + i);
+
+  // The reported SF7/62.5 tuple also conflicts with SF12 from a valid saved
+  // SF9 setup: its detector gap exceeds four. Resume all extras on normal SF9.
+  Wrapper lower;
+  lower._sideDetSFs[0] = 10; lower._sideDetSFs[1] = 11; lower._sideDetSFs[2] = 12;
+  lower._profiles.primary_temporary = true;
+  lower._cur_bw = 62.5;
+  assert(lower.applySideDetectorConfig(7, 62.5) && lower.chip.count == 0);
+  assert(lower.performChannelScan() == RADIOLIB_CHANNEL_FREE && lower.primary_scans == 1);
+  lower._profiles.primary_temporary = false;
+  lower.chip.sf = 9;
+  assert(lower.applySideDetectorConfig(9, 62.5) && lower.chip.count == 3);
+  assert(lower._numSideDet == 3 && lower._sideDetSFs[2] == 12);
+
+  // A compatible temporary tuple keeps multi-SF reception and CAD available.
+  Wrapper compatible;
+  compatible._profiles.primary_temporary = true;
+  assert(compatible.applySideDetectorConfig(7, 125) && compatible.chip.count == 3);
+  assert(compatible.performChannelScan() == RADIOLIB_CHANNEL_FREE);
+  assert(compatible.primary_scans == 0 && compatible.multi_scans == 4);
   std::puts("PASS: LR2021 independent side detectors and physical power band");
 }
 '''
-        code = code.replace("@BUILD@", build).replace("@SIDE@", side).replace("@POWER@", power)
+        code = (code.replace("@BUILD@", build).replace("@SIDE@", side)
+                .replace("@SCAN@", scan).replace("@POWER@", power))
         self.assertIn("PASS:", self.run_cpp(code))
 
 
