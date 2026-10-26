@@ -149,6 +149,13 @@ their separate signed-package behavior. See
 
 ## Qualification
 
+The [Tower SD 2.4.9 hardware test](test-results/tower_249_embedded_bootloader_2026-10-26.md)
+reproduced `last=9` with unchanged application, settings, filesystem and
+SoftDevice audit hashes. That loader protects flash before starting the
+application, so the embedded bridge refuses it. Its missing normal version
+record also causes the automatic check to report `unrecognized`. The separate
+signed SD update installed 2.4.12 successfully, reporting `blup:C8`.
+
 The source PR documents one successful RAK4631 migration with unchanged
 application, filesystem, settings and SoftDevice hashes. Its later guards have
 host checks, but the recorded hardware run predates the final PR build.
