@@ -102,3 +102,41 @@ console.log("Muzi per-radio accessories and T-Echo Lite shell/core folding requi
   assert.strictEqual(p.buildCatalog([release([legacy, canonical])], metadata).profiles.length, 2);
 }
 console.log("V4 TFT base/kit consolidation requires its own exact qualified Full image");
+
+{
+  const canonical = "heltec_v4_repeater-full-usb-wifi";
+  const aliases = ["heltec_v4_tft_repeater-full-usb-wifi",
+    "heltec_v4_expansionkit_repeater-full-usb-wifi",
+    "heltec_v4_3_tft_repeater-full-usb-wifi"];
+  const r8 = "heltec_v4_r8_tft_repeater-full-usb-wifi";
+  const proof = {platform: "ESP32_PLATFORM", display: true,
+    unifiedV4Display: true, unifiedV4DisplaySource: source};
+  const metadata = {familyTag: family, source, profiles: {[canonical]: proof}};
+  const names = [canonical, ...aliases, r8];
+  const snapshots = [release(names)];
+  const before = JSON.stringify(snapshots);
+  const catalog = p.buildCatalog(snapshots, metadata);
+  assert.deepStrictEqual(catalog.profiles.map(x => x.target).sort(), [canonical, r8].sort());
+  assert.strictEqual(catalog.rows.length, names.length, "historical download identities are retained");
+  assert.strictEqual(JSON.stringify(snapshots), before);
+  const base = catalog.profiles.find(x => x.target === canonical);
+  assert(p.boardNotes(base).some(note => note.includes("OLED") && note.includes("no screen")));
+  assert(p.boardNotes(base).some(note => note.includes("LoRa OTA target IDs remain distinct")));
+  const displayControls = p.runtimeDirections(base).find(section => section.title === "Display type");
+  assert.deepStrictEqual(displayControls.actions.map(action => action.commands[0]),
+    ["set display.type auto", "set display.type oled", "set display.type tft", "set display.type off"]);
+  assert(displayControls.note.includes("immediately"));
+  for (const alias of aliases) {
+    const hardware = p.parseTargetProfile(alias).hardware;
+    const restored = p.selectionFromUrl("https://example.org/?hardware=" + hardware + "&role=repeater", catalog.profiles);
+    assert.strictEqual(restored.filters.hardware, "heltec_v4");
+    assert.deepStrictEqual(restored.unavailable, []);
+  }
+  for (const fault of [{unifiedV4Display: false}, {unifiedV4DisplaySource: "b".repeat(40)},
+    {platform: "NRF52_PLATFORM"}, {display: false}]) {
+    const bad = {familyTag: family, source, profiles: {[canonical]: {...proof, ...fault}}};
+    assert.strictEqual(p.buildCatalog(snapshots, bad).profiles.length, names.length,
+      "historical V4 display labels require exact newly qualified proof");
+  }
+}
+console.log("Unified ordinary V4 OLED/TFT/headless choices preserve historical downloads and R8");

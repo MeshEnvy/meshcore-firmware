@@ -1310,6 +1310,40 @@ build flag is needed.
 
 ---
 
+## Select the original Heltec V4 display
+
+New unified original-V4 images support V4.2/V4.3 OLED, the original TFT
+touchscreen expansion kit, and operation without a screen. This feature is
+not present in the older 1.17.1.1 or 1.17.1.5 images. V4 R8 remains a separate
+hardware target.
+
+```text
+get display.type
+set display.type auto
+set display.type oled
+set display.type tft
+set display.type off
+board
+```
+
+The default `auto` requires an OLED I2C response or a stable identity from the
+stock TFT assembly's touch controller. No OLED response alone is not evidence
+of a TFT. When neither responds, the node runs without a screen and `board`
+reports `none detected`. Touch identification establishes the stock assembly,
+not LCD health. A damaged or nonstandard panel can require an override.
+
+`oled` explicitly selects and checks the OLED driver. `tft` explicitly selects
+the TFT driver and reports `TFT (forced)` rather than claiming detection.
+`off` disables display initialization and reports `off`, distinct from
+`none detected`. Selections apply immediately and survive reboot in the checked
+`/display_type` file. A failed save leaves the live selection unchanged.
+
+`board` combines the detected radio front end with the live display status,
+for example `Heltec V4.3 OLED`, `Heltec V4.2 TFT`, or `Heltec V4.3 off`.
+The radio front end identifies the V4.2/V4.3 hardware generation; it is not a
+read of a PCB revision register. Use `display.mode` below for normal screen
+sleep/wake policy without changing the selected hardware driver.
+
 ## Set display modes and timeouts
 
 Companion message sound, vibration, LED, screen and GPIO rules have separate

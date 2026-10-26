@@ -6,6 +6,13 @@ import sys
 from optional_display_profiles import resolved_defines, spec_for_defines
 
 SPECS = (
+    dict(key="unifiedV4Display", capability="display.heltec_v4.unified",
+         marker="meshcore.capability.display.heltec_v4.unified.v1",
+         platform="ESP32_PLATFORM", board="heltec_v4",
+         target=(r"heltec_v4(?:_2_v4_3|(?:_3)?(?:_expansionkit)?(?:_tft)?)_"
+                 r"(?:(?:repeater(?:_bridge_espnow)?|room_server)(?:_observer_mqtt)?|sensor|"
+                 r"companion_radio_(?:usb|ble|wifi|full)(?:_mqtt)?(?:_ps)?(?:_fem(?:on|off))?)"),
+         defines={"HELTEC_V4_DISPLAY_UNIFIED": "1", "DISPLAY_CLASS": "HeltecV4Display"}),
     dict(key="combinedCompanion", capability="companion.picow.combined",
          marker="meshcore.capability.companion.picow.combined.v1",
          platform="RP2040_PLATFORM", board="rpipicow", target=r"PicoW_companion_radio",
@@ -62,12 +69,34 @@ def runtime_metadata(manifest, env, release_source):
     return result
 
 
+def unified_v4_replacements(target):
+    """Ordinary V4 display successors; R8 and deployed mOTA IDs stay separate."""
+    match = re.fullmatch(
+        r"heltec_v4(?:_3)?(?:_expansionkit)?(?:_tft)?_"
+        r"(repeater(?:_bridge_espnow)?|room_server|sensor)(_observer_mqtt)?", target, re.I)
+    if match:
+        role, observer = match.groups()
+        base = "heltec_v4_" + role.lower()
+        choices = [base + (observer or ""), base]
+        if role.lower() == "repeater_bridge_espnow":
+            choices.append("heltec_v4_repeater")
+        return [(name, "unifiedV4Display") for name in dict.fromkeys(choices)
+                if name.lower() != target.lower()]
+    if re.fullmatch(
+        r"heltec_v4(?:_3)?(?:_expansionkit)?(?:_tft)?_companion_radio_"
+        r"(?:usb|ble|wifi|full)(?:_ps)?(?:_fem(?:on|off))?", target, re.I):
+        canonical = "heltec_v4_2_v4_3_companion_radio_full_femon"
+        return [(canonical, "unifiedV4Display")]
+    return []
+
+
 def replacements(target):
     """Known functionality successors, never aliases for deployed update IDs."""
+    unified = unified_v4_replacements(target)
     if re.fullmatch(r"PicoW_companion_radio_(?:usb|ble|wifi)", target, re.I):
         return [("PicoW_companion_radio", "combinedCompanion")]
     if re.fullmatch(r"heltec_v4(?:_3)?_expansionkit_tft_companion_radio_(?:usb|ble|wifi|full)(?:_ps)?(?:_fem(?:on|off))?", target, re.I):
-        return [("heltec_v4_tft_companion_radio_full_femon", "tftExpansionCompatible")]
+        return unified + [("heltec_v4_tft_companion_radio_full_femon", "tftExpansionCompatible")]
     match = re.fullmatch(r"muzi_base_(uno|duo)_superio_companion_radio_(?:usb|ble|full)", target, re.I)
     if match:
         return [("muzi_base_" + match[1].lower() + "_companion_radio_full", "muziAccessories")]
@@ -76,7 +105,7 @@ def replacements(target):
     match = re.fullmatch(r"heltec_v4_expansionkit_(repeater|room_server)(_observer_mqtt)?", target, re.I)
     if match:
         base = "heltec_v4_" + match[1].lower()
-        return [(base + (match[2] or ""), "oledExpansionCompatible"), (base, "oledExpansionCompatible")]
+        return unified + [(base + (match[2] or ""), "oledExpansionCompatible"), (base, "oledExpansionCompatible")]
     match = re.fullmatch(r"heltec_v4_r8_tft_portrait_(repeater|room_server)_observer_mqtt", target, re.I)
     if match:
         base = "heltec_v4_r8_tft_" + match[1].lower()
@@ -84,7 +113,7 @@ def replacements(target):
     match = re.fullmatch(r"heltec_rc32_without_display_(repeater|room_server|sensor|companion_radio_(?:usb|ble|wifi|full))(?:_observer_mqtt)?", target, re.I)
     if match:
         return [(target.lower().replace("_without_display_", "_", 1), "displayAuto")]
-    return []
+    return unified
 
 
 def configuration_replacement(target, envs):

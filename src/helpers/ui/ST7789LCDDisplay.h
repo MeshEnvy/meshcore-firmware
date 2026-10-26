@@ -25,6 +25,11 @@ class TDeckCanvas;
   #define MESHCORE_HELTEC_R8_RUNTIME_ROTATION 1
 #endif
 
+#if defined(MESHCORE_HELTEC_R8_RUNTIME_ROTATION) || \
+    (defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED)
+  #define MESHCORE_HELTEC_TFT_RUNTIME_ROTATION 1
+#endif
+
 class ST7789LCDDisplay : public DisplayDriver {
   #if defined(LILYGO_TDECK) || defined(HELTEC_LORA_V4_TFT) || defined(HELTEC_V4_R8_TFT)
     SPIClass displaySPI;
@@ -36,8 +41,8 @@ class ST7789LCDDisplay : public DisplayDriver {
   bool _probe_complete = false;
   bool _present = false;
 #endif
-#ifdef HELTEC_V4_R8_TFT
-#ifdef MESHCORE_HELTEC_R8_RUNTIME_ROTATION
+#if defined(HELTEC_V4_R8_TFT) || defined(HELTEC_V4_DISPLAY_UNIFIED)
+#ifdef MESHCORE_HELTEC_TFT_RUNTIME_ROTATION
   uint8_t _base_rotation = DISPLAY_ROTATION & 3;
 #endif
   bool _rotation_pending = false;
@@ -78,7 +83,13 @@ public:
   }
 #elif defined(LILYGO_TDECK) || defined(HELTEC_LORA_V4_TFT) || defined(HELTEC_V4_R8_TFT)
   ST7789LCDDisplay(RefCountedDigitalPin* peripher_power=NULL) : DisplayDriver(kWidth, kHeight),
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED
+      // The V4 radio uses SPIClass's default HSPI controller. A separate
+      // controller is required so TFT setup/sleep cannot remap or stop it.
+      displaySPI(FSPI),
+#else
       displaySPI(HSPI),
+#endif
       display(&displaySPI, PIN_TFT_CS, PIN_TFT_DC, PIN_TFT_RST),
       _peripher_power(peripher_power)
   {
@@ -106,8 +117,17 @@ public:
 #endif
 
   bool isOn() override { return _isOn; }
-#ifdef MESHCORE_HELTEC_R8_RUNTIME_ROTATION
+#ifdef MESHCORE_HELTEC_TFT_RUNTIME_ROTATION
   bool supportsRotation() const override { return true; }
+#endif
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED
+  // The combined V4 image releases the LCD SPI peripheral before the shared
+  // GPIO17/18 pair is used by the OLED bus again.
+  void releaseBus() {
+    displaySPI.end();
+    _panel_ready = false;
+    _isOn = false;
+  }
 #endif
   bool setRotationDegrees(uint16_t degrees) override;
   void turnOn() override;

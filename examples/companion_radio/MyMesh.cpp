@@ -5,6 +5,9 @@
 #endif
 #include <helpers/LedSettings.h>
 #include <helpers/ui/DisplayPowerSettings.h>
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED && defined(DISPLAY_CLASS)
+#include <helpers/ui/HeltecV4DisplaySettings.h>
+#endif
 #include <helpers/ui/DisplayNightLocation.h>
 #if defined(OLED_AUTO_DETECT) && OLED_AUTO_DETECT && defined(DISPLAY_CLASS)
 #include <helpers/ui/OLEDControllerSettings.h>
@@ -4526,6 +4529,9 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
     return true;
   }
 
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED && defined(DISPLAY_CLASS)
+  if (mesh::ui::handleHeltecV4DisplayCommand(command, reply, reply_size, display)) return true;
+#endif
   if (mesh::ui::handleDisplayPowerCommand(command, reply, reply_size,
           _ui != nullptr && _ui->supportsInboxModes())) {
     if (_ui) _ui->inboxModeChanged();

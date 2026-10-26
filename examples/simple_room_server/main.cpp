@@ -6,6 +6,9 @@
 #include <helpers/IdentityGeneration.h>
 #include <helpers/ui/StartupScreen.h>
 #include <helpers/ui/DisplayPowerSettings.h>
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED && defined(DISPLAY_CLASS)
+#include <helpers/ui/HeltecV4DisplaySettings.h>
+#endif
 #if defined(OLED_AUTO_DETECT) && OLED_AUTO_DETECT
 #include <helpers/ui/OLEDControllerSettings.h>
 #endif
@@ -161,6 +164,9 @@ void setup() {
   mesh::RadioProfileCLI::configureBootTuning(regulator_prefs_fs, radio_driver);
 #ifdef DISPLAY_CLASS
   mesh::ui::loadDisplayPowerSettings(fs, false);
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED
+  mesh::ui::loadHeltecV4DisplaySettings(regulator_prefs_fs, display);
+#endif
 #if defined(OLED_AUTO_DETECT) && OLED_AUTO_DETECT
   mesh::ui::loadOLEDControllerSettings(regulator_prefs_fs);
 #endif
@@ -279,6 +285,11 @@ void setup() {
 #endif
 
 #ifdef DISPLAY_CLASS
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED
+  // Initialize the UI dependency even when auto detection found no screen.
+  // A later saved display.type change can enable it without restarting.
+  display_ready = true;
+#endif
   if (display_ready) {
 #ifdef WITH_MQTT_BRIDGE
     ui_task.setObserverPrefs(the_mesh.getObserverPrefs());
@@ -415,7 +426,11 @@ void loop() {
   const bool morse_timing = mesh::morseTimingActive(&radio_driver);
   if (!morse_timing) sensors.loop();
 #ifdef DISPLAY_CLASS
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED
+  if (display.selectedType() != mesh::ui::HeltecV4DisplayType::None) ui_task.loop();
+#else
   if (display_ready) ui_task.loop();
+#endif
 #endif
   rtc_clock.tick();
   mesh::power::serviceRegulatorSettings();

@@ -3,6 +3,9 @@
 #include <Arduino.h>   // needed for PlatformIO
 #include <helpers/ui/StartupScreen.h>
 #include <helpers/ui/DisplayPowerSettings.h>
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED && defined(DISPLAY_CLASS)
+#include <helpers/ui/HeltecV4DisplaySettings.h>
+#endif
 #if defined(OLED_AUTO_DETECT) && OLED_AUTO_DETECT
 #include <helpers/ui/OLEDControllerSettings.h>
 #endif
@@ -2080,6 +2083,12 @@ void halt() {
 
   void formatCompanionWiFiDisplayStatus(char* reply, size_t reply_size) {
     if (reply == nullptr || reply_size == 0) return;
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED \
+    && defined(DISPLAY_CLASS)
+    companion_display_available =
+        display.selectedType() != mesh::ui::HeltecV4DisplayType::None;
+    companion_display_begin_status = companion_display_available ? 1 : 0;
+#endif
     static const char* const names[] = {
       "not-rendered", "setup", "off", "ready", "not-configured",
       "connecting",
@@ -3691,6 +3700,9 @@ void setup() {
   if (!mesh::storage::internalPrimaryFilesystemReady(primary_fs_boot)
       && !store.isVolatilePrimaryFS()) display_prefs_fs = nullptr;
 #endif
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED
+  mesh::ui::loadHeltecV4DisplaySettings(regulator_prefs_fs, display);
+#endif
 #if defined(OLED_AUTO_DETECT) && OLED_AUTO_DETECT
   mesh::ui::loadOLEDControllerSettings(regulator_prefs_fs);
 #endif
@@ -4153,6 +4165,11 @@ void setup() {
 #endif
 
 #ifdef DISPLAY_CLASS
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED
+  // Retain the wrapper dependency in headless mode so live selection can
+  // enable a screen. The UI skips rendering while no backend is selected.
+  disp = &display;
+#endif
   ui_task.begin(disp, &sensors, the_mesh.getNodePrefs());  // still want to pass this in as dependency, as prefs might be moved
 #endif
 #if defined(WIO_E5_MINI_HEADLESS_COMPANION_UI) && defined(PIN_USER_BTN)

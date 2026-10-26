@@ -16,6 +16,11 @@ import consolidated_profiles as consolidated
 
 SOURCE = "a" * 40
 CASES = (
+    dict(target="heltec_v4_sensor", legacy="heltec_v4_tft_sensor",
+         board="heltec_v4", platform="ESP32_PLATFORM", key="unifiedV4Display",
+         capability="display.heltec_v4.unified",
+         marker="meshcore.capability.display.heltec_v4.unified.v1",
+         flags=["-DHELTEC_V4_DISPLAY_UNIFIED=1", "-DDISPLAY_CLASS=HeltecV4Display"]),
     dict(target="PicoW_companion_radio", legacy="PicoW_companion_radio_wifi",
          board="rpipicow", platform="RP2040_PLATFORM", key="combinedCompanion",
          capability="companion.picow.combined",
@@ -96,7 +101,7 @@ class ConsolidatedProfileTests(unittest.TestCase):
         legacy = "env:heltec_v4_expansionkit_tft_companion_radio_full_femon"
         flags = defines(recipes.value(canonical, "build_flags"))
         self.assertEqual(flags, defines(recipes.value(legacy, "build_flags")))
-        for key, value in dict(HELTEC_V4_TFT_KIT_COMPAT="1", DISPLAY_CLASS="ST7789LCDDisplay",
+        for key, value in dict(HELTEC_V4_TFT_KIT_COMPAT="1", HELTEC_V4_DISPLAY_UNIFIED="1", DISPLAY_CLASS="HeltecV4Display",
                                AUTO_SHUTDOWN_MILLIVOLTS="3400", MESHCORE_REQUIRES_COMPANION_RADIO_FULL="1",
                                PIN_BOARD_SDA="4", PIN_BOARD_SCL="3", PIN_TFT_RST="18", PIN_TFT_LEDA_CTL="21",
                                PIN_TFT_CS="15", PIN_TFT_DC="16", PIN_TFT_SCL="17", PIN_TFT_SDA="33").items():
@@ -153,9 +158,9 @@ class ConsolidatedProfileTests(unittest.TestCase):
     def test_replacements_are_limited_to_known_exact_legacy_targets(self):
         for case in CASES:
             self.assertIn((case["target"], case["key"]), consolidated.replacements(case["legacy"]))
-            self.assertEqual(consolidated.replacements(case["target"]), [])
+            self.assertNotIn((case["target"], case["key"]), consolidated.replacements(case["target"]))
             self.assertEqual(consolidated.replacements(case["legacy"] + "_custom"), [])
-        for target in ("other_PicoW_companion_radio_usb", "heltec_v4_expansionkit_sensor",
+        for target in ("other_PicoW_companion_radio_usb", "heltec_v4_r8_expansionkit_sensor",
                        "heltec_v4_r8_tft_portrait_sensor_observer_mqtt", "other_without_display_repeater"):
             with self.subTest(target=target):
                 self.assertEqual(consolidated.replacements(target), [])

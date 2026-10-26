@@ -175,7 +175,7 @@ const char meshcore_capability_display_autodetect_heltec_r8[] =
 // display.flip remains an additive 180-degree mounting adjustment, independent
 // of the selected orientation. Other boards keep their compiled orientation.
 uint8_t ST7789LCDDisplay::effectiveRotation() const {
-#ifdef MESHCORE_HELTEC_R8_RUNTIME_ROTATION
+#ifdef MESHCORE_HELTEC_TFT_RUNTIME_ROTATION
   return (uint8_t)((_base_rotation + (_flipped ? 2 : 0)) & 3);
 #else
   return (uint8_t)((DISPLAY_ROTATION + (_flipped ? 2 : 0)) & 3);
@@ -183,7 +183,7 @@ uint8_t ST7789LCDDisplay::effectiveRotation() const {
 }
 
 void ST7789LCDDisplay::applyRotation() {
-#ifdef HELTEC_V4_R8_TFT
+#if defined(HELTEC_V4_R8_TFT) || defined(HELTEC_V4_DISPLAY_UNIFIED)
   const auto rotation = effectiveRotation();
   // Layout follows saved intent immediately, including before initialization
   // and while the backlight is off. Defer all panel traffic until awake.
@@ -198,9 +198,11 @@ void ST7789LCDDisplay::applyRotation() {
 }
 
 bool ST7789LCDDisplay::setRotationDegrees(uint16_t degrees) {
+#ifdef MESHCORE_HELTEC_TFT_RUNTIME_ROTATION
 #ifdef MESHCORE_HELTEC_R8_RUNTIME_ROTATION
   const volatile char* capability = meshcore_capability_display_rotation_heltec_r8;
   (void)*capability;
+#endif
   if (degrees > 270 || degrees % 90 != 0) return false;
   const uint8_t rotation = (DISPLAY_ROTATION + degrees / 90) & 3;
   if (_base_rotation != rotation) {
@@ -225,6 +227,7 @@ bool ST7789LCDDisplay::i2c_probe(TwoWire& wire, uint8_t addr) {
 }
 
 // Color scheme
+#if !defined(HELTEC_V4_DISPLAY_UNIFIED) || !HELTEC_V4_DISPLAY_UNIFIED
 ColorVal UIColor::window_bkg = mesh::ui::color_theme::WINDOW_BACKGROUND;
 ColorVal UIColor::title_bkg = mesh::ui::color_theme::TITLE_BACKGROUND;
 ColorVal UIColor::title_txt = mesh::ui::color_theme::TEXT;
@@ -234,6 +237,7 @@ ColorVal UIColor::warning_txt = mesh::ui::color_theme::WARNING_TEXT;
 ColorVal UIColor::popup_bkg = mesh::ui::color_theme::POPUP_BACKGROUND;
 ColorVal UIColor::popup_txt = mesh::ui::color_theme::TEXT;
 ColorVal UIColor::corp_blue = mesh::ui::color_theme::ACCENT;
+#endif
 
 bool ST7789LCDDisplay::begin() {
 #ifdef MESHCORE_HELTEC_R8_TFT_DETECTION
@@ -308,14 +312,26 @@ bool ST7789LCDDisplay::begin() {
     #if defined(LILYGO_TDECK) || defined(HELTEC_LORA_V4_TFT) || defined(HELTEC_V4_R8_TFT)
       displaySPI.begin(PIN_TFT_SCL, PIN_TFT_MISO, PIN_TFT_SDA, PIN_TFT_CS);
     #endif
-#ifdef MESHCORE_HELTEC_R8_TFT_DETECTION
+#if defined(MESHCORE_HELTEC_R8_TFT_DETECTION) || \
+    (defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED)
     // Arduino-ESP32 2.x begin() returns void, so inspect its public bus handle
     // before handing an unavailable SPI peripheral to the panel library.
     if (!displaySPI.bus()) {
       displaySPI.end();
+#ifdef MESHCORE_HELTEC_R8_TFT_DETECTION
       _present = false;  // Latch failure just like an absent LCD.
       mesh::ui::heltec_r8::backlightOff();
       mesh::ui::heltec_r8::releaseBus();
+#else
+      digitalWrite(PIN_TFT_LEDA_CTL, !PIN_TFT_LEDA_CTL_ACTIVE);
+      digitalWrite(PIN_TFT_RST, LOW);
+      pinMode(PIN_TFT_RST, OUTPUT);
+      pinMode(PIN_TFT_CS, INPUT);
+      pinMode(PIN_TFT_DC, INPUT);
+      pinMode(PIN_TFT_SDA, INPUT);
+      pinMode(PIN_TFT_SCL, INPUT);
+      _panel_ready = false;
+#endif
       if (_peripher_power) _peripher_power->release();
       return false;
     }

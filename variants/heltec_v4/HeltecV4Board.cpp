@@ -1,5 +1,9 @@
 #include "HeltecV4Board.h"
 #include <helpers/ESP32GpioHold.h>
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED && defined(DISPLAY_CLASS)
+#include <helpers/ui/HeltecV4DisplaySettings.h>
+extern HeltecV4Display display;
+#endif
 
 void HeltecV4Board::begin() {
     ESP32Board::begin();
@@ -56,7 +60,13 @@ void HeltecV4Board::begin() {
   }
 
   const char* HeltecV4Board::getManufacturerName() const {
-#ifdef HELTEC_LORA_V4_TFT
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED && defined(DISPLAY_CLASS)
+    static char name[64];
+    snprintf(name, sizeof(name), "Heltec V4.%u %s",
+             loRaFEMControl.getFEMType() == KCT8103L_PA ? 3u : 2u,
+             display.status());
+    return name;
+#elif defined(HELTEC_LORA_V4_TFT)
     return loRaFEMControl.getFEMType() == KCT8103L_PA ? "Heltec V4.3 TFT" : "Heltec V4 TFT";
 #else
     return loRaFEMControl.getFEMType() == KCT8103L_PA ? "Heltec V4.3 OLED" : "Heltec V4 OLED";
@@ -98,6 +108,9 @@ bool HeltecV4Board::handleCommand(const char* command, uint32_t sender_timestamp
   if (command == nullptr || reply == nullptr) {
     return false;
   }
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED && defined(DISPLAY_CLASS)
+  if (mesh::ui::handleHeltecV4DisplayCommand(command, reply, 160, display)) return true;
+#endif
 
   if (strcmp(command, "get radio.fem.rxgain") == 0) {
     if (!loRaFEMControl.isLnaCanControl()) {

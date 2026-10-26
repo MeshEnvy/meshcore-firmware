@@ -67,3 +67,45 @@ The production controls generator and picker used release metadata assembled fro
 These checks are required before describing the hardware combinations as physically qualified.
 
 The earlier [optional-screen record](../optional_screens.md#validation) covers separate RC32 and Tracker smoke packages; those are not part of this ten-profile matrix.
+
+## Unified ordinary V4 update - 2026-10-26
+
+New original-V4 builds combine OLED, the stock touch TFT kit and headless
+operation. `display.type` defaults to `auto`; saved `oled`, `tft` and `off`
+overrides apply immediately. `board` reports the radio front end's V4.2/V4.3
+generation and live display selection. R8 retains its separate hardware image.
+
+All five Full packages below passed serialized compilation, application size,
+capability-marker and runtime RAM admission checks. Test version:
+`v1.18.0.2-display-test-a87b2a33`, built from the working implementation based
+on `a87b2a33a`. The application hashes distinguish these local test builds.
+
+| Target | Application bytes | RAM admission margin (bytes) | SHA-256 prefix |
+| --- | ---: | ---: | --- |
+| V4 Full Companion | 2,545,128 | 25,328 | `d90b050b9892` |
+| V4 Full Repeater | 2,140,920 | 3,912 | `9e1bf8b7c31a` |
+| V4 Full Room Server | 2,139,400 | 18,040 | `8d3cddf67659` |
+| V4 Full Sensor | 1,524,472 | 123,112 | `6bd02f499a4a` |
+| Legacy TFT Repeater identity | 1,784,936 | 50,936 | `7c47a7825100` |
+
+The ten focused detection/integration tests pass, including absent and invalid
+panels, saved-setting recovery, live switching, clock wrap and headless
+Companion notifications/battery checks. They also verify that display sleep
+keeps the sensor power rail intact, sensors retain primary I2C, and TFT FSPI
+cleanup cannot stop the radio's separate HSPI controller. Shared R8, T-Deck
+and OLED regressions pass, as do build-profile and picker/provider checks.
+
+The Mercerwood V4.3 OLED passed automatic detection, live off/auto/oled changes,
+off and auto persistence across reboot, accurate `board` output and USB CLI
+responses. Its original display power preferences were retained. Only the
+active application was flashed; partitions and stored device data were kept.
+The final image also passed a save/logging smoke check: no false missing-file
+errors. Native USB needed one additional monitored RTS reset after esptool's
+flash/reset handoff before the terminal responded; later application reboots
+passed the persistence checks.
+
+Physical TFT identity/readback, visible rendering and sleep/wake still require
+the original stock kit. Screen-absent hardware and V4.2 hardware were covered
+by software tests, not a physical run. These display checks do not qualify
+maximum MQTT/TLS load, radio throughput or sleep current. Existing published
+images and LoRa update identities were not changed.

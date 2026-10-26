@@ -7,7 +7,9 @@
 Use the normal display-capable firmware for your exact board and role. When
 automatic detection is included, that image starts the supported screen if
 it responds, or continues headless if it is absent. There is no screen-presence
-setting. Power the board off before attaching or removing an optional screen.
+setting on most boards. The unified ordinary Heltec V4 image also offers a
+saved display override, described below. Power the board off before attaching
+or removing an optional screen.
 
 The [firmware picker](firmware_picker.md) describes automatic screen detection
 only when the selected application has been verified to contain it. Previously
@@ -31,10 +33,34 @@ add detection to an older download.
 | Muzi Base Uno/Duo with SuperIO | [SuperIO](https://muzi.works/products/super-io) adds the OLED, GPS, buttons and buzzer to the matching Base radio. | New Companion images probe the SH1107 display, leave its 12 V supply off when absent, and discover GPS independently. Uno and Duo retain their different radio drivers. |
 | LilyGo T-Echo Lite core/display assembly | [LilyGo](https://lilygo.cc/en-us/products/t-echo-lite) documents the split core/base design. | New Companion images check SSD1681 status readback before e-paper initialization and continue headless when the panel does not respond. The old non-shell target names remain compatibility recipes. |
 
-The older V4 TFT expansion configuration is also optional, but its current
-recipe has no verified panel readback connection. Detection is not enabled for
-that wiring. A touchscreen acknowledgement alone does not establish that the
-LCD responds. The V4 R8 TFT and older V4 TFT pin mappings are distinct.
+## Heltec V4.2 / V4.3
+
+New ordinary V4 images combine OLED, the original stock touch TFT expansion
+kit, and operation without a screen in one image per role. The OLED probe uses
+its own I2C bus; a verified CHSC6xxx touch-controller identity selects the stock
+TFT assembly. This identifies the touchscreen assembly, not a working LCD.
+With neither display detected, the firmware continues without a screen.
+
+`get display.type` reports the saved choice and active display. Use
+`set display.type auto|oled|tft|off` to change it immediately and save the choice.
+`auto` is the default. `off` explicitly disables rendering; it is distinct from
+an absent or unrecognized screen. `board` reports the radio front-end revision
+and active display, including the off/headless states. V4.2/V4.3 is inferred
+from the detected radio front end, rather than reading a PCB revision code.
+
+This change applies to newly built and qualified unified images. Existing
+releases retain their compiled OLED/TFT behavior. The picker advertises the
+combined image only when its application and source-bound metadata prove that
+it includes the new driver. V4.3 OLED detection, live selection and reboot
+persistence passed on the Mercerwood test board. Physical TFT detection and
+display operation remain unqualified. See the [validation record](test-results/firmware_variant_consolidation.md#unified-ordinary-v4-update-2026-10-26).
+
+The V4 R8 retains its separate hardware image because its memory configuration
+and display wiring differ. Older TFT/expansion-kit target names remain explicit
+compatibility builds with their original LoRa OTA identity. Moving to the
+canonical ordinary V4 image requires a local USB installation or an updater
+that accepts the matching application over WiFi. Do not force a different
+LoRa OTA target ID. No settings erase is required for display selection.
 
 RAK4631 and RAK3401 images with OLED controller detection support
 `set display.controller auto`, `ssd1306` or `sh1106` in all display-enabled

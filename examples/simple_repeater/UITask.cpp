@@ -867,6 +867,19 @@ void UITask::toggleDisplay(const char* source) {
 #endif
 
 void UITask::loop() {
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED
+  static uint32_t display_generation = 0;
+  if (display_generation != display.generation()) {
+    display_generation = display.generation();
+    _next_refresh = millis();
+#ifdef DISPLAY_REDRAW_ON_CHANGE
+    _frame_valid = false;
+#endif
+#ifdef DISPLAY_ACTIVITY_DASHBOARD
+    _rows_valid = false;
+#endif
+  }
+#endif
 #if defined(HELTEC_V4_R8_TFT) && defined(HELTEC_TFT_RUNTIME_ROTATION) && HELTEC_TFT_RUNTIME_ROTATION == 1
   applyDisplayRotation();
 #endif

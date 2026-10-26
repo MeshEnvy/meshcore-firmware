@@ -338,6 +338,14 @@ SSD1306 Full Companion builds use `set display.rotation 90|180|270`; `0`
 restores the board default, so a separate rotated release image is not
 recommended.
 
+Newly built ordinary Heltec V4 images combine V4.2/V4.3, OLED, the stock touch
+TFT kit, and no screen in one image per role. A qualified image offers saved
+`display.type auto|oled|tft|off` controls; selection applies immediately, and
+`board` reports the detected revision and active display. R8 remains separate.
+Older TFT/expansion-kit target names retain their distinct LoRa OTA identities;
+use USB or supported WiFi updating when moving to the canonical image. Older
+published downloads keep their original behavior. See [optional screens](optional_screens.md#heltec-v42-v43).
+
 New display-capable RAK4631 and RAK3401 images with OLED controller detection
 also offer saved `display.controller` choices: `auto`, `ssd1306` or `sh1106`.
 This applies after restart and avoids a custom image when a panel needs an

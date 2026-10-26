@@ -10,6 +10,11 @@ import sys
 from pathlib import Path
 from urllib.parse import quote
 
+# Shared declarations describe future source capabilities, never historical
+# filename aliases. The resolver below also inspects the actual application.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from consolidated_profiles import SPECS as CONSOLIDATED_SPECS, proven, unified_v4_replacements
+
 
 FIRMWARE_EXTENSIONS = {".bin", ".hex", ".uf2", ".zip"}
 FILENAME_VERSION_RE = re.compile(
@@ -637,9 +642,38 @@ def release_identity_is_full_companion(
     return identity in release_files and "_companion_radio_full" in identity.lower()
 
 
+def qualified_unified_v4_identity(identity: str, paths: list[Path]) -> bool:
+    spec = next(spec for spec in CONSOLIDATED_SPECS if spec["key"] == "unifiedV4Display")
+    for path in paths:
+        if path.suffix.lower() != ".bin" or path.stem.endswith("-merged"):
+            continue
+        proof_path = path.with_suffix(".capabilities.json")
+        if not proof_path.is_file():
+            continue
+        manifest = json.loads(proof_path.read_text())
+        if (manifest.get("artifact_target", manifest.get("target")) != identity
+                or not proven(manifest, spec)):
+            continue
+        if spec["marker"].encode("ascii") in path.read_bytes():
+            return True
+    return False
+
+
+def unified_v4_release_identity(old_identity: str, release_files: dict[str, list[Path]]) -> str | None:
+    base = re.sub(r"-(?:full-usb-wifi-ota|full-logging-ota|full-ota|ota|logging)$", "", old_identity)
+    for target, _key in unified_v4_replacements(base):
+        for identity in (target + "-full-usb-wifi-ota", target + "-full-logging-ota", target):
+            if identity in release_files and qualified_unified_v4_identity(identity, release_files[identity]):
+                return identity
+    return None
+
+
 def resolve_release_identity(
     old_identity: str, release_files: dict[str, list[Path]]
 ) -> tuple[str, bool]:
+    unified_v4 = unified_v4_release_identity(old_identity, release_files)
+    if unified_v4 is not None:
+        return unified_v4, unified_v4.endswith("-full-usb-wifi-ota")
     candidates = release_identity_candidates(old_identity)
     for candidate in candidates:
         if candidate in release_files:
@@ -1120,6 +1154,16 @@ def update_catalog(catalog: dict, release_files: dict[str, list[Path]], args: ar
                     notes = normalize_esp32_full_companion_metadata(
                         firmware, notes
                     )
+
+            if any(qualified_unified_v4_identity(identity, release_files[identity])
+                   for identity in resolved_identities if identity.startswith("heltec_v4_")):
+                firmware["subTitle"] = "V4.2/V4.3 automatic OLED / TFT / no screen"
+                notes += (
+                    "\n\nDISPLAY - One ordinary V4 image detects OLED, the stock touch TFT "
+                    "kit, or no screen. Saved display.type accepts auto, oled, tft and off. "
+                    "R8 remains separate. Changing from a legacy TFT/expansion-kit target "
+                    "requires USB or supported WiFi updating; LoRa OTA target IDs stay distinct."
+                )
 
             firmware["version"] = {version_key: {"notes": notes, "files": files}}
             updated_entries += 1

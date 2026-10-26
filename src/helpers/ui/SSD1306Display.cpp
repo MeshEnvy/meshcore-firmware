@@ -21,6 +21,7 @@ bool SSD1306Display::i2c_probe(TwoWire& wire, uint8_t addr) {
 }
 
 // Color scheme
+#if !defined(HELTEC_V4_DISPLAY_UNIFIED) || !HELTEC_V4_DISPLAY_UNIFIED
 ColorVal UIColor::window_bkg = SSD1306_BLACK;
 ColorVal UIColor::title_bkg = SSD1306_BLACK;
 ColorVal UIColor::title_txt = SSD1306_WHITE;
@@ -30,6 +31,7 @@ ColorVal UIColor::warning_txt = SSD1306_WHITE;
 ColorVal UIColor::popup_bkg = SSD1306_BLACK;
 ColorVal UIColor::popup_txt = SSD1306_WHITE;
 ColorVal UIColor::corp_blue = SSD1306_WHITE;
+#endif
 
 bool SSD1306Display::begin() {
   if (!_isOn) {
@@ -42,7 +44,7 @@ bool SSD1306Display::begin() {
                                      , mesh::ui::oledControllerMode()
 #endif
                                      )
-      && i2c_probe(Wire, DISPLAY_ADDRESS);
+      && i2c_probe(*_wire, DISPLAY_ADDRESS);
   if (started) {
     _panel_ready = true;
     applyRotation();

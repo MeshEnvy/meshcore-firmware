@@ -29,7 +29,11 @@ const char meshcore_capability_heltec_v4_tft_kit[] =
 #endif
 
 #if defined(P_LORA_SCLK)
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED
+  static SPIClass spi(HSPI);  // TFT owns FSPI; never share its reset/remap.
+#else
   static SPIClass spi;
+#endif
   static SX126xBufferedRadioHal radio_hal(spi);
   RADIO_CLASS radio = new Module(&radio_hal, P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY);
 #else
@@ -51,6 +55,8 @@ AutoDiscoverRTCClock rtc_clock(fallback_clock);
 #endif
 
 #ifdef DISPLAY_CLASS
+  // VEXT is shared with the expansion sensors. Display selection must not
+  // acquire or switch that rail when entering headless/off mode.
   DISPLAY_CLASS display(NULL);
   MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
 #endif
@@ -61,7 +67,11 @@ bool radio_init() {
   (void)*capability;
 #endif
 #if defined(MESHCORE_HELTEC_V4_TFT_KIT_COMPAT)
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED
+  {
+#else
   if (std::is_same<DISPLAY_CLASS, ST7789LCDDisplay>::value) {
+#endif
     const volatile char* capability = meshcore_capability_heltec_v4_tft_kit;
     (void)*capability;
   }

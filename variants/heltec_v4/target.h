@@ -2,7 +2,12 @@
 
 // GPIO40 and GPIO41 are hard-wired to GNSS WAKE and PPS respectively.
 // Keep them unavailable even when no GNSS data is detected at startup.
-#define USER_GPIO_RESERVED_PINS 40, 41
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED && defined(DISPLAY_CLASS)
+  // The stock TFT touch controller is probed on 47/48, with reset on 44.
+  #define USER_GPIO_RESERVED_PINS 40, 41, 44, 47, 48
+#else
+  #define USER_GPIO_RESERVED_PINS 40, 41
+#endif
 
 #define RADIOLIB_STATIC_ONLY 1
 #include <RadioLib.h>
@@ -13,7 +18,9 @@
 #include <helpers/SensorManager.h>
 #include <helpers/sensors/EnvironmentSensorManager.h>
 #ifdef DISPLAY_CLASS
-#ifdef HELTEC_LORA_V4_OLED
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED
+    #include <helpers/ui/HeltecV4Display.h>
+#elif defined(HELTEC_LORA_V4_OLED)
     #include <helpers/ui/SSD1306Display.h>
 #elif defined(HELTEC_LORA_V4_TFT)
     #include <helpers/ui/ST7789LCDDisplay.h>

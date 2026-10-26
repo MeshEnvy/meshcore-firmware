@@ -319,24 +319,26 @@ require("meshnology_w12_sensor", "build_flags", "PIN_BOARD_SDA=17")
 require("meshnology_w12_sensor", "build_flags", "PIN_BOARD_SCL=18")
 reject("meshnology_w12_sensor", "build_flags", "ENV_PIN_")
 
+# Unified ordinary V4 keeps the sensor/RTC bus on 4/3. OLED uses a private
+# controller on 17/18, so changing display type cannot move the sensor bus.
 for env_name in (
+    "heltec_v4_repeater",
+    "heltec_v4_room_server",
     "heltec_v4_sensor",
     "heltec_v4_2_v4_3_companion_radio_full_femon",
-):
-    require(env_name, "build_flags", "PIN_BOARD_SDA=17")
-    require(env_name, "build_flags", "PIN_BOARD_SCL=18")
-    require(env_name, "build_flags", "ENV_PIN_SDA=4")
-    require(env_name, "build_flags", "ENV_PIN_SCL=3")
-
-for env_name in (
     "heltec_v4_tft_sensor",
     "heltec_v4_expansionkit_tft_companion_radio_ble_femon",
     "heltec_v4_expansionkit_tft_companion_radio_full_femon",
     "heltec_v4_tft_companion_radio_full_femon",
 ):
+    require(env_name, "build_flags", "HELTEC_V4_DISPLAY_UNIFIED=1")
+    require(env_name, "build_flags", "DISPLAY_CLASS=HeltecV4Display")
     require(env_name, "build_flags", "PIN_BOARD_SDA=4")
     require(env_name, "build_flags", "PIN_BOARD_SCL=3")
-    reject(env_name, "build_flags", "ENV_PIN_")
+    require(env_name, "build_flags", "ENV_PIN_SDA=4")
+    require(env_name, "build_flags", "ENV_PIN_SCL=3")
+    for driver in ("HeltecV4Display", "SSD1306Display", "ST7789LCDDisplay"):
+        require(env_name, "build_src_filter", "helpers/ui/" + driver + ".cpp")
 
 for env_name in (
     "RAK_3112_sensor",

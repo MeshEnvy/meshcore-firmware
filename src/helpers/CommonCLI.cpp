@@ -17,6 +17,9 @@
 #include <helpers/esp32/PowerTestControls.h>
 #endif
 #include <helpers/ui/DisplayPowerSettings.h>
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED && defined(DISPLAY_CLASS)
+#include <helpers/ui/HeltecV4DisplaySettings.h>
+#endif
 #if defined(OLED_AUTO_DETECT) && OLED_AUTO_DETECT && defined(DISPLAY_CLASS)
 #include <helpers/ui/OLEDControllerSettings.h>
 #endif
@@ -3553,6 +3556,9 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       }
       return;
     }
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED && defined(DISPLAY_CLASS)
+    if (mesh::ui::handleHeltecV4DisplayCommand(command, reply, 160, display)) return;
+#endif
     if (mesh::ui::handleDisplayPowerCommand(command, reply, 160)) return;
 #if defined(OLED_AUTO_DETECT) && OLED_AUTO_DETECT && defined(DISPLAY_CLASS)
     if (mesh::ui::handleOLEDControllerCommand(command, reply, 160, true)) return;

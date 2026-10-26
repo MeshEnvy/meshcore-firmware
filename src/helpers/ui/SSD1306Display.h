@@ -40,13 +40,14 @@ private:
   uint8_t _color;
   int _text_size = 1;
   RefCountedDigitalPin* _peripher_power;
+  TwoWire* _wire;
 
   bool i2c_probe(TwoWire& wire, uint8_t addr);
   void applyRotation();
 public:
-  SSD1306Display(RefCountedDigitalPin* peripher_power=NULL) : DisplayDriver(PANEL_WIDTH, PANEL_HEIGHT),
-      display(PANEL_WIDTH, PANEL_HEIGHT, &Wire, PIN_OLED_RESET),
-      _peripher_power(peripher_power)
+  SSD1306Display(RefCountedDigitalPin* peripher_power=NULL, TwoWire* wire=&Wire) : DisplayDriver(PANEL_WIDTH, PANEL_HEIGHT),
+      display(PANEL_WIDTH, PANEL_HEIGHT, wire, PIN_OLED_RESET),
+      _peripher_power(peripher_power), _wire(wire)
   {
     _isOn = false; 
   }

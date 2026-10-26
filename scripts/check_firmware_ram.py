@@ -162,6 +162,15 @@ def requirements(platform, defines, target):
         if platform != "ESP32_PLATFORM":
             raise ValueError("Wio Tracker L2 display budget requires ESP32")
         display_heap = wio_tracker_l2_display_heap(defines)
+    elif display == "HeltecV4Display":
+        if platform != "ESP32_PLATFORM" or not integer(defines, "HELTEC_V4_DISPLAY_UNIFIED", 0):
+            raise ValueError("unified Heltec V4 display budget requires ESP32 and its unified recipe")
+        # Both backend objects and the private TwoWire instance are linked
+        # globals. The OLED nevertheless retains its one 1024-byte framebuffer
+        # after a live switch to TFT. The source assertion conservatively bounds
+        # the complete wrapper plus that allocation and allocator metadata to
+        # 2 KiB. TFT draws directly; it allocates no RGB framebuffer/canvas.
+        display_heap = 2048
     elif display == "ST7789Display":
         display_heap = st7789_display_heap(defines)
     elif display == "ST7735Display":
@@ -187,6 +196,14 @@ def requirements(platform, defines, target):
         # (up to 320 rows, including overlap while growing) and SDK bus/touch
         # driver metadata. These allocations coexist with the UI sprite.
         parts["display_dma_and_bus"] = 16384
+    if display == "HeltecV4Display":
+        # Pinned Arduino-ESP32 2.x: the private I2C controller owns two bounded
+        # 128-byte buffers, HAL/IDF locks, master state and transient command
+        # links. Switching to TFT can retain its SPI/parameter mutexes while
+        # the OLED framebuffer remains allocated. Reserve those SDK/bus owners
+        # together, even on a headless/off boot: a saved runtime choice can
+        # activate either panel later. Keep core/transient margins unchanged.
+        parts["display_i2c_spi_and_probe"] = 4096
     mqtt = None
     combined_rak_ethernet = "RAK4631_COMBINED_ETHERNET" in defines
     cooperative_rak_ethernet = not companion and (combined_rak_ethernet or (
@@ -411,6 +428,7 @@ def requirements(platform, defines, target):
             # including worst-case 8-byte Entry alignment.
             small_display = display in {
                 "SSD1306Display", "SH1106Display", "ST7735Display", "U8g2Display",
+                "HeltecV4Display",
             }
             small_font = integer(defines, "UI_SMALL_MESSAGE_FONT", int(small_display))
             default_preview = 161 if small_font else 78

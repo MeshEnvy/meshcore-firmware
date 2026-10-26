@@ -5789,9 +5789,9 @@ get_esp32_full_companion_replacement() {
 
   # Full Companion includes USB, BLE, and ordinary WiFi Companion. Map legacy
   # FEM-default aliases to the one runtime-configurable image for each physical
-  # V4 display/radio layout. The expansion-kit TFT remains a distinct Full
-  # recipe because it has different sensor wiring from both base display
-  # layouts.
+  # V4 display/radio layout. Unified display consolidation below omits the
+  # older TFT/expansion aliases only when the canonical driver is configured.
+  # Their exact recipes remain available for deployed update identities.
   case "$env_name" in
     heltec_v3_companion_radio_wifi_mqtt)
       full_env=Heltec_v3_companion_radio_full
@@ -6079,9 +6079,8 @@ get_consolidated_hardware_replacement() {
   # Explicit builds still retain the requested historical OTA identity.
   case "${1,,}" in
     picow_companion_radio_usb|picow_companion_radio_ble|picow_companion_radio_wifi|\
-    heltec_v4_expansionkit_repeater|heltec_v4_expansionkit_repeater_observer_mqtt|heltec_v4_expansionkit_room_server_observer_mqtt|\
+    heltec_v4_tft_*|heltec_v4_3_tft_*|heltec_v4_expansionkit_*|heltec_v4_3_expansionkit_*|\
     heltec_v4_r8_tft_portrait_repeater_observer_mqtt|heltec_v4_r8_tft_portrait_room_server_observer_mqtt|\
-    heltec_v4_expansionkit_tft_companion_radio_*|heltec_v4_3_expansionkit_tft_companion_radio_*|\
     muzi_base_duo_superio_companion_radio_*|muzi_base_uno_superio_companion_radio_*|lilygo_t-echo-lite_non_shell_companion_radio_*|\
     heltec_rc32_without_display_*) ;;
     *) return 1 ;;

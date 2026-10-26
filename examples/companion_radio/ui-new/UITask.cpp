@@ -59,6 +59,15 @@
 
 #define LONG_PRESS_MILLIS   1200
 
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED \
+    && !defined(AUTO_SHUTDOWN_MILLIVOLTS)
+  // The original TFT Full recipe includes this battery protection. Retain it
+  // when the canonical V4 image detects that assembly without changing the
+  // historical OLED/headless Full policy.
+  #define AUTO_SHUTDOWN_MILLIVOLTS 3400
+  #define HELTEC_V4_TFT_SHUTDOWN_ONLY 1
+#endif
+
 static uint64_t companionMessageNowMillis() {
 #if defined(ESP32)
   // Unlike Arduino millis(), this does not wrap after roughly 49.7 days.
@@ -2767,6 +2776,18 @@ void UITask::syncAlertPreferences() {
 
 void UITask::loop() {
   syncAlertPreferences();
+#if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED
+  static uint32_t display_generation = 0;
+  if (display_generation != display.generation()) {
+    display_generation = display.generation();
+    display.setRotationDegrees(_node_prefs->display_rotation_degrees);
+    _next_refresh = millis();
+  }
+  // Preserve normal headless button, notification and battery behavior while
+  // retaining the wrapper for a later live display.type change.
+  _display = display.selectedType() == mesh::ui::HeltecV4DisplayType::None
+      ? nullptr : &display;
+#endif
   // Observe startup expiry even while display/Morse/input defers rendering.
   if (!_startup_complete && static_cast<uint32_t>(millis() - ui_started_at) >= 8000u) {
     _startup_complete = true;
@@ -3037,7 +3058,11 @@ void UITask::loop() {
 #ifdef AUTO_SHUTDOWN_MILLIVOLTS
   if (static_cast<int32_t>(millis() - next_batt_chck) >= 0) {
     uint16_t milliVolts = getBattMilliVolts();
-    if (milliVolts > 0 && milliVolts < AUTO_SHUTDOWN_MILLIVOLTS) {
+    if (milliVolts > 0 && milliVolts < AUTO_SHUTDOWN_MILLIVOLTS
+#ifdef HELTEC_V4_TFT_SHUTDOWN_ONLY
+        && display.selectedType() == mesh::ui::HeltecV4DisplayType::Tft
+#endif
+    ) {
       if(!board.isExternalPowered()) {
         if (_display != NULL) {
           _display->startFrame();

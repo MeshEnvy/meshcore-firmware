@@ -502,6 +502,63 @@ int main() {
         }, "v4_companion")
         self.assertEqual(default, expanded)
 
+    def test_unified_v4_display_reserves_retained_oled_and_both_bus_owners(self):
+        defines = {"HELTEC_V4_DISPLAY_UNIFIED": 1, "HELTEC_LORA_V4": 1}
+        for role in ("heltec_v4_repeater", "heltec_v4_room_server",
+                     "heltec_v4_sensor", "heltec_v4_companion_radio_full"):
+            with self.subTest(role=role):
+                oled = ram.requirements("ESP32_PLATFORM", {
+                    **defines, "DISPLAY_CLASS": "SSD1306Display",
+                }, role)
+                unified = ram.requirements("ESP32_PLATFORM", {
+                    **defines, "DISPLAY_CLASS": "HeltecV4Display",
+                }, role)
+                parts = unified["components"]
+                self.assertEqual(parts["display_pixels_and_driver"], 2048)
+                self.assertEqual(parts["display_i2c_spi_and_probe"], 4096)
+                self.assertEqual(parts["allocation_and_transient_margin"], 16384)
+                # No common reserve is reduced to pay for the additional bus.
+                self.assertEqual(parts, {
+                    **oled["components"], "display_i2c_spi_and_probe": 4096,
+                })
+                self.assertEqual(unified["required_heap_bytes"],
+                                 oled["required_heap_bytes"] + 4096)
+                if "companion" in role:
+                    # This class can become a small OLED after a saved runtime
+                    # setting change, even when it initially selects TFT/off.
+                    self.assertEqual(parts["expanded_message_previews"], 2816)
+                    self.assertGreaterEqual(unified["required_contiguous_bytes"], 11008)
+        for platform, extra in (("NRF52_PLATFORM", defines),
+                                ("ESP32_PLATFORM", {})):
+            with self.subTest(platform=platform, extra=extra):
+                with self.assertRaisesRegex(ValueError, "unified Heltec V4"):
+                    ram.requirements(platform, {
+                        **extra, "DISPLAY_CLASS": "HeltecV4Display",
+                    }, "companion")
+
+    def test_unified_v4_display_source_guard_rejects_growth_at_budget_boundary(self):
+        source = (ROOT / "src/helpers/ui/HeltecV4Display.cpp").read_text()
+        guard = source.split("// Runtime budget guard:", 1)[1].split(
+            "extern const char meshcore_capability_display_heltec_v4_unified", 1)[0]
+        # Compile the actual assertions, including negative boundaries. The
+        # firmware build substitutes real wrapper/Wire/library definitions.
+        declarations = (
+            "struct HeltecV4Display { unsigned char bytes[OBJECT_BYTES]; };\n"
+            "struct SSD1306Display { static constexpr unsigned FRAMEBUFFER_BYTES = FRAME_BYTES; };\n"
+        )
+        # The split removes the comment opener but leaves its first line.
+        guard = "// Runtime budget guard:" + guard
+        for objects, framebuffer, wire, accepted in (
+                (992, 1024, 128, True), (993, 1024, 128, False),
+                (992, 1025, 128, False), (992, 1024, 129, False)):
+            with self.subTest(objects=objects, framebuffer=framebuffer, wire=wire):
+                result = subprocess.run([
+                    "c++", "-std=c++17", "-fsyntax-only", "-x", "c++", "-",
+                    f"-DOBJECT_BYTES={objects}", f"-DFRAME_BYTES={framebuffer}",
+                    f"-DI2C_BUFFER_LENGTH={wire}",
+                ], input=declarations + guard, text=True, capture_output=True)
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
+
     def test_combined_uart_reserves_heap_beside_mqtt_before_enable(self):
         defines = {"WITH_MQTT_BRIDGE": 1, "WIFI_OTA_SEEDER": 1}
         mqtt = ram.requirements("ESP32_PLATFORM", defines, "v3_repeater")
