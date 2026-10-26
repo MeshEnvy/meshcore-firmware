@@ -73,8 +73,8 @@ class RadioProfiles {
   bool secondary_temporary = false;
   RadioCrossMode cross = RadioCrossMode::Off;
   // Infrastructure opts into BOTH at startup; Companions keep their own
-  // contact/channel policy. Force applies only to locally generated replies.
-  uint8_t reply_tx = RADIO_TX_AUTO;
+  // contact/channel policy. Force applies only to authenticated admin CLI replies.
+  uint8_t reply_tx = RADIO_TX_AUTO;  // authenticated admin CLI replies only
   bool reply_force = false;
   uint32_t generation[2] = {1, 1};
   uint32_t switches = 0;

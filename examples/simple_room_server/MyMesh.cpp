@@ -1133,7 +1133,6 @@ bool MyMesh::pushRoomTextToClient(ClientInfo *client, uint32_t timestamp,
   auto reply = createDatagram(PAYLOAD_TYPE_TXT_MSG, client->id, client->shared_secret, reply_data, len);
   bool sent = false;
   if (reply) {
-    reply->radio_reply = true;  // asynchronous response to the room subscription
     if (!mesh::Packet::isValidPathLen(client->out_path_len)) {
       unsigned long delay_millis = 0;
       sent = sendFloodScoped(default_scope, reply, delay_millis,
@@ -1864,7 +1863,6 @@ void MyMesh::sendDefaultPasswordWarning(ClientInfo* client,
   mesh::Packet* warning = createDatagram(PAYLOAD_TYPE_TXT_MSG, client->id,
                                         client->shared_secret, data, sizeof(data));
   if (warning == NULL) return;
-  warning->radio_reply = true;
   sendClientReply(client, warning, SERVER_RESPONSE_DELAY + 2000UL, path_hash_size);
 }
 
@@ -2076,6 +2074,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
     uint32_t sender_timestamp;
     memcpy(&sender_timestamp, data, 4); // timestamp (by sender's RTC clock - which could be wrong)
     uint8_t flags = (data[4] >> 2);        // message attempt number, and other flags
+    const bool admin_cli_reply = flags != TXT_TYPE_PLAIN && client->isAdmin();
 
     if (!(flags == TXT_TYPE_PLAIN || flags == TXT_TYPE_CLI_DATA || flags == TXT_TYPE_CLI_COMMAND)) {
       MESH_DEBUG_PRINTLN("onPeerDataRecv: unsupported command flags received: flags=%02x", (uint32_t)flags);
@@ -2241,11 +2240,11 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
 
       auto reply = createDatagram(PAYLOAD_TYPE_TXT_MSG, client->id, secret,
                                   temp, 5 + reply_text_len);
+      if (reply) reply->radio_reply = admin_cli_reply;
       if (_cli.morseReply().generation() != morse_mutation_before) {
         // One first copy per radio profile, without alternate paths/retries
         // that could remain queued after the listen handoff.
         _cli.morseReply().prepareReply(reply);
-        if (reply) reply->radio_reply = true;
         const bool queued = reply && (!mesh::Packet::isValidPathLen(client->out_path_len)
             ? sendFloodReply(reply, delay_millis + SERVER_RESPONSE_DELAY, packet->getPathHashSize())
             : sendDirect(reply, client->out_path, client->out_path_len, delay_millis + SERVER_RESPONSE_DELAY));
@@ -3849,7 +3848,7 @@ void MyMesh::onUserGpioTimerCompleted(uint8_t pin, uint8_t state,
       }
     }
   }
-  if (client == NULL) return;
+  if (client == NULL || !client->isAdmin()) return;
 
   uint8_t data[72];
   uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
@@ -3865,7 +3864,7 @@ void MyMesh::onUserGpioTimerCompleted(uint8_t pin, uint8_t state,
                                         client->shared_secret, data,
                                         5 + (size_t)text_len);
   if (!packet) return;
-  packet->radio_reply = true;  // delayed GPIO command completion
+  packet->radio_reply = true;  // delayed admin GPIO command completion
   if (!mesh::Packet::isValidPathLen(client->out_path_len)) {
     sendFlood(packet, SERVER_RESPONSE_DELAY, path_hash_size);
   } else {

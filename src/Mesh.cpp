@@ -245,16 +245,16 @@ bool Mesh::otaSendAdapter(void* ctx, const uint8_t* msg, uint16_t len, bool /*fl
       || m->_mgr->getFreeCount() <= OTA_EGRESS_MIN_FREE)) return false;
   Packet* p = m->createOtaPacket(msg, len);
   if (!p) return false;
-  p->radio_reply = len && ota::ota_is_response_message(msg[0]);
+  p->radio_reply = false;  // OTA follows normal crossing, not admin CLI policy.
   if (route.profile < 2) {
     // DATA, PROOF and MANIFEST are emitted after the RX call stack ends.
-    // Restore origin only; normal reply policy still decides one/both TX.
+    // Restore origin only; normal crossing still decides one/both TX.
     p->radio_profile = p->radio_origin = route.profile;
     p->radio_generation = p->radio_origin_generation = route.generation;
     p->radio_local = false;
     // A direct negotiation fallback stays on its original physical
     // session instead of silently moving onto a replacement profile.
-    if (!p->radio_reply) {
+    if (!(len && ota::ota_is_response_message(msg[0]))) {
       p->radio_bound = true;
       p->tx_radio = route.profile == 0 ? RADIO_TX_PRIMARY : RADIO_TX_SECONDARY;
     }
@@ -838,16 +838,13 @@ uint32_t Mesh::getOtaPacketAirtime() const {
   const auto* profiles = _radio->profiles();
   if (!profiles || !profiles->enabled()) return _radio->getProfileAirtime(0, MAX_TRANS_UNIT);
   // Use the participating profiles, never the scanner's instantaneous visit.
-  // Replies may occupy both profiles even with crossing off or radio2 RX-only.
+  // OTA uses normal crossing; admin CLI reply overrides do not apply here.
   uint8_t mask = (profiles->primary_temporary ? 1 : 0) | (profiles->secondary_temporary ? 2 : 0);
   if (!mask) mask = 1;
   // Each temporary origin can cross independently. In particular, an RX-only
   // secondary can still send requests over the primary when crossing is on.
   for (uint8_t origin = 0; origin < 2; ++origin) {
     if (mask & (1U << origin)) mask |= profiles->transmitMask(origin);
-  }
-  if (profiles->reply_tx != RADIO_TX_AUTO) {
-    mask |= explicitRadioTxMask(profiles->reply_tx, profiles->canTransmit(1, profiles->reply_force));
   }
   uint32_t airtime = 0;
   for (uint8_t profile = 0; profile < 2; ++profile) {

@@ -190,7 +190,7 @@ struct MyMesh {
   uint8_t last_request_type = 0;
   int handleRequest(ClientInfo*, uint32_t, uint8_t* payload, size_t, size_t) { ++requests; last_request_type = payload[0]; return 0; }
   void handleCommand(uint32_t, char*, char* reply, int, uint8_t) { strcpy(reply, "OK"); }
-  mesh::Packet* createAck(uint32_t ack) { ++post_acks; response.payload_len = 4; memcpy(response.payload, &ack, 4); return &response; }
+  mesh::Packet* createAck(uint32_t ack) { ++post_acks; response = mesh::Packet(); response.payload_len = 4; memcpy(response.payload, &ack, 4); return &response; }
   mesh::Packet* createMultiAck(uint32_t ack, uint8_t) { return createAck(ack); }
   struct Prefs {
     char password[16] = "admin";
@@ -201,7 +201,7 @@ struct MyMesh {
   FakeClock clock;
   FakeRng rng;
   unsigned long millis_now = 20000, dirty_contacts_expiry = 0, next_push = 0;
-  uint8_t contacts_save_failures = 0, reply_data[32] = {};
+  uint8_t contacts_save_failures = 0, reply_data[MAX_PACKET_PAYLOAD] = {};
   unsigned creations = 0, direct_sends = 0, flood_sends = 0, path_returns = 0;
   bool create_ok = true, queue_ok = true;
   unsigned fail_creation_on = 0;
@@ -212,7 +212,7 @@ struct MyMesh {
   uint8_t response_secret[PUB_KEY_SIZE] = {}, response_key[PUB_KEY_SIZE] = {};
   uint8_t returned_path[MAX_PATH_SIZE] = {}, direct_path[MAX_PATH_SIZE] = {};
   uint8_t returned_path_len = 0, direct_path_len = 0, reply_hash_size = 0;
-  uint8_t captured_reply[32] = {};
+  uint8_t captured_reply[MAX_PACKET_PAYLOAD] = {};
   size_t captured_reply_length = 0;
   mesh::LogicalMessageCache<ROOM_MESSAGE_CACHE_SIZE> recent_room_posts;
   unsigned posts = 0, post_acks = 0;
@@ -245,7 +245,7 @@ struct MyMesh {
   bool sendDirect(mesh::Packet* packet, const uint8_t* path, uint8_t path_len,
                   unsigned long delay) {
     assert(packet == &response && (delay == SERVER_RESPONSE_DELAY || delay == TXT_ACK_DELAY
-        || (packet->radio_reply && delay == SERVER_RESPONSE_DELAY + 2000UL)));
+        || delay == SERVER_RESPONSE_DELAY + 2000UL));
     assert(mesh::Packet::isValidPathLen(path_len));
     ++direct_sends;
     direct_path_len = path_len;
@@ -256,7 +256,7 @@ struct MyMesh {
   }
   bool sendFloodReply(mesh::Packet* packet, unsigned long delay, uint8_t hash_size) {
     assert(packet == &response && (delay == SERVER_RESPONSE_DELAY || delay == TXT_ACK_DELAY
-        || (packet->radio_reply && delay == SERVER_RESPONSE_DELAY + 2000UL)));
+        || delay == SERVER_RESPONSE_DELAY + 2000UL));
     ++flood_sends;
     reply_hash_size = hash_size;
     if (queue_ok) sent.push_back({created_type, std::vector<uint8_t>(captured_reply,
@@ -850,12 +850,12 @@ static void defaultPasswordWarnings() {
     const auto& response = mesh.sent[0]; const auto& warning = mesh.sent[1];
     assert(response.type == PAYLOAD_TYPE_RESPONSE && response.data.size() == 13);
     assert(response.data[4] == RESP_SERVER_LOGIN_OK && response.data[12] == FIRMWARE_VER_LEVEL);
-    assert(response.delay == SERVER_RESPONSE_DELAY);
+    assert(response.delay == SERVER_RESPONSE_DELAY && !response.radio_reply);
     assert(warning.type == PAYLOAD_TYPE_TXT_MSG && warning.data.size() == 25);
     assert(warning.data[4] == (TXT_TYPE_CLI_DATA << 2));
     assert(!memcmp(warning.data.data() + 5, "CHANGE YOUR PASSWORD", 20));
     uint32_t timestamp; memcpy(&timestamp, warning.data.data(), 4);
-    assert(timestamp != requested && warning.radio_reply);
+    assert(timestamp != requested && !warning.radio_reply);
     assert(warning.delay == SERVER_RESPONSE_DELAY + 2000UL && !warning.direct && warning.hash_size == 2);
     assert(mesh.path_returns == (flood ? 1U : 0U));
   }
@@ -881,6 +881,40 @@ static void defaultPasswordWarnings() {
   assert(replay.sent.size() == 2);
   puts("default password warning follows successful admin login without changing the binary response passed");
 }
+static void adminCliReplyScope() {
+  for (uint8_t role = 0; role <= PERM_ACL_ROLE_MASK; ++role) {
+    for (const uint8_t flags : {TXT_TYPE_CLI_DATA, TXT_TYPE_CLI_COMMAND}) {
+      for (const char* command : {"get outpath", "get room.catchup", "get tx"}) {
+        MyMesh mesh; seedKnown(mesh, role);
+        const auto receive = [&]() {
+          const uint32_t timestamp = 900;
+          std::vector<uint8_t> data(5 + strlen(command) + 1);
+          memcpy(data.data(), &timestamp, 4); data[4] = flags << 2;
+          memcpy(data.data() + 5, command, strlen(command));
+          auto packet = incoming();
+          mesh.onPeerDataRecv(&packet, PAYLOAD_TYPE_TXT_MSG, 0,
+              mesh.acl.client.shared_secret, data.data(), data.size() - 1);
+        };
+        receive();
+        assert(mesh.sent.size() == 1);
+        assert(mesh.sent.back().radio_reply == (role == PERM_ACL_ADMIN));
+        receive(); // Exact CLI retries use the same full-admin classification.
+        assert(mesh.sent.size() == 2);
+        assert(mesh.sent.back().radio_reply == (role == PERM_ACL_ADMIN));
+        if (role == PERM_ACL_ADMIN) {
+          mesh.acl.client.permissions = PERM_ACL_READ_ONLY;
+          receive(); // A cached admin result cannot retain reply-policy privilege.
+          assert(mesh.sent.size() == 3 && !mesh.sent.back().radio_reply);
+        }
+      }
+    }
+  }
+  MyMesh mesh; seedKnown(mesh, PERM_ACL_ADMIN);
+  mesh.post(&mesh.acl.client, "ordinary room post", 900);
+  assert(mesh.posts == 1 && !mesh.sent.empty());
+  for (const auto& sent : mesh.sent) assert(!sent.radio_reply);
+  puts("only full-admin CLI results and cached replies use reply policy; room-post ACKs do not passed");
+}
 int main(int argc, char** argv) {
   assert(argc == 2);
   if (!strcmp(argv[1], "authorization")) authorizationCases();
@@ -894,6 +928,7 @@ int main(int argc, char** argv) {
   else if (!strcmp(argv[1], "observed")) observedLoginPath();
   else if (!strcmp(argv[1], "reconnect")) reconnectCursor();
   else if (!strcmp(argv[1], "default-password")) defaultPasswordWarnings();
+  else if (!strcmp(argv[1], "admin-cli-scope")) adminCliReplyScope();
   else assert(false);
 }
 '''
@@ -997,6 +1032,9 @@ class RoomLoginIntegrationTests(unittest.TestCase):
 
     def test_default_password_admin_login_warns_after_the_binary_reply(self):
         self.run_case("default-password", "default password warning follows successful admin login")
+
+    def test_reply_policy_applies_only_to_full_admin_cli_results_and_cached_retries(self):
+        self.run_case("admin-cli-scope", "only full-admin CLI results and cached replies use reply policy")
 
     def test_custom_factory_password_and_bounded_long_factory_password(self):
         for index, factory in enumerate(("factory-admin", "12345678901234567890")):

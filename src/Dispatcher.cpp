@@ -1372,7 +1372,9 @@ Packet* Dispatcher::obtainNewPacket() {
     pkt->radio_bound = false;
     pkt->radio_local = !receive_context_active;
     pkt->tx_radio = RADIO_TX_AUTO;
-    pkt->radio_reply = receive_context_active;
+    // RX context preserves the response's origin, but only authenticated
+    // admin CLI handlers may opt into the independent tx.reply override.
+    pkt->radio_reply = false;
     pkt->radio_reply_force = false;
     pkt->forwarded = false;
 #if defined(WITH_UDP_BRIDGE)

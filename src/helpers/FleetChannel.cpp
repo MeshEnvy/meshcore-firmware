@@ -301,7 +301,6 @@ bool FleetChannel::acknowledge(Mesh& mesh, const char* name, uint32_t sequence,
   const size_t length = count >= int(sizeof(data) - 5) ? sizeof(data) - 6 : size_t(count);
   Packet* packet = mesh.createGroupDatagram(PAYLOAD_TYPE_GRP_TXT, channel_, data, 5 + length);
   if (!packet) return false;
-  packet->radio_reply = true;
   packet->flood_retry_policy = FLOOD_RETRY_POLICY_DENY;
   // Acknowledgements have one tracked physical attempt per profile. A later
   // untracked retry must never trigger a completed radio transition twice.

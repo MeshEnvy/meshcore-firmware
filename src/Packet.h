@@ -68,7 +68,7 @@ public:
   bool radio_bound = false;  // retries retain one profile and never fan out again
   bool radio_local = true;
   uint8_t tx_radio = RADIO_TX_AUTO;  // local policy, never sent over the air
-  bool radio_reply = false;  // locally generated response, never a forwarded packet
+  bool radio_reply = false;  // authenticated admin CLI reply; never serialized
   bool radio_reply_force = false;  // captured reply-only RX-mode override
 #if defined(WITH_UDP_BRIDGE)
   // Volatile origin marker, copied with radio retries but never serialized.

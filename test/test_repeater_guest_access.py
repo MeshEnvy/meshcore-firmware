@@ -493,11 +493,11 @@ static void defaultPasswordWarnings() {
     const auto& login = mesh.sent[0]; const auto& warning = mesh.sent[1];
     assert(login.packet.type == PAYLOAD_TYPE_RESPONSE && login.packet.payload_len == 13);
     assert(login.packet.payload[4] == RESP_SERVER_LOGIN_OK && login.packet.payload[12] == FIRMWARE_VER_LEVEL);
-    assert(login.delay == SERVER_RESPONSE_DELAY);
+    assert(login.delay == SERVER_RESPONSE_DELAY && !login.packet.radio_reply);
     assert(warning.packet.type == PAYLOAD_TYPE_TXT_MSG && warning.packet.payload_len == 25);
     assert(warning.packet.payload[4] == (TXT_TYPE_CLI_DATA << 2));
     assert(!memcmp(warning.packet.payload + 5, "CHANGE YOUR PASSWORD", 20));
-    assert(warning.packet.radio_reply && warning.delay == SERVER_RESPONSE_DELAY + 2000UL);
+    assert(!warning.packet.radio_reply && warning.delay == SERVER_RESPONSE_DELAY + 2000UL);
     assert(!warning.packet.direct && warning.hash_size == 2);
     assert(mesh.path_returns == (flood ? 1U : 0U));
     assert(mesh.client_replies == 0); // Unknown routes use the scoped flood reply boundary.

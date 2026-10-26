@@ -7,7 +7,7 @@ namespace mesh {
 
 // Local outbound choice. AUTO follows the radio2.cross policy; explicit masks
 // choose profiles independently of cross. Mode permissions are enforced
-// separately, including the infrastructure reply-only RX override.
+// separately, including the infrastructure admin CLI reply-only RX override.
 enum RadioTxPolicy : uint8_t {
   RADIO_TX_AUTO = 0,
   RADIO_TX_PRIMARY = 1,

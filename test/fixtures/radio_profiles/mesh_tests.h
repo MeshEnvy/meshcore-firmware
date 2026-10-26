@@ -127,13 +127,15 @@ class DualProfileTestMesh : public RetryCodingRateMesh {
     ++cross_filter_calls;
     return cross_filter_allows;
   }
-  mesh::Packet* replyOn(uint8_t profile, uint32_t generation) {
+  mesh::Packet* replyOn(uint8_t profile, uint32_t generation, bool admin_cli = false) {
     ReceiveProfileScope context(*this, profile, generation);
     auto* packet = obtainNewPacket();
     if (!packet) return nullptr;
-    packet->header = (PAYLOAD_TYPE_RESPONSE << PH_TYPE_SHIFT) | ROUTE_TYPE_DIRECT;
+    packet->header = ((admin_cli ? PAYLOAD_TYPE_TXT_MSG : PAYLOAD_TYPE_RESPONSE)
+        << PH_TYPE_SHIFT) | ROUTE_TYPE_DIRECT;
     packet->setPathHashSizeAndCount(1, 0);
     packet->payload_len = 1; packet->payload[0] = 0x5a;
+    if (admin_cli) packet->radio_reply = true;
     return packet;
   }
 };
@@ -214,13 +216,13 @@ TEST_F(DualProfileTest, OtaAirtimeFollowsParticipatingProfilesInsteadOfScannerVi
   radio.estimated_airtime = 12345;
   EXPECT_EQ(node.getOtaPacketAirtime(), 70u);
   radio.config.reply_tx = mesh::RADIO_TX_BOTH;
-  EXPECT_EQ(node.getOtaPacketAirtime(), 970u);
+  EXPECT_EQ(node.getOtaPacketAirtime(), 70u);
   radio.config.secondary_temporary = false;
   radio.config.primary_temporary = true;
   radio.config.secondary.mode = mesh::RadioProfileMode::Rx;
   EXPECT_EQ(node.getOtaPacketAirtime(), 900u);
   radio.config.reply_force = true;
-  EXPECT_EQ(node.getOtaPacketAirtime(), 970u);
+  EXPECT_EQ(node.getOtaPacketAirtime(), 900u);
   radio.config.secondary.mode = mesh::RadioProfileMode::Off;
   EXPECT_EQ(node.getOtaPacketAirtime(), 900u);
 }
@@ -811,7 +813,45 @@ TEST_F(DualProfileTest, ExplicitSecondaryRetriesStayOnSecondaryWithCrossOff) {
   EXPECT_EQ(40, manager.getFreeCount());
 }
 
-TEST_F(DualProfileTest, InfrastructureReplyChoiceMatrix) {
+TEST_F(DualProfileTest, OrdinaryRepliesFollowCrossingRegardlessOfAdminCliPolicy) {
+  for (auto cross : {mesh::RadioCrossMode::Auto, mesh::RadioCrossMode::On, mesh::RadioCrossMode::Off}) {
+    radio.config.cross = cross;
+    radio.config.secondary_temporary = true;
+    for (auto mode : {mesh::RadioProfileMode::Off, mesh::RadioProfileMode::Rx, mesh::RadioProfileMode::RxTx}) {
+      radio.config.secondary.mode = mode;
+      for (uint8_t policy : {mesh::RADIO_TX_BOTH, mesh::RADIO_TX_SECONDARY, mesh::RADIO_TX_OFF}) {
+        radio.config.reply_tx = policy;
+        radio.config.reply_force = true;
+        for (uint8_t origin : {0, 1}) {
+          for (uint8_t type : {PAYLOAD_TYPE_RESPONSE, PAYLOAD_TYPE_ACK, PAYLOAD_TYPE_PATH,
+                               PAYLOAD_TYPE_GRP_TXT, PAYLOAD_TYPE_OTA}) {
+            auto* packet = node.replyOn(origin, radio.config.generation[origin]);
+            ASSERT_NE(nullptr, packet);
+            ASSERT_FALSE(packet->radio_reply);
+            EXPECT_FALSE(packet->radio_local);
+            packet->header = (type << PH_TYPE_SHIFT) | ROUTE_TYPE_DIRECT;
+            const uint8_t expected = radio.config.transmitMask(origin);
+            EXPECT_EQ(expected, node.getTransmitProfileMask(packet));
+            ASSERT_EQ(expected != 0, node.sendPacket(packet, 0));
+            uint8_t actual = 0;
+            while (manager.getOutboundTotal()) {
+              auto* queued = manager.removeOutboundByIdx(0);
+              actual |= 1U << queued->radio_profile;
+              EXPECT_FALSE(queued->radio_reply);
+              EXPECT_FALSE(queued->radio_reply_force);
+              EXPECT_EQ(mesh::RADIO_TX_AUTO, queued->tx_radio);
+              node.releasePacket(queued);
+            }
+            EXPECT_EQ(expected, actual);
+            EXPECT_EQ(40, manager.getFreeCount());
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST_F(DualProfileTest, AdminCliReplyChoiceMatrix) {
   for (auto cross : {mesh::RadioCrossMode::Auto, mesh::RadioCrossMode::On, mesh::RadioCrossMode::Off}) {
     radio.config.cross = cross;
     for (auto secondary : {mesh::RadioProfileMode::Off, mesh::RadioProfileMode::Rx, mesh::RadioProfileMode::RxTx}) {
@@ -823,7 +863,7 @@ TEST_F(DualProfileTest, InfrastructureReplyChoiceMatrix) {
             if (force && policy!=mesh::RADIO_TX_SECONDARY && policy!=mesh::RADIO_TX_BOTH) continue;
             radio.config.reply_tx=policy; radio.config.reply_force=force;
             for (uint8_t origin : {0,1}) {
-              auto* packet=node.replyOn(origin,radio.config.generation[origin]);
+              auto* packet=node.replyOn(origin,radio.config.generation[origin],true);
               ASSERT_NE(nullptr,packet); ASSERT_TRUE(packet->radio_reply);
               const bool can_second=secondary==mesh::RadioProfileMode::RxTx
                   || (force && secondary==mesh::RadioProfileMode::Rx);
@@ -878,7 +918,7 @@ TEST_F(DualProfileTest, ForcedReplySurvivesDriverRetryOnRxOnlySecondary) {
   radio.config.cross=mesh::RadioCrossMode::Off;
   radio.config.secondary.mode=mesh::RadioProfileMode::Rx;
   radio.config.reply_tx=mesh::RADIO_TX_SECONDARY; radio.config.reply_force=true;
-  auto* packet=node.replyOn(0,radio.config.generation[0]); ASSERT_NE(nullptr,packet);
+  auto* packet=node.replyOn(0,radio.config.generation[0],true); ASSERT_NE(nullptr,packet);
   ASSERT_TRUE(node.sendPacket(packet,0));
   radio.fail_next_send=true;
   for (int i=0;i<12;++i) { radio.complete=true; tick(1000); }
@@ -892,7 +932,7 @@ TEST_F(DualProfileTest, BothForcedReplyCopiesKeepSeparateFloodRetries) {
   radio.config.secondary.mode=mesh::RadioProfileMode::Rx;
   radio.config.secondary_temporary=true;
   radio.config.reply_tx=mesh::RADIO_TX_BOTH; radio.config.reply_force=true;
-  auto* packet=node.replyOn(1,radio.config.generation[1]); ASSERT_NE(nullptr,packet);
+  auto* packet=node.replyOn(1,radio.config.generation[1],true); ASSERT_NE(nullptr,packet);
   packet->header=PAYLOAD_TYPE_GRP_TXT << PH_TYPE_SHIFT;
   ASSERT_TRUE(node.sendFlood(packet));
   for (int i=0;i<50;++i) { radio.complete=true; tick(1000); }
@@ -906,18 +946,18 @@ TEST_F(DualProfileTest, ForcedReplyRespectsCrossFiltersAndProfileExpiry) {
   radio.config.reply_tx=mesh::RADIO_TX_BOTH; radio.config.reply_force=true;
   radio.config.secondary.mode=mesh::RadioProfileMode::Rx;
   node.cross_filter_allows=false;
-  auto* reply=node.replyOn(0,radio.config.generation[0]); ASSERT_NE(nullptr,reply);
+  auto* reply=node.replyOn(0,radio.config.generation[0],true); ASSERT_NE(nullptr,reply);
   ASSERT_TRUE(node.sendPacket(reply,0)); ASSERT_EQ(1,manager.getOutboundTotal());
   EXPECT_EQ(0,manager.getOutboundByIdx(0)->radio_profile);
   node.releasePacket(manager.removeOutboundByIdx(0));
   node.cross_filter_allows=true;
-  reply=node.replyOn(1,radio.config.generation[1]); ASSERT_NE(nullptr,reply);
+  reply=node.replyOn(1,radio.config.generation[1],true); ASSERT_NE(nullptr,reply);
   ASSERT_TRUE(node.sendPacket(reply,0)); ASSERT_EQ(2,manager.getOutboundTotal());
   radio.config.setSecondary({},false);
   for (int i=0;i<6;++i) { radio.complete=true; tick(); }
   EXPECT_TRUE(radio.transmissions.empty()); // both originated in an expired session
   EXPECT_EQ(40,manager.getFreeCount());
-  auto* stale=node.replyOn(1,radio.config.generation[1]-1); ASSERT_NE(nullptr,stale);
+  auto* stale=node.replyOn(1,radio.config.generation[1]-1,true); ASSERT_NE(nullptr,stale);
   EXPECT_FALSE(node.sendPacket(stale,0));
   EXPECT_EQ(40,manager.getFreeCount());
 }
@@ -943,7 +983,7 @@ TEST_F(DualProfileTest, ReplyAirtimeIncludesForcedRxProfileBeforeAdmission) {
   radio.distinguish_airtime=true;
   radio.config.secondary.mode=mesh::RadioProfileMode::Rx;
   radio.config.reply_tx=mesh::RADIO_TX_BOTH;
-  auto* reply=node.replyOn(0,radio.config.generation[0]); ASSERT_NE(nullptr,reply);
+  auto* reply=node.replyOn(0,radio.config.generation[0],true); ASSERT_NE(nullptr,reply);
   EXPECT_EQ(900U,node.getTransmitAirtime(reply));
   radio.config.reply_force=true;
   EXPECT_EQ(970U,node.getTransmitAirtime(reply));
@@ -1048,11 +1088,10 @@ TEST_F(DualProfileTest, AsyncOtaResponseAdmissionMaskMatchesTheActualQueuedCopie
                            mesh::ota::OTA_HAVE,mesh::ota::OTA_QUERY}) {
         auto* p=node.obtainNewPacket(); ASSERT_NE(nullptr,p);
         *p=makeFloodPacket(PAYLOAD_TYPE_OTA); p->payload[0]=type;
-        p->radio_reply=mesh::ota::ota_is_response_message(type);
+        EXPECT_FALSE(p->radio_reply);
         ASSERT_TRUE(p->radio_local); // no RX call stack
         const uint8_t mask=node.getTransmitProfileMask(p);
-        EXPECT_EQ(p->radio_reply ? ((force || mode==mesh::RadioProfileMode::RxTx) ? 3 : 1)
-            : (mode==mesh::RadioProfileMode::RxTx ? 2 : 0),mask);
+        EXPECT_EQ(mode==mesh::RadioProfileMode::RxTx ? 2 : 0,mask);
         ASSERT_EQ(mask!=0,node.sendPacket(p,0));
         uint8_t actual=0;
         while (manager.getOutboundTotal()) {

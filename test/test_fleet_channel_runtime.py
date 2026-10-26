@@ -1154,7 +1154,7 @@ int main(int argc,char** argv){
   assert(mesh.ack_codes[0]==scope.calcTransportCode(mesh.manager.outbound[0]));
   assert(mesh.ack_codes[0]!=packet.transport_codes[0]);
   assert(mesh.ack_delay==1000&&mesh.ack_path_size==2&&last_jitter_max==10000);
-  assert(mesh.manager.outbound[0]->radio_reply&&!mesh.manager.outbound[0]->radio_bound);
+  assert(!mesh.manager.outbound[0]->radio_reply&&!mesh.manager.outbound[0]->radio_bound);
   assert(mesh.manager.outbound[0]->flood_retry_policy==FLOOD_RETRY_POLICY_DENY);
   fleet.receive(&packet,mesh);assert(config(fleet,"get fleet.stats").find("busy=1")!=std::string::npos);
   fleet.complete(mesh.manager.removeOutboundByIdx(0),profiles);assert(fleet.waiting());assert(profiles.commits==0);

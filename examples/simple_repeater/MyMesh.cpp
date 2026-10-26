@@ -700,7 +700,6 @@ void MyMesh::sendDefaultPasswordWarning(ClientInfo* client,
   mesh::Packet* warning = createDatagram(PAYLOAD_TYPE_TXT_MSG, client->id,
                                         client->shared_secret, data, sizeof(data));
   if (warning == NULL) return;
-  warning->radio_reply = true;
   if (mesh::Packet::isValidPathLen(client->out_path_len)) {
     sendClientReply(client, warning, SERVER_RESPONSE_DELAY + 2000UL, path_hash_size);
   } else {
@@ -3200,7 +3199,7 @@ bool MyMesh::sendRemoteCliReply(ClientInfo* client, const uint8_t* secret,
 
   mesh::Packet* packet = createDatagram(PAYLOAD_TYPE_TXT_MSG, client->id, secret,
                                         reply_data, 5 + text_len);
-  if (packet) packet->radio_reply = true;  // also covers delayed GPIO completion
+  if (packet) packet->radio_reply = client->isAdmin();  // includes delayed admin GPIO completion
   // A state-changing reply tracks its first copy on each selected profile.
   // Suppress alternate paths and retries, which could outlive the handoff.
   // Prepare before admission so Dispatcher can register its second copy;
@@ -3246,7 +3245,7 @@ void MyMesh::onUserGpioTimerCompleted(uint8_t pin, uint8_t state,
       }
     }
   }
-  if (client == NULL) return;
+  if (client == NULL || !client->isAdmin()) return;
 
   char reply[64];
   snprintf(reply, sizeof(reply), "> GPIO %u timer complete: %s", pin,

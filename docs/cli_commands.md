@@ -1223,13 +1223,16 @@ set tx.reply auto
 ```
 
 Persistent choices: `auto`, `radio`, `radio2`, `both` (default), and `off`.
-Explicit choices override `radio2.cross` for local replies, including CLI,
-ACKs, telemetry, room subscription posts, and served LoRa OTA responses.
-Append `force` to `both` or `radio2` to permit reply TX on an active RX-only
+Explicit choices override `radio2.cross` only for CLI replies to authenticated
+admins, including cached results and delayed admin GPIO command completion.
+Login replies, ACKs, app telemetry/status responses, returned paths, room posts,
+LoRa OTA, signed fleet acknowledgements, and non-admin CLI replies follow normal
+crossing rules. Region/filter-manager roles do not get the admin override.
+Append `force` to `both` or `radio2` to permit admin CLI reply TX on an active RX-only
 second profile. It never enables a disabled profile or ordinary forwarding.
-Omitting `force` removes that override. `off` suppresses remote replies too.
+Omitting `force` removes that override. `off` suppresses admin CLI replies only.
 
-See [reply routing and OTA examples](radio_profiles.md#repeater-room-server-and-sensor-replies)
+See [admin CLI reply routing](radio_profiles.md#repeater-room-server-and-sensor-replies)
 for temporary profiles, receive-only exceptions, and queued reply handling.
 
 ## Set Companion display rotation

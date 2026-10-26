@@ -1,4 +1,4 @@
-"""Exercise delayed OTA response classification and infrastructure reply wiring."""
+"""Keep OTA responses separate from the admin CLI reply policy."""
 from pathlib import Path
 import os
 import re
@@ -95,16 +95,16 @@ int main() {
   assert(node.packet.radio_generation==route.generation);
   assert(node.ota_manager.replyRoute().profile==0xFF);
 
-  // Infrastructure reply-both still overrides AUTO origin selection, including
-  // a receive-only secondary when the configured reply policy forces it.
+  // Admin CLI reply-both/force must not change an OTA response's origin or
+  // enable its otherwise forbidden transmit profile.
   node.ota_manager.clearPendingEgress(); node.masks.clear();
   node.radio.config.reply_tx=mesh::RADIO_TX_BOTH;
   node.radio.config.reply_force=true;
-  node.radio.config.secondary.mode=mesh::RadioProfileMode::Rx;
   assert(node.ota_manager.on_message(wire,length,route));
   node.service();
-  assert(node.masks.size()==1 && node.masks[0]==3);
-  node.radio.config.reply_tx=mesh::RADIO_TX_AUTO;
+  assert(node.masks.size()==1 && node.masks[0]==2);
+  assert(!node.packet.radio_reply);
+  node.radio.config.reply_tx=mesh::RADIO_TX_OFF;
   node.radio.config.reply_force=false;
   node.radio.config.secondary.mode=mesh::RadioProfileMode::RxTx;
 
@@ -195,7 +195,7 @@ int main() {
   node.manager.free=40;
   node.service();
   assert(node.masks.size()==1 && node.masks[0]==2);
-  assert(node.packet.radio_reply && !node.packet.radio_local);
+  assert(!node.packet.radio_reply && !node.packet.radio_local);
   assert(node.ota_manager.pendingManifestJobs()==0);
   // Deferred affinity cannot bleed into a later local send.
   const uint8_t data=mesh::ota::OTA_DATA;
@@ -238,7 +238,7 @@ int main() {
             result = subprocess.run([str(binary)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_async_ota_adapter_marks_only_response_types_and_retains_backpressure(self):
+    def test_async_ota_adapter_excludes_admin_policy_and_retains_backpressure(self):
         source = (ROOT / 'src/Mesh.cpp').read_text()
         adapter = method(source, 'bool Mesh::otaSendAdapter(')
         paced = method(source, 'static bool isPacedOtaResponse(')
@@ -293,9 +293,8 @@ int main() {
   mesh::Mesh node;
   for (unsigned type=0;type<256;++type) {
     const uint8_t msg=type;
-    bool reply=type==0x03 || type==0x05 || type==0x07 || type==0x09 || type==0x0b;
     assert(node.otaSendAdapter(&node,&msg,1,true));
-    assert(node.was_reply==reply);
+    assert(!node.was_reply);
   }
   const uint8_t data=mesh::ota::OTA_DATA, proof=mesh::ota::OTA_PROOF;
   const uint8_t manifest=mesh::ota::OTA_MANIFEST, leaves=mesh::ota::OTA_LEAVES;
@@ -331,7 +330,7 @@ int main() {
   assert(!node.otaSendAdapter(&node,&data,1,true));
 
   // Use the actual Packet and deferred-route definitions. A routed reply
-  // retains its origin without binding normal reply fan-out. A negotiation
+  // retains its origin and normal crossing policy. A negotiation
   // fallback is not a reply and must stay bound to its original radio.
   node.admit=true; node.mask=1;
   mesh::ota::Context context;
@@ -342,7 +341,7 @@ int main() {
     for (uint8_t type : {mesh::ota::OTA_QUERY,mesh::ota::OTA_DATA}) {
       assert(node.otaSendAdapter(&node,&type,1,false));
       const bool reply=type==mesh::ota::OTA_DATA;
-      assert(node.packet.radio_reply==reply && !node.packet.radio_local);
+      assert(!node.packet.radio_reply && !node.packet.radio_local);
       assert(node.packet.radio_profile==profile && node.packet.radio_origin==profile);
       assert(node.packet.radio_generation==1234+profile);
       assert(node.packet.radio_origin_generation==1234+profile);
@@ -394,18 +393,6 @@ int main() {
                         self.assertIn('Assertion', checked.stderr)
                         self.assertIn(failure, checked.stderr)
 
-    def test_all_infrastructure_roles_enable_replies_and_mark_delayed_completions(self):
-        common = (ROOT / 'src/helpers/CommonCLI.cpp').read_text()
-        self.assertIn('_radio_profiles.begin(fs, _callbacks->getProfileRadio(), _rtc, true);', common)
-        for path in ['examples/simple_repeater/MyMesh.cpp',
-                     'examples/simple_room_server/MyMesh.cpp',
-                     'examples/simple_sensor/SensorMesh.cpp']:
-            with self.subTest(path=path):
-                text = (ROOT / path).read_text()
-                self.assertIn('_cli.loadPrefs(', text)
-                self.assertIn('packet->radio_reply = true;', text)
-        room = (ROOT / 'examples/simple_room_server/MyMesh.cpp').read_text()
-        self.assertIn('reply->radio_reply = true;  // asynchronous response to the room subscription', room)
 
 
 if __name__ == '__main__':

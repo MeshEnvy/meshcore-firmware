@@ -681,7 +681,7 @@ void SensorMesh::onUserGpioTimerCompleted(uint8_t pin, uint8_t state,
       }
     }
   }
-  if (client == NULL) return;
+  if (client == NULL || !client->isAdmin()) return;
 
   uint8_t data[72];
   uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
@@ -697,7 +697,7 @@ void SensorMesh::onUserGpioTimerCompleted(uint8_t pin, uint8_t state,
                                         client->shared_secret, data,
                                         5 + (size_t)text_len);
   if (!packet) return;
-  packet->radio_reply = true;  // delayed GPIO command completion
+  packet->radio_reply = true;  // delayed admin GPIO command completion
   if (!mesh::Packet::isValidPathLen(client->out_path_len)) {
     sendFlood(packet, CLI_REPLY_DELAY_MILLIS, path_hash_size);
   } else {
@@ -1079,10 +1079,10 @@ void SensorMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_i
           temp[4] = (TXT_TYPE_CLI_DATA << 2);
 
           auto reply = createDatagram(PAYLOAD_TYPE_TXT_MSG, from->id, secret, temp, 5 + text_len);
+          if (reply) reply->radio_reply = true;  // authenticated admin CLI result
           const bool arms_morse = _cli.morseReply().generation() != morse_mutation_before;
           if (arms_morse) {
             _cli.morseReply().prepareReply(reply);
-            if (reply) reply->radio_reply = true;
           }
           bool queued = false;
           if (reply) {

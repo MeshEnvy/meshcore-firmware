@@ -141,7 +141,7 @@ struct MyMesh {
   mesh::Packet* obtainNewPacket() { return alternate_available ? &alternate_packet : nullptr; }
   void releasePacket(mesh::Packet* out) { assert(out == &alternate_packet); ++releases; }
   bool queue(mesh::Packet* out) {
-    assert(out->radio_reply);
+    assert(!out->radio_reply);  // room posts do not get the admin CLI override
     if (!queue_available) return false;
     Sent entry;
     memcpy(&entry.timestamp, out->payload, 4);
