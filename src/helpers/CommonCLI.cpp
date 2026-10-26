@@ -1,4 +1,7 @@
 #include <helpers/RegulatorSettings.h>
+#if defined(USE_LR2021)
+#include <helpers/radiolib/LR2021CalibrationSettings.h>
+#endif
 #include <helpers/sensors/SolarXiaoPower.h>
 #include <helpers/LedSettings.h>
 #include <Arduino.h>
@@ -3556,6 +3559,13 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       }
       return;
     }
+#if defined(USE_LR2021)
+    if (mesh::lr2021::handleLR2021CalibrationCommand(command, reply, 160, radio_driver)) return;
+    if (strcmp(command, "get radio.apply") == 0) {
+      radio_driver.formatApplyStatus(reply, 160);
+      return;
+    }
+#endif
 #if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED && defined(DISPLAY_CLASS)
     if (mesh::ui::handleHeltecV4DisplayCommand(command, reply, 160, display)) return;
 #endif

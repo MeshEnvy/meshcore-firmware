@@ -418,9 +418,29 @@ uint8_t RadioLibWrapper::beginReconfigure() {
   mesh::radiotrace::trace().context(_radio, _active_profile, _profile_generation);
 #endif
 #if MESH_ENABLE_TX_BEACONS
-  if (_beacon_owned && !_beacon_restoring) return 2;
+  if (_beacon_owned && !_beacon_restoring) {
+#if defined(USE_LR2021)
+    noteReconfigureAdmission("beacon-owned", 0);
 #endif
-  if (_cw_active) return 2;
+    return 2;
+  }
+#endif
+  if (_cw_active) {
+#if defined(USE_LR2021)
+    noteReconfigureAdmission("carrier-owned", 0);
+#endif
+    return 2;
+  }
+#if defined(USE_LR2021) && (MESH_ENABLE_CARRIER_TOOLS || MESH_ENABLE_MORSE_RX)
+  if (_morse_owned
+#if MESH_ENABLE_MORSE_RX
+      || _morse_rx_owned
+#endif
+     ) {
+    noteReconfigureAdmission("morse-owned", 0);
+    return 2;
+  }
+#endif
   const uint8_t base_state = state;
   if (_profile_repair_required) {
     // The last transaction failed after changing the chip. Its old FIFO and
@@ -431,13 +451,16 @@ uint8_t RadioLibWrapper::beginReconfigure() {
 #if MESH_HIL_PROFILE_TIMING
     profile_timing.admissionComplete();
 #endif
-    if (
+    const int16_t standby_status =
 #if MESH_HIL_PROFILE_TIMING
-        profile_timing.standbyResult(_radio->standby())
+        profile_timing.standbyResult(_radio->standby());
 #else
-        _radio->standby()
+        _radio->standby();
 #endif
-        != RADIOLIB_ERR_NONE) {
+    if (standby_status != RADIOLIB_ERR_NONE) {
+#if defined(USE_LR2021)
+      noteReconfigureAdmission("standby", standby_status);
+#endif
       state = STATE_IDLE;
       return 3;
     }
@@ -449,23 +472,39 @@ uint8_t RadioLibWrapper::beginReconfigure() {
   // On SX126x/LR11xx duty-cycle RX, BUSY may remain asserted during the sleep
   // side of the cycle. Do not issue an IRQ/preamble query over SPI then; due
   // scheduled work will retry as soon as the next safe listen window opens.
+#if defined(USE_LR2021)
+  if (hasPendingRadioInterrupt()) { noteReconfigureAdmission("pending-irq", 0); return 2; }
+  if (base_state == STATE_TX_WAIT) { noteReconfigureAdmission("transmitting", 0); return 2; }
+  if (isChipBusy()) { noteReconfigureAdmission("chip-busy", 0); return 2; }
+  if (isReceivingPacket() && !_primary_receive_preempt) {
+    noteReconfigureAdmission("receiving", 0);
+    return 2;
+  }
+  // A completion can race the activity probe. Stop only unfinished RX; never
+  // claim/clear an old-profile FIFO in order to apply a command faster.
+  if (hasPendingRadioInterrupt()) { noteReconfigureAdmission("pending-irq", 0); return 2; }
+#else
   if (hasPendingRadioInterrupt() || base_state == STATE_TX_WAIT
       || isChipBusy() || isReceivingPacket()) {
     return 2;
   }
+#endif
 
 #if MESH_HIL_PROFILE_TIMING
   profile_timing.admissionComplete();
 #endif
   const bool resume_rx = base_state == STATE_RX;
   if (_rx_ps_armed || resume_rx) {
-    if (
+    const int16_t standby_status =
 #if MESH_HIL_PROFILE_TIMING
-        profile_timing.standbyResult(_radio->standby())
+        profile_timing.standbyResult(_radio->standby());
 #else
-        _radio->standby()
+        _radio->standby();
 #endif
-        != RADIOLIB_ERR_NONE) {
+    if (standby_status != RADIOLIB_ERR_NONE) {
+#if defined(USE_LR2021)
+      noteReconfigureAdmission("standby", standby_status);
+#endif
       state = STATE_IDLE;
       _profile_refresh_required = _profile_repair_required = true;
       return 3;
@@ -475,8 +514,16 @@ uint8_t RadioLibWrapper::beginReconfigure() {
   // An RX completion during standby still owns its FIFO and old profile.
   // Defer reconfiguration until recvRaw consumes it, rather than rearming and
   // clearing that completion as part of endReconfigure().
-  if (hasPendingRadioInterrupt()) return 2;
+  if (hasPendingRadioInterrupt()) {
+#if defined(USE_LR2021)
+    noteReconfigureAdmission("pending-irq", 0);
+#endif
+    return 2;
+  }
   state = STATE_IDLE;
+#if defined(USE_LR2021)
+  noteReconfigureAdmission("admitted", 0);
+#endif
   return resume_rx;
 }
 
@@ -1411,7 +1458,22 @@ mesh::RadioParamApplyResult RadioLibWrapper::trySetPrimaryParams(const mesh::Rad
   _profiles.primary.preamble = p.preamble;
   _profiles.primary.protocol = p.protocol;
   _profiles.primary_temporary = temporary;
+#if defined(USE_LR2021)
+  const bool previous_preempt = _primary_receive_preempt;
+  if (supportsBoundedPrimaryReconfigure()) {
+    const auto& current = _profiles.params(_active_profile);
+    const uint16_t requested_preamble = preview.preamble(0,
+        rxPowerSavingPreambleForParams(p.sf, p.bw));
+    _primary_receive_preempt = _primary_apply_wait.mayAbandonReceive(
+        millis(), p, temporary, current, currentPreambleLength(),
+        requested_preamble, MAX_TRANS_UNIT);
+  }
+#endif
   const auto result = trySetParams(p.freq, p.bw, p.sf, p.cr, timings);
+#if defined(USE_LR2021)
+  _primary_receive_preempt = previous_preempt;
+  if (result == mesh::RadioParamApplyResult::APPLIED) _primary_apply_wait.clear();
+#endif
   if (result != mesh::RadioParamApplyResult::APPLIED) {
     _profiles.primary = previous;
     _profiles.primary_temporary = was_temp;

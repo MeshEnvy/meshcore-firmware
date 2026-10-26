@@ -1,4 +1,7 @@
 #include <helpers/RegulatorSettings.h>
+#if defined(USE_LR2021)
+#include <helpers/radiolib/LR2021CalibrationSettings.h>
+#endif
 #include <helpers/LedSettings.h>
 #include <Arduino.h>   // needed for PlatformIO
 #include <helpers/ui/StartupScreen.h>
@@ -3690,6 +3693,9 @@ void setup() {
     MESH_DEBUG_PRINTLN("Regulator selection could not be applied");
   }
   mesh::RadioProfileCLI::configureBootTuning(regulator_prefs_fs, radio_driver);
+#if defined(USE_LR2021)
+  mesh::lr2021::loadLR2021CalibrationSettings(regulator_prefs_fs, radio_driver);
+#endif
 
 
 #ifdef DISPLAY_CLASS
@@ -4291,6 +4297,9 @@ void loop() {
   ble_mota_source_control.loop();
 #endif
   const bool morse_timing = mesh::morseTimingActive(&radio_driver);
+#if defined(USE_LR2021)
+  if (!morse_timing) mesh::lr2021::loopLR2021CalibrationSettings(radio_driver);
+#endif
   if (!morse_timing) sensors.loop();
 #if defined(WIO_E5_MINI_HEADLESS_COMPANION_UI) && defined(PIN_USER_BTN)
   serviceWioE5HeadlessControls();

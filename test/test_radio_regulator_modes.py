@@ -81,6 +81,7 @@ class Custom:public @CHIP@ {
   RfSwitch _morse_rf_switch;
 public:
   int restoreRfSwitchTable() { return 0; }
+  int restoreXoscTrim() { return 0; }
   @INIT@
   @MORSE@
   int init() { return @INIT_CALL@; }

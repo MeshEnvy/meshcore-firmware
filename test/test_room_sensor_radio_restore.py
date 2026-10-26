@@ -49,6 +49,8 @@ struct Driver {
   bool _rx_ps_armed = false, _cw_active = false;
   bool _profile_repair_required = false, _profile_refresh_required = false;
   bool _rx_hold_continuous = false;
+  bool _primary_receive_preempt = false;
+  void noteReconfigureAdmission(const char*, int16_t) {}
   bool _dbm_valid = true, _dbm_applied = true, _rx_boosted_gain_valid = false;
   bool _rx_boosted_gain_applied = false;
   int8_t _cur_dbm = 7;

@@ -128,6 +128,7 @@ struct LR1121Probe : LR1121 {
   @LR1121@
 };
 struct LR2021Probe : LR2021 {
+  int16_t restoreXoscTrim() { return 0; }
   @LR2021_REGULATOR@
   uint8_t gainModeLf=1,gainModeHf=3;
   uint32_t _rf_switch_pins[Module::RFSWITCH_MAX_PINS]={0x80,0x81,RADIOLIB_NC};

@@ -1,0 +1,88 @@
+#pragma once
+
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+namespace mesh { namespace lr2021 {
+
+constexpr uint8_t XoscTrimMaximum = 47;
+
+struct XoscTrimSelection {
+  bool enabled = false;
+  uint8_t a = 0;
+  uint8_t b = 0;
+};
+
+inline bool validXoscTrim(uint8_t a, uint8_t b) {
+  return a <= XoscTrimMaximum && b <= XoscTrimMaximum;
+}
+
+// GET_LORA_PACKET_STATUS returns a big-endian signed 24-bit value in Hz.
+inline int32_t decodeFrequencyErrorHz(const uint8_t* bytes) {
+  const uint32_t raw = (uint32_t(bytes[0]) << 16) | (uint32_t(bytes[1]) << 8) | bytes[2];
+  return (raw & 0x800000U) ? int32_t(raw) - 0x1000000L : int32_t(raw);
+}
+
+inline bool sameXoscTrim(const XoscTrimSelection& a, const XoscTrimSelection& b) {
+  return a.enabled == b.enabled && (!a.enabled || (a.a == b.a && a.b == b.b));
+}
+
+// Parse decimal capacitor codes, not a guessed frequency correction in Hz.
+inline bool parseXoscTrim(const char* value, XoscTrimSelection& selection) {
+  if (!value) return false;
+  if (!strcmp(value, "default")) {
+    selection = XoscTrimSelection{};
+    return true;
+  }
+  const char* cursor = value;
+  unsigned pair[2] = {};
+  for (unsigned field = 0; field < 2; ++field) {
+    if (*cursor < '0' || *cursor > '9') return false;
+    do {
+      pair[field] = pair[field] * 10 + unsigned(*cursor++ - '0');
+      if (pair[field] > XoscTrimMaximum) return false;
+    } while (*cursor >= '0' && *cursor <= '9');
+    if (field == 0 && *cursor == 0) {
+      pair[1] = pair[0];
+      break;
+    }
+    if (field == 0) {
+      if (*cursor++ != ',') return false;
+    } else if (*cursor != 0) return false;
+  }
+  selection.enabled = true;
+  selection.a = static_cast<uint8_t>(pair[0]);
+  selection.b = static_cast<uint8_t>(pair[1]);
+  return true;
+}
+
+constexpr size_t XoscTrimRecordSize = 8;
+
+inline void encodeXoscTrim(const XoscTrimSelection& selection,
+                          uint8_t (&record)[XoscTrimRecordSize]) {
+  record[0] = 'X'; record[1] = 'T'; record[2] = 1;
+  record[3] = selection.enabled ? 1 : 0;
+  record[4] = selection.enabled ? selection.a : 0;
+  record[5] = selection.enabled ? selection.b : 0;
+  record[6] = 0;
+  record[7] = 0;
+  for (size_t i = 0; i < XoscTrimRecordSize - 1; ++i) record[7] ^= record[i];
+}
+
+inline bool decodeXoscTrim(const uint8_t* record, size_t length,
+                          XoscTrimSelection& selection) {
+  if (!record || length != XoscTrimRecordSize || record[3] > 1
+      || !validXoscTrim(record[4], record[5])) return false;
+  XoscTrimSelection candidate;
+  candidate.enabled = record[3] != 0;
+  candidate.a = record[4];
+  candidate.b = record[5];
+  uint8_t expected[XoscTrimRecordSize];
+  encodeXoscTrim(candidate, expected);
+  if (memcmp(record, expected, length)) return false;
+  selection = candidate;
+  return true;
+}
+
+}}  // namespace mesh::lr2021

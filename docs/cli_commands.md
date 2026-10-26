@@ -2117,11 +2117,62 @@ is free and its reply has drained. No reboot is needed. This ends pending or
 active TempRadio sessions. Companion LoRa CLI applies after
 its exact reply copies drain; an active TempRadio lease rejects the change.
 
+On LR2021 radios, repeated unfinished preamble/header activity cannot block an
+accepted primary or TempRadio change indefinitely. The driver allows one maximum
+packet airtime plus a margin, capped at 30 seconds, before stopping an unfinished
+reception at the next apply attempt. Completed packets, active transmission,
+chip BUSY and exclusive radio tools retain priority. Normal radio2 scanning and
+CAD do not use this exception.
+
+If an LR2021 change remains pending, `get radio.apply` reports its admission or
+failure stage and native error code. Its frequency field is the driver's last
+accepted setting, not a measurement of the transmitted carrier.
+
 **Connections:** USB, browser/TCP/Ethernet CLI, Companion binary command
 `0x42` (USB/BLE/TCP), and authorized LoRa CLI. `set freq` saves the frequency;
 bandwidth, spreading factor, and coding rate stay as configured. Infrastructure
 roles also clamp transmit power to the board's limit for that frequency. Like
 `set radio`, it requires permission to configure the destination node.
+
+---
+
+#### LR2021 frequency measurement and crystal calibration
+
+Available on LR2021 builds, including Meshnology W12:
+
+```text
+get radio.freqerror
+get radio.xtrim
+set radio.xtrim <0-47>[,<0-47>]
+set radio.xtrim default
+```
+
+`get radio.freqerror` reports the last successfully received LoRa packet's
+frequency offset in Hz, its configured frequency and sample age. It reports
+`unavailable` before a valid measurement. Failed reads and CRC errors keep the
+previous sample and its age. This is the difference between two radios; it does
+not establish which radio needs calibration.
+
+`radio.xtrim` adjusts the LR2021 crystal's two load-capacitor codes. A single
+number sets both codes; two numbers set XTA and XTB separately. Lower codes
+generally raise frequency; each code is a capacitor step, not a fixed Hz offset.
+Use a known reference to choose values. TCXO boards reject this setting.
+
+The default leaves the chip's original trim unchanged; no shared calibration
+value is imposed on boards. An explicit selection is saved first and waits two
+seconds so its acknowledgement can leave with the previous calibration. It then
+applies without a reboot when the radio is free, and is restored after resets
+and temporary modem changes. A busy radio retries automatically for 30 seconds
+after that handoff, including one final admission attempt. If protected radio
+work still prevents the change, the
+request fails and restores the previous saved selection; `get radio.xtrim`
+shows it. A reported radio recovery failure still needs diagnosis.
+`set radio.xtrim default` removes the override and resets/reinitializes the radio
+to restore its original trim. Node identity and other settings remain saved.
+
+These controls are available through local CLI and authorized LoRa CLI. They do
+not change the configured channel frequency shown by `get radio` or `get freq`.
+The [Semtech LR20xx driver documents the capacitor range and step size](https://github.com/Lora-net/usp/blob/main/smtc_rac_lib/radio_drivers/lr20xx_driver/inc/lr20xx_system.h).
 
 ---
 

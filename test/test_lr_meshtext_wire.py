@@ -25,10 +25,17 @@ COMMON = r'''
 #include <initializer_list>
 #include <RadioProfiles.h>
 #include <helpers/radiolib/LR1110ProfileSwitchState.h>
+#include <helpers/radiolib/LR2021ApplyStatus.h>
 #define MESH_ENABLE_TX_BEACONS 1
 #define MESH_ENABLE_MESHTEXT_WIRE 1
 #define RADIOLIB_ERR_NONE 0
 #define RADIOLIB_LR2021_LORA_SYNC_WORD_PRIVATE 0x12
+struct ApplyRecorder {
+  mesh::lr2021::ApplyStatus _apply_status;
+  int16_t recordApply(mesh::lr2021::ApplyStatus::Stage stage, int16_t code) {
+    return _apply_status.record(stage, code);
+  }
+};
 struct Wire {
   unsigned calls = 0, fail = 0;
   uint8_t sync = 0x12;
@@ -74,7 +81,7 @@ struct Custom@FAMILY@ : @FAMILY@ {
   bool _profilePacketDirty = true;
   @PROTOCOL@
 };
-struct Wrapper {
+struct Wrapper : ApplyRecorder {
   Custom@FAMILY@ chip;
   Custom@FAMILY@* _radio = &chip;
   @SUPPORT@
@@ -138,6 +145,7 @@ int main() {
 #define USE_LR2021 1
 #define LORA_BW 125
 #define RADIOLIB_ERR_UNKNOWN -1
+#define RADIOLIB_ERR_INVALID_SIDE_DETECT -1000
 #define RADIOLIB_CHANNEL_FREE -2
 #define MESH_DEBUG_PRINTLN(...) ((void)0)
 #include <helpers/radiolib/LR2021SideDetectorConfig.h>
@@ -176,7 +184,7 @@ struct Board {
   unsigned watchdog_services = 0;
   void serviceWatchdog() { ++watchdog_services; }
 };
-struct Wrapper : RadioLibWrapper {
+struct Wrapper : RadioLibWrapper, ApplyRecorder {
   CustomLR2021 chip;
   CustomLR2021* _radio = &chip;
   Board board;

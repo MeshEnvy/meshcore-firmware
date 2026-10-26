@@ -4,7 +4,9 @@
 #include "RadioRegulatorState.h"
 #include "MeshCore.h"
 #include "LR2021Band.h"
+#include "LR2021CalibrationPolicy.h"
 #include "../MorseRx.h"
+#include <stdio.h>
 
 #ifndef LR2021_TX_BUSY_TIMEOUT_MS
 #define LR2021_TX_BUSY_TIMEOUT_MS 1000UL
@@ -34,6 +36,11 @@ class CustomLR2021 : public LR2021 {
   uint32_t _activityAt = 0;
   bool _headerSeen = false;
   bool _rx_boosted = false;
+  mesh::lr2021::XoscTrimSelection _xosc_trim;
+  int32_t _last_frequency_error_hz = 0;
+  float _last_frequency_error_mhz = 0;
+  uint32_t _last_frequency_error_at = 0;
+  bool _last_frequency_error_valid = false;
   uint32_t _rf_switch_pins[Module::RFSWITCH_MAX_PINS] = {};
   const Module::RfSwitchMode_t* _rf_switch_table = nullptr;
 
@@ -146,6 +153,78 @@ class CustomLR2021 : public LR2021 {
     bool configureBootRegulator(mesh::power::RegulatorMode mode) { return _regulator.configureBoot(mode); }
     mesh::power::RegulatorMode activeRegulatorMode() const { return _regulator.activeMode(); }
 
+    bool supportsXoscTrim() const {
+    #ifdef LR2021_TCXO_VOLTAGE
+      return LR2021_TCXO_VOLTAGE <= 0.0f;
+    #else
+      // std_init() otherwise selects the legacy 1.6 V TCXO default.
+      return false;
+    #endif
+    }
+
+    bool configureBootXoscTrim(bool enabled, uint8_t a, uint8_t b) {
+      if (!supportsXoscTrim() || (enabled && !mesh::lr2021::validXoscTrim(a, b))) return false;
+      _xosc_trim.enabled = enabled;
+      _xosc_trim.a = enabled ? a : 0;
+      _xosc_trim.b = enabled ? b : 0;
+      return true;
+    }
+
+    bool getXoscTrim(uint8_t& a, uint8_t& b) const {
+      if (!_xosc_trim.enabled) return false;
+      a = _xosc_trim.a;
+      b = _xosc_trim.b;
+      return true;
+    }
+
+    // Selection only. The wrapper restores native defaults through a real
+    // reset before claiming that clearing an override changed the hardware.
+    void clearXoscTrim() { _xosc_trim = mesh::lr2021::XoscTrimSelection{}; }
+
+    int16_t applyXoscTrim(uint8_t a, uint8_t b) {
+      if (!supportsXoscTrim()) return RADIOLIB_ERR_UNSUPPORTED;
+      if (!mesh::lr2021::validXoscTrim(a, b)) return RADIOLIB_ERR_UNKNOWN;
+      // The new capacitor codes take effect when XOSC restarts. Stop it first;
+      // beginReconfigure() owns packet/IRQ safety and the subsequent RX restart.
+      int16_t status = LR2021::standby(RADIOLIB_LR2021_STANDBY_RC);
+      if (status == RADIOLIB_ERR_NONE) {
+        uint8_t bytes[] = {a, b};
+        // The third command byte is optional. Omitting it preserves the
+        // board's additional oscillator start delay (datasheet 6.11.4).
+        status = SPIcommand(RADIOLIB_LR2021_CMD_SET_XOSC_CP_TRIM, true, bytes, sizeof(bytes));
+      }
+      if (status == RADIOLIB_ERR_NONE) configureBootXoscTrim(true, a, b);
+      return status;
+    }
+
+    int16_t restoreXoscTrim() {
+      return _xosc_trim.enabled ? applyXoscTrim(_xosc_trim.a, _xosc_trim.b) : RADIOLIB_ERR_NONE;
+    }
+
+    int16_t readPacketFrequencyErrorHz(int32_t& value) {
+      uint8_t modem = RADIOLIB_LR2021_PACKET_TYPE_NONE;
+      int16_t status = getPacketType(&modem);
+      if (status != RADIOLIB_ERR_NONE) return status;
+      if (modem != RADIOLIB_LR2021_PACKET_TYPE_LORA) return RADIOLIB_ERR_UNSUPPORTED;
+      // Datasheet 2.2 extends the earlier six-byte status with signed Hz.
+      // Read before FIFO consumption/CAD/new RX can replace packet metadata.
+      uint8_t bytes[9] = {};
+      status = SPIcommand(RADIOLIB_LR2021_CMD_GET_LORA_PACKET_STATUS, false, bytes, sizeof(bytes));
+      if (status == RADIOLIB_ERR_NONE) value = mesh::lr2021::decodeFrequencyErrorHz(bytes + 6);
+      return status;
+    }
+
+    void formatFrequencyError(char* reply, size_t capacity) const {
+      if (!_last_frequency_error_valid) {
+        snprintf(reply, capacity, "> unavailable; no valid LoRa packet frequency measurement");
+        return;
+      }
+      const uint32_t age_seconds = uint32_t(this->mod->hal->millis() - _last_frequency_error_at) / 1000;
+      snprintf(reply, capacity, "> %+ld Hz; freq=%.6f MHz; age=%lus",
+          static_cast<long>(_last_frequency_error_hz), static_cast<double>(_last_frequency_error_mhz),
+          static_cast<unsigned long>(age_seconds));
+    }
+
 #if LR2021_TX_PREARM_MS > 0
     using LR2021::standby;
     int16_t standby() override {
@@ -184,6 +263,7 @@ class CustomLR2021 : public LR2021 {
       const uint8_t gain = mesh::lr2021::isHighBand(frequency_mhz) ? gainModeHf : gainModeLf;
       int16_t status = LR2021::beginGFSK(frequency_mhz,
           mesh::MorseRx::ReceiverBitRateKbps, 0.6f, 4.8f, 2, 16, tcxoVoltage);
+      if (status == RADIOLIB_ERR_NONE) status = restoreXoscTrim();
       // Native initialization resets to LDO. SIMO is allowed only on verified
       // layouts; an explicit LDO choice on those boards is checked as well.
       if (status == RADIOLIB_ERR_NONE && regulator == mesh::power::RegulatorMode::Dcdc)
@@ -242,6 +322,14 @@ class CustomLR2021 : public LR2021 {
         mesh::usbLoggingPort().println(status);
         _regulator.finishInitialization(status);
         return false;  // fail
+      }
+
+      // No override means no trim command, preserving the native chip default.
+      // Reapply an explicit selection after recovery and temporary Morse mode.
+      status = restoreXoscTrim();
+      if (status != RADIOLIB_ERR_NONE) {
+        _regulator.finishInitialization(status);
+        return false;
       }
 
       // Also reached when restoring LoRa after Morse RX or hard recovery.
@@ -449,7 +537,18 @@ class CustomLR2021 : public LR2021 {
         if (cleared != RADIOLIB_ERR_NONE) return cleared;
         return RADIOLIB_ERR_PACKET_TOO_SHORT;
       }
-      return LR2021::readData(data, len);
+      int32_t frequency_error_hz = 0;
+      const bool measured = readPacketFrequencyErrorHz(frequency_error_hz) == RADIOLIB_ERR_NONE;
+      const float measured_frequency = freqMHz;
+      const int16_t result = LR2021::readData(data, len);
+      if (result == RADIOLIB_ERR_NONE && measured) {
+        _last_frequency_error_hz = frequency_error_hz;
+        _last_frequency_error_mhz = measured_frequency;
+        _last_frequency_error_at = this->mod->hal->millis();
+        _last_frequency_error_valid = true;
+      }
+      // A bad CRC/read leaves the last valid sample and its original age.
+      return result;
     }
 
     void setPreambleMillis(uint32_t preambleMillis) {

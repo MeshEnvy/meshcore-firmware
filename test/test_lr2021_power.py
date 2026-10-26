@@ -129,6 +129,7 @@ class CustomLR2021:public LR2021 {
   @ROUTING@
  public:
   using LR2021::LR2021;
+  int16_t restoreXoscTrim() { return 0; } // No calibration override in this regulator-only fixture.
   @TABLE@
   @INIT@
   @MORSE@

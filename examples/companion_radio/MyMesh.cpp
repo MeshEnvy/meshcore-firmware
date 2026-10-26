@@ -1,4 +1,7 @@
 #include <helpers/RegulatorSettings.h>
+#if defined(USE_LR2021)
+#include <helpers/radiolib/LR2021CalibrationSettings.h>
+#endif
 #if defined(ESP32_PLATFORM)
 #include <helpers/esp32/CpuClockPolicy.h>
 #include <helpers/esp32/PowerTestControls.h>
@@ -4529,6 +4532,13 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
     return true;
   }
 
+#if defined(USE_LR2021)
+  if (mesh::lr2021::handleLR2021CalibrationCommand(command, reply, reply_size, radio_driver)) return true;
+  if (strcmp(command, "get radio.apply") == 0) {
+    radio_driver.formatApplyStatus(reply, reply_size);
+    return true;
+  }
+#endif
 #if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED && defined(DISPLAY_CLASS)
   if (mesh::ui::handleHeltecV4DisplayCommand(command, reply, reply_size, display)) return true;
 #endif

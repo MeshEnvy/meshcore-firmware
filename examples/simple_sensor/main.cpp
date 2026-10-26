@@ -1,4 +1,7 @@
 #include <helpers/RegulatorSettings.h>
+#if defined(USE_LR2021)
+#include <helpers/radiolib/LR2021CalibrationSettings.h>
+#endif
 #include <helpers/LedSettings.h>
 #include "SensorMesh.h"
 #include <math.h>
@@ -180,6 +183,9 @@ void setup() {
     MESH_DEBUG_PRINTLN("Regulator selection could not be applied");
   }
   mesh::RadioProfileCLI::configureBootTuning(regulator_prefs_fs, radio_driver);
+#if defined(USE_LR2021)
+  mesh::lr2021::loadLR2021CalibrationSettings(regulator_prefs_fs, radio_driver);
+#endif
 #ifdef DISPLAY_CLASS
   mesh::ui::loadDisplayPowerSettings(fs, false);
 #if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED
@@ -385,6 +391,9 @@ void loop() {
 
   the_mesh.loop();
   const bool morse_timing = mesh::morseTimingActive(&radio_driver);
+#if defined(USE_LR2021)
+  if (!morse_timing) mesh::lr2021::loopLR2021CalibrationSettings(radio_driver);
+#endif
   if (!morse_timing) sensors.loop();
 #ifdef DISPLAY_CLASS
 #if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED

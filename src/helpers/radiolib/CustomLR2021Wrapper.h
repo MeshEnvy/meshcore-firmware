@@ -2,6 +2,8 @@
 
 #include "CustomLR2021.h"
 #include "LR2021SideDetectorConfig.h"
+#include "LR2021ApplyStatus.h"
+#include "PrimaryRadioApplyWait.h"
 #include "RadioLibWrappers.h"
 
 #ifndef USE_LR2021
@@ -15,6 +17,18 @@
 #endif
 
 class CustomLR2021Wrapper : public RadioLibWrapper {
+  mesh::lr2021::ApplyStatus _apply_status;
+  mesh::PrimaryRadioApplyWait _trim_apply_wait;
+  uint16_t _trim_apply_key = UINT16_MAX;
+
+  int16_t recordApply(mesh::lr2021::ApplyStatus::Stage stage, int16_t code) {
+    if (code != RADIOLIB_ERR_NONE) {
+      MESH_DEBUG_PRINTLN("LR2021 apply %s failed (%d)",
+                        mesh::lr2021::ApplyStatus::name(stage), (int)code);
+    }
+    return _apply_status.record(stage, code);
+  }
+
 public:
   uint8_t regulatorModes() const override { return static_cast<CustomLR2021*>(_radio)->regulatorModes(); }
   mesh::power::RegulatorMode defaultRegulatorMode() const override {
@@ -30,6 +44,132 @@ public:
   CustomLR2021Wrapper(CustomLR2021& radio, mesh::MainBoard& board) : RadioLibWrapper(radio, board) { }
   bool supportsMorseTx() const override { return true; }
   bool supportsMorseRx() const override { return MESH_ENABLE_MORSE_RX && supportsRadioDeepInit(); }
+  void formatApplyStatus(char* reply, size_t capacity) const {
+    snprintf(reply, capacity, "stage=%s code=%d state=%u repair=%u freq=%.6f",
+             mesh::lr2021::ApplyStatus::name(_apply_status.stage),
+             (int)_apply_status.code, (unsigned)state,
+             (unsigned)_profile_repair_required,
+             (double)static_cast<const CustomLR2021*>(_radio)->getFreqMHz());
+  }
+
+  mesh::RadioParamApplyResult trySetParams(float freq, float bw, uint8_t sf, uint8_t cr,
+                                         const uint32_t* timings = nullptr) override {
+    _apply_status.begin();
+    const auto result = RadioLibWrapper::trySetParams(freq, bw, sf, cr, timings);
+    if (result == mesh::RadioParamApplyResult::APPLIED) _apply_status.applied();
+    return result;
+  }
+
+  bool supportsXoscTrim() const {
+    return static_cast<const CustomLR2021*>(_radio)->supportsXoscTrim();
+  }
+  bool configureBootXoscTrim(bool enabled, uint8_t a, uint8_t b) {
+    return static_cast<CustomLR2021*>(_radio)->configureBootXoscTrim(enabled, a, b);
+  }
+  bool getXoscTrim(uint8_t& a, uint8_t& b) const {
+    return static_cast<const CustomLR2021*>(_radio)->getXoscTrim(a, b);
+  }
+  void formatFrequencyError(char* reply, size_t capacity) const {
+    static_cast<const CustomLR2021*>(_radio)->formatFrequencyError(reply, capacity);
+  }
+  void cancelXoscTrimApply() {
+    _trim_apply_wait.clear();
+    _trim_apply_key = UINT16_MAX;
+  }
+
+  mesh::RadioParamApplyResult trySetXoscTrim(bool enabled, uint8_t a, uint8_t b) {
+    using Result = mesh::RadioParamApplyResult;
+    using Stage = mesh::lr2021::ApplyStatus::Stage;
+    if (!supportsXoscTrim() || (enabled && !mesh::lr2021::validXoscTrim(a, b))) {
+      cancelXoscTrimApply();
+      return Result::FAILED;
+    }
+    auto* radio = static_cast<CustomLR2021*>(_radio);
+    uint8_t old_a = 0, old_b = 0;
+    const bool was_enabled = radio->getXoscTrim(old_a, old_b);
+    if (enabled == was_enabled && (!enabled || (a == old_a && b == old_b))
+        && !_profile_repair_required) {
+      cancelXoscTrimApply();
+      return Result::APPLIED;
+    }
+
+    const uint16_t key = enabled ? 0x1000U | (uint16_t(a) << 6) | b : 0;
+    if (_trim_apply_key != key) {
+      cancelXoscTrimApply();
+      _trim_apply_key = key;
+    }
+
+    _apply_status.begin();
+#if MESH_ENABLE_CARRIER_TOOLS
+    if (_morse_owned) {
+      noteReconfigureAdmission("morse-owned", 0);
+      return Result::BUSY;
+    }
+#endif
+#if MESH_ENABLE_MORSE_RX
+    if (_morse_rx_owned) {
+      noteReconfigureAdmission("morse-owned", 0);
+      return Result::BUSY;
+    }
+#endif
+    const bool previous_preempt = _primary_receive_preempt;
+    const auto& current = _profiles.params(_active_profile);
+    _primary_receive_preempt = _trim_apply_wait.mayAbandonReceive(
+        millis(), _profiles.primary, false, current, currentPreambleLength(),
+        profilePreamble(0), MAX_TRANS_UNIT);
+    const uint8_t resume = beginReconfigure();
+    _primary_receive_preempt = previous_preempt;
+    if (resume > 1) {
+      if (resume != 2) cancelXoscTrimApply();
+      return resume == 2 ? Result::BUSY : Result::FAILED;
+    }
+
+    bool restored = false;
+    if (!enabled) {
+      // No register read exposes the factory trim. A real reset is required
+      // to restore that default rather than guessing a capacitor code.
+      radio->clearXoscTrim();
+      restored = restoreAfterDeepInit();
+      if (!restored) recordApply(Stage::Restore, RADIOLIB_ERR_UNKNOWN);
+    } else if (recordApply(Stage::Trim, radio->applyXoscTrim(a, b)) == RADIOLIB_ERR_NONE) {
+      restored = !_params_valid || applyParams(_cur_freq, _cur_bw, _cur_sf, _cur_cr);
+#if MESH_ENABLE_MESHTEXT_WIRE || MESH_ENABLE_ETHERNET_WIRE
+      restored = restored && applyProtocol(_physical_protocol);
+#endif
+      if (_dbm_valid) {
+        _dbm_applied = restored && applyCachedTxPower(_cur_dbm) == RADIOLIB_ERR_NONE;
+        restored = _dbm_applied && restored;
+      }
+      if (_rx_boosted_gain_valid) {
+        _rx_boosted_gain_applied = restored && applyRxBoostedGainMode(_cur_rx_boosted_gain);
+        restored = _rx_boosted_gain_applied && restored;
+      }
+      if (restored) recalibrateNoiseFloor();
+    }
+
+    if (restored) {
+      _profile_repair_required = false;
+      // This is a live command, so prove that the corrected oscillator can
+      // receive even if an earlier failed RX start left software idle.
+      endReconfigure(true);
+      if (isInRecvMode()) {
+        _apply_status.applied();
+        cancelXoscTrimApply();
+        return Result::APPLIED;
+      }
+    }
+
+    // A failed command must restore both the retained selection and the old
+    // receiver. The deep reset also restores native defaults after a failed
+    // first override and repairs partial register writes.
+    radio->configureBootXoscTrim(was_enabled, old_a, old_b);
+    const bool rollback = restoreAfterDeepInit();
+    if (rollback) endReconfigure(true);
+    if (!rollback || !isInRecvMode())
+      _profile_refresh_required = _profile_repair_required = true;
+    cancelXoscTrimApply();
+    return Result::FAILED;
+  }
 #if MESH_ENABLE_MESHTEXT_WIRE
   bool supportsMeshtext() const override { return true; }
 #endif
@@ -40,12 +180,31 @@ public:
   }
 
 protected:
+  bool supportsBoundedPrimaryReconfigure() const override { return true; }
+
+  void noteReconfigureAdmission(const char* reason, int16_t status) override {
+    using Stage = mesh::lr2021::ApplyStatus::Stage;
+    _apply_status.begin();
+    Stage stage = Stage::Admitted;
+    if (strcmp(reason, "pending-irq") == 0) stage = Stage::Interrupt;
+    else if (strcmp(reason, "transmitting") == 0) stage = Stage::Transmitting;
+    else if (strcmp(reason, "chip-busy") == 0) stage = Stage::Busy;
+    else if (strcmp(reason, "receiving") == 0) stage = Stage::Receiving;
+    else if (strcmp(reason, "beacon-owned") == 0) stage = Stage::BeaconOwned;
+    else if (strcmp(reason, "carrier-owned") == 0) stage = Stage::CarrierOwned;
+    else if (strcmp(reason, "morse-owned") == 0) stage = Stage::MorseOwned;
+    else if (strcmp(reason, "standby") == 0) stage = Stage::Standby;
+    _apply_status.stage = stage;
+    recordApply(stage, status);
+  }
+
 #if MESH_ENABLE_MESHTEXT_WIRE
   bool applyProtocol(mesh::RadioProfileProtocol protocol) override {
     if (protocol != mesh::RadioProfileProtocol::MeshCore
         && protocol != mesh::RadioProfileProtocol::Meshtext) return false;
     const uint8_t sync = protocol == mesh::RadioProfileProtocol::Meshtext ? 0x2b : 0x12;
-    return static_cast<CustomLR2021*>(_radio)->setProfileProtocol(sync) == RADIOLIB_ERR_NONE;
+    return recordApply(mesh::lr2021::ApplyStatus::Stage::Protocol,
+        static_cast<CustomLR2021*>(_radio)->setProfileProtocol(sync)) == RADIOLIB_ERR_NONE;
   }
 #endif
   int16_t startMorseReceiver() override {
@@ -97,21 +256,27 @@ protected:
         _dbm_valid ? _cur_dbm : LORA_TX_POWER, _cur_freq)) == RADIOLIB_ERR_NONE;
   }
   bool applyParams(float freq, float bw, uint8_t sf, uint8_t cr) override {
+    using Stage = mesh::lr2021::ApplyStatus::Stage;
     CustomLR2021* radio = (CustomLR2021 *)_radio;
-    if (!_board->prepareRadioFrequency(freq)) return false;
+    if (!_board->prepareRadioFrequency(freq)) {
+      recordApply(Stage::FrequencyRail, RADIOLIB_ERR_UNKNOWN);
+      return false;
+    }
     const int8_t requested_power = _dbm_valid ? _cur_dbm : LORA_TX_POWER;
     const int8_t effective_power = mesh::clampLoRaTxPower(requested_power, freq);
     // LR2021 selects its LF/HF PA from the cached frequency. Reapply power
     // immediately after every live retune so a band crossing cannot retain the
     // previous PA configuration.
-    bool success = radio->setFrequency(freq) == RADIOLIB_ERR_NONE
-        && radio->setOutputPower(effective_power) == RADIOLIB_ERR_NONE
-        && radio->setSpreadingFactor(sf) == RADIOLIB_ERR_NONE
-        && radio->setBandwidth(bw) == RADIOLIB_ERR_NONE
-        && radio->setCodingRate(cr) == RADIOLIB_ERR_NONE
-        && updatePreamble(sf, bw)
-        && applySideDetectorConfig(sf, bw);
-    if (!success) return false;
+    if (recordApply(Stage::Frequency, radio->setFrequency(freq)) != RADIOLIB_ERR_NONE
+        || recordApply(Stage::Power, radio->setOutputPower(effective_power)) != RADIOLIB_ERR_NONE
+        || recordApply(Stage::SpreadingFactor, radio->setSpreadingFactor(sf)) != RADIOLIB_ERR_NONE
+        || recordApply(Stage::Bandwidth, radio->setBandwidth(bw)) != RADIOLIB_ERR_NONE
+        || recordApply(Stage::CodingRate, radio->setCodingRate(cr)) != RADIOLIB_ERR_NONE)
+      return false;
+    if (recordApply(Stage::Preamble,
+        radio->setPreambleLength(preambleLengthForParams(sf, bw))) != RADIOLIB_ERR_NONE)
+      return false;
+    if (!applySideDetectorConfig(sf, bw)) return false;
 
     PacketMillis pm = calcMaxPacketMillis(sf, bw, cr, preambleLengthForParams(sf, bw));
     ((CustomLR2021 *)_radio)->setPreambleMillis(pm.preambleMillis);
@@ -123,7 +288,8 @@ protected:
     // A TX-only excursion deliberately preserves the normal wrapper cache.
     // Clamp for the physically selected band, not that normal RX frequency.
     const float frequency = ((CustomLR2021 *)_radio)->getFreqMHz();
-    return _radio->setOutputPower(mesh::clampLoRaTxPower(dbm, frequency));
+    return recordApply(mesh::lr2021::ApplyStatus::Stage::Power,
+        _radio->setOutputPower(mesh::clampLoRaTxPower(dbm, frequency)));
   }
 
 public:
@@ -187,30 +353,36 @@ protected:
   }
 
   bool applySideDetectorConfig(uint8_t primary_sf, float bw) {
+    using Stage = mesh::lr2021::ApplyStatus::Stage;
 #if MESH_ENABLE_TX_BEACONS
     // Saved RX side detectors are not part of an independent TX-only tuple.
     // Disable them without changing their configuration, then restore the
     // normal set when the owner's receive-restoration transaction runs.
     if (isBeaconRadioOwned() && !_beacon_restoring) {
-      return ((CustomLR2021 *)_radio)->setSideDetector(nullptr, 0) == RADIOLIB_ERR_NONE;
+      return recordApply(Stage::SideDetectors,
+          ((CustomLR2021 *)_radio)->setSideDetector(nullptr, 0)) == RADIOLIB_ERR_NONE;
     }
 #endif
     if (_profiles.enabled()) {
-      return ((CustomLR2021 *)_radio)->setSideDetector(nullptr, 0) == RADIOLIB_ERR_NONE;
+      return recordApply(Stage::SideDetectors,
+          ((CustomLR2021 *)_radio)->setSideDetector(nullptr, 0)) == RADIOLIB_ERR_NONE;
     }
     if (!mesh::lr2021::validateSideDetectorSFs(_sideDetSFs, _numSideDet, primary_sf, bw)) {
       // Extra SFs belong to the saved receive tuple. A temporary primary can
       // make that list illegal; suspend it without discarding the saved set.
       // Applying the normal tuple enables the same detectors again.
       if (_profiles.primary_temporary) {
-        return ((CustomLR2021 *)_radio)->setSideDetector(nullptr, 0) == RADIOLIB_ERR_NONE;
+        return recordApply(Stage::SideDetectors,
+            ((CustomLR2021 *)_radio)->setSideDetector(nullptr, 0)) == RADIOLIB_ERR_NONE;
       }
+      recordApply(Stage::SideDetectors, RADIOLIB_ERR_INVALID_SIDE_DETECT);
       return false;
     }
     LR2021LoRaSideDetector_t config[mesh::lr2021::MAX_SIDE_DETECTORS] = {};
     buildSideDetectorConfig(_sideDetSFs, _numSideDet, bw, config);
-    return ((CustomLR2021 *)_radio)->setSideDetector(_numSideDet > 0 ? config : nullptr,
-                                                     _numSideDet) == RADIOLIB_ERR_NONE;
+    return recordApply(Stage::SideDetectors,
+        ((CustomLR2021 *)_radio)->setSideDetector(_numSideDet > 0 ? config : nullptr,
+                                                _numSideDet)) == RADIOLIB_ERR_NONE;
   }
 
   int16_t performChannelScan() override {
@@ -308,8 +480,10 @@ protected:
   int startReceiveMode() override {
     // LR2021 must leave CAD/RX before restarting with side detectors, or it
     // can reject startReceive() with RADIOLIB_ERR_SPI_CMD_INVALID (-706).
-    _radio->standby();
-    return _radio->startReceive();
+    const int16_t standby = recordApply(mesh::lr2021::ApplyStatus::Stage::Standby,
+                                       _radio->standby());
+    if (standby != RADIOLIB_ERR_NONE) return standby;
+    return recordApply(mesh::lr2021::ApplyStatus::Stage::Receive, _radio->startReceive());
   }
 
   bool radioDeepInit() override {
@@ -320,7 +494,8 @@ protected:
   bool supportsRadioDeepInit() const override { return supportsRadioHardResetPath(); }
 
   bool applyRxBoostedGainMode(bool en) override {
-    return ((CustomLR2021 *)_radio)->setRxBoostedGainMode(en ? LR2021_RX_BOOST_LEVEL : 0)
+    return recordApply(mesh::lr2021::ApplyStatus::Stage::Gain,
+        ((CustomLR2021 *)_radio)->setRxBoostedGainMode(en ? LR2021_RX_BOOST_LEVEL : 0))
         == RADIOLIB_ERR_NONE;
   }
 

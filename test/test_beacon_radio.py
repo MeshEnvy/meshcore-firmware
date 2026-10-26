@@ -435,7 +435,7 @@ class BeaconRadioTest(unittest.TestCase):
              "if (_beacon_owned || _cw_active) return Result::BUSY;"),
             ("_profile_repair_required = false; // Full normal tuple/protocol/power/IRQ restore succeeded.",
              "/* omit repair retirement before ordinary RX */"),
-            ("if (_beacon_owned && !_beacon_restoring) return 2;", "/* remove ownership guard */"),
+            ("if (_beacon_owned && !_beacon_restoring) {", "if (false) { /* remove ownership guard */"),
             ("if (_beacon_owned && !_beacon_restoring) return;", "/* permit RX on beacon tuple */"),
             ("bool applied = _radio->standby() == RADIOLIB_ERR_NONE",
              "cacheParams(p.freq, p.bw, p.sf, p.cr); bool applied = _radio->standby() == RADIOLIB_ERR_NONE"),

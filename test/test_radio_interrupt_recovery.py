@@ -139,6 +139,16 @@ struct LR2021 {
 struct Chip : LR2021 {
  uint32_t _activityAt=0, _preambleMillis=66, _maxPayloadMillis=3934;
  bool _headerSeen=false;
+ float freqMHz=910.525f, _last_frequency_error_mhz=0;
+ int32_t _last_frequency_error_hz=0;
+ uint32_t _last_frequency_error_at=0;
+ bool _last_frequency_error_valid=false;
+ struct MeasurementHal {uint32_t millis(){return ::millis();}} measurement_hal;
+ struct MeasurementModule {MeasurementHal* hal;} measurement_mod{&measurement_hal};
+ MeasurementModule* mod=&measurement_mod;
+ // The packet-status wire decoder has its own production-method tests. Keep
+ // this fixture focused on preserving the IRQ/FIFO while publishing metadata.
+ int16_t readPacketFrequencyErrorHz(int32_t& hz){hz=250;return 0;}
  bool isChipBusy(){return false;}
  @LR_METHODS@
 };
@@ -153,6 +163,7 @@ struct RadioLibWrapper {
  bool _loop_event_pending=false, _cw_active=false, _profile_repair_required=false, _profile_refresh_required=false;
  bool _rx_ps_armed=false, _rx_hold_continuous=false, _rx_ps_enabled=false;
  bool _rx_ps_continuous_fallback=false, _nf_calib_active=false;
+ bool _primary_receive_preempt=false;
  uint32_t _rx_ps_eff_rx_us=0, _rx_ps_eff_sleep_us=0;
  float _last_snr=0, _last_rssi=0;
  unsigned n_recv=0,n_recv_errors=0,n_sent=0;
@@ -168,6 +179,7 @@ public:
  bool registerInterruptAction();void unregisterInterruptAction();
  bool hasAssertedRadioInterrupt()const;bool hasPendingRadioInterrupt()const;bool claimRadioInterrupt();
  uint8_t beginReconfigure();
+ void noteReconfigureAdmission(const char*,int16_t){}
  void requestRestartRecv();bool isPacketReady();
  bool startSendRaw(const uint8_t*,int);bool isSendComplete();
  int recvRaw(uint8_t*,int);

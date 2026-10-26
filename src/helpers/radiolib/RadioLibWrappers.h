@@ -11,6 +11,9 @@
 #include <helpers/IdentityGeneration.h>
 #include "CadTiming.h"
 #include "RadioAirtime.h"
+#if defined(USE_LR2021)
+#include "PrimaryRadioApplyWait.h"
+#endif
 #include "RXPowerSaving.h"
 #include "HilTxFrequencyGuard.h"
 #include "ESP32RadioTrace.h"
@@ -131,6 +134,15 @@ protected:
   // A failed parameter transaction left the physical tuple untrusted. Unlike
   // an ordinary refresh, its FIFO and activity flags cannot identify a packet.
   bool _profile_repair_required = false;
+#if defined(USE_LR2021)
+  mesh::PrimaryRadioApplyWait _primary_apply_wait;
+  bool _primary_receive_preempt = false;
+#endif
+  virtual bool supportsBoundedPrimaryReconfigure() const { return false; }
+  virtual void noteReconfigureAdmission(const char* reason, int16_t status) {
+    (void)reason; (void)status;
+  }
+
 #if defined(NRF52_PLATFORM)
   // Published by the scanner before the final sleep predicates. The late
   // query uses integers only: floating-point work can leave a stale FPU event.

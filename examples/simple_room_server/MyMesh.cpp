@@ -2960,8 +2960,10 @@ bool MyMesh::applySavedRadioParams() {
 #endif
   // Each setter can defer while the radio is busy. Keep recovery pending
   // until the complete saved configuration has been accepted.
+#if !defined(USE_LR2021)
   if (radio_driver.supportsRxBoostedGainMode()
       && !radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain)) return false;
+#endif
   uint32_t timings[2] = {_prefs.rx_ps_rx_us, _prefs.rx_ps_sleep_us};
   const uint32_t* applied_timings = _prefs.rx_powersaving_enabled
       && radio_driver.supportsRxPowerSaving() ? timings : NULL;
@@ -2971,6 +2973,12 @@ bool MyMesh::applySavedRadioParams() {
     return false;
   }
   active_cr = _prefs.cr;
+#if defined(USE_LR2021)
+  // Primary admission owns the bounded unfinished-RX handoff. Applying gain
+  // first could keep that accepted command from ever reaching admission.
+  if (radio_driver.supportsRxBoostedGainMode()
+      && !radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain)) return false;
+#endif
 #if defined(USE_LR2021)
   if (side_detectors_allowed
       && !radio_driver.configSideDetectors(_prefs.extra_sf, extra_sf_count, _prefs.bw)) return false;

@@ -4584,10 +4584,18 @@ bool MyMesh::applySavedRadioParams() {
 
   // Each setter may independently defer while a packet is being received.
   // Only complete recovery when the whole saved configuration was accepted.
+#if !defined(USE_LR2021)
   if (radio_driver.supportsRxBoostedGainMode()
       && !radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain)) return false;
+#endif
   if (!applyRadioParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr, _cli.radioProfiles().primaryPreamble())) return false;
 
+#if defined(USE_LR2021)
+  // Primary admission owns the bounded unfinished-RX handoff. Applying gain
+  // first could keep that accepted command from ever reaching admission.
+  if (radio_driver.supportsRxBoostedGainMode()
+      && !radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain)) return false;
+#endif
 #if defined(USE_LR2021)
   if (!radio_driver.configSideDetectors(_prefs.extra_sf, extra_sf_count, _prefs.bw)) return false;
 #endif

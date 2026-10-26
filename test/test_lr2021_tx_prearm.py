@@ -220,6 +220,7 @@ public:
 };
 class CustomLR2021:public LR2021 {
   @REGULATOR@
+  int16_t restoreXoscTrim() { return 0; } // No calibration override in this RF-switch fixture.
 public:
   using LR2021::LR2021;
   uint32_t _rf_switch_pins[Module::RFSWITCH_MAX_PINS]={};
