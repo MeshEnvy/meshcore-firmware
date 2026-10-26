@@ -2,6 +2,7 @@
 
 #include "BeaconFeatureConfig.h"
 #include "EthernetTunnelConfig.h"
+#include "HostKissConfig.h"
 #include "ota/OtaDirectConfig.h"
 
 // Full Companion includes channel chat on both supported platforms. Keep this
@@ -37,5 +38,5 @@
 // dispatcher slot. Direct OTA retains its temporary MeshCore profile; foreign
 // transports keep their existing radio2-only ownership.
 #ifndef MESH_ENABLE_FOREIGN_RADIO
-  #define MESH_ENABLE_FOREIGN_RADIO (MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_OTA_KISS_DIRECT)
+  #define MESH_ENABLE_FOREIGN_RADIO (MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_OTA_KISS_DIRECT || MESH_ENABLE_HOST_KISS)
 #endif

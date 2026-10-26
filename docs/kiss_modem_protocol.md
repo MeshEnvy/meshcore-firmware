@@ -12,6 +12,72 @@ fast-switches between `radio` and `radio2`; it does not create a second radio.
 
 ## Serial Configuration
 
+### Full firmware host KISS
+
+Full ESP32 and nRF52 LoRa firmware includes a separate, default-off raw
+radio2 host service. It preserves the device's normal Companion, Repeater,
+Room Server or Sensor role on radio1. It is enabled in the Full sensor/OTA
+profile on nRF52; reduced infrastructure images omit the service.
+
+Configure the desired saved radio2 RF tuple in `rxtx` mode, then use:
+
+```text
+set kiss.transport usb
+set kiss on
+get kiss
+```
+
+Both choices are saved. `set kiss off` stops the service and releases its
+runtime radio2 protocol lease without changing the saved radio2 tuple.
+Temporary radio settings and Meshtext/Ethernet radio2 owners block admission.
+The service never chooses a frequency, takes another service's radio2 lease,
+crosses raw packets onto radio1, or feeds them into MeshCore parsing/bridges.
+
+USB remains the normal CLI until an initial KISS FEND (`C0`). During the raw
+session, USB Companion framing and text/debug output are parked. Send the
+standard KISS RETURN frame (`C0 FF C0`) to leave the session, then issue CLI
+commands normally. A detected USB disconnect/reset also ends the session.
+UART-to-USB adapters without a disconnect signal may require RETURN.
+If the radio2 settings change mid-session, USB stays quarantined until RETURN
+or disconnect, so leftover binary bytes cannot become CLI commands.
+
+ESP32 also supports `set kiss.transport tcp`. Enable station WiFi separately
+and connect to its address on TCP **5004**. The service accepts one client,
+does not bind the setup AP, and has no authentication. Use a trusted LAN.
+WiFi loss, RETURN, setting changes and invalidated radio2 generations close
+the connection and discard queued host work. A second client cannot displace
+an existing owner. USB remains available for management in TCP mode.
+
+The Full service uses standard KISS escaping and the following frames:
+
+| Type | Direction | Payload and meaning |
+| --- | --- | --- |
+| `00` | Both | Raw DATA, 1-255 bytes, exclusively radio2 |
+| `0F` | Device to host | `01`: READY, initially and after each completed TX |
+| `06` | Device to host | `F8 01`: TX succeeded; `F8 00`: TX failed |
+| `FF` | Host to device | Empty payload: RETURN to CLI/close TCP |
+
+Other ports and parameter/control commands are ignored. RF parameters are
+configured through the ordinary saved radio2 CLI, not RNode control commands.
+Wait for READY before sending the next packet. The device retains at most
+two queued host frames plus one in-flight transmission, uses bounded I/O,
+and preserves normal CAD, duty budget and MeshCore transmit fairness.
+`get kiss` includes RX/TX/failure/drop/malformed counters. A drop counter can
+include received packets that could not fit in the bounded host output queue.
+
+The raw RF payload has no additional header. It uses the ordinary private
+LoRa sync word (`0x12`, represented as `0x1424` by SX126x), explicit headers,
+CRC and normal IQ. Peers must match RF parameters, including preamble timing
+appropriate for the time-shared receiver. Only one physical radio is present.
+
+This is a generic host modem. Reticulum/RNode interoperability requires host
+adaptation for RNode's one-byte RF header, fragmentation/reassembly of larger
+packets and transmit pacing. The Full image runs no Reticulum router and
+imports no RNode firmware code. The separate dedicated KISS firmware below
+retains its original two-port interface and binary configuration extensions.
+
+### Dedicated modem serial configuration
+
 115200 baud, 8N1, no flow control.
 
 ## Frame Format

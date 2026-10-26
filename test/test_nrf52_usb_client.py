@@ -330,7 +330,8 @@ int main() {
 }
 '''
         source = source.replace('@NULL@', function(USB, 'class NullUsbLoggingStream') + ';')
-        source = source.replace('@PORT@', function(USB, 'Stream& usbTerminalPort('))
+        source = source.replace('@PORT@', '\n'.join(function(USB, signature) for signature in (
+            'static Stream& rawUsbTerminalPort(', 'Stream& usbTerminalPort(')))
         source = source.replace('@WAITING@', function(header, 'bool isTerminalWaitingForInput('))
         source = source.replace('@METHODS@', '\n'.join(function(mesh, signature) for signature in (
             'Stream& MyMesh::terminalOutput(', 'void MyMesh::printTerminalBanner(',

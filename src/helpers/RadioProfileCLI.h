@@ -34,7 +34,7 @@ class RadioProfileCLI {
   // Saved Off can be an explicit veto, rather than an unused secondary slot.
   bool manual_secondary_ = false;
   uint32_t secondary_intent_generation_ = 0;
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
   RadioProfileConfig auto_secondary_;
   bool auto_secondary_requested_ = false;
   bool secondary_protocol_overlay_ = false;

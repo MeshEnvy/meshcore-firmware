@@ -17,6 +17,7 @@
 #endif
 #include <helpers/UsbLoggingWatchdog.h>
 #include <helpers/UsbLoggingClientActivity.h>
+#include <helpers/HostKiss.h>
 #include <helpers/MorseLoopPolicy.h>
 #include <helpers/PowerManagementUtils.h>
 #if MESH_PACKET_LOGGING
@@ -331,6 +332,9 @@ void setup() {
 }
 
 static bool usbLoggingRecoverySafe(void*) {
+#if MESH_ENABLE_HOST_KISS
+  if (mesh::hostkiss::usbActive()) return false;
+#endif
   if (board.isOTAUpdateRunning() || board.isRadioTestActive()
       || radio_driver.isWatchdogObserving() || radio_driver.isCalibratingNoiseFloor()
       || !the_mesh.canRecoverUsbLogging()) return false;
@@ -355,12 +359,26 @@ void loop() {
   bool usb_ready = true;
 #if MESH_USB_CONSOLE_COOPERATIVE
   mesh::serviceUsbLoggingPort();
-  mesh::serviceUsbTerminalPort();
   if (mesh::takeUsbTerminalSessionReset()) {
+#if MESH_ENABLE_HOST_KISS
+    mesh::hostkiss::resetUsbSession();
+#endif
     command[0] = 0;
     the_mesh.cancelPendingSerialOutput();
   }
-  usb_ready = mesh::tryCompleteUsbTerminalSessionReset();
+#endif
+#if MESH_ENABLE_HOST_KISS
+  if (mesh::hostkiss::serviceUsb()) {
+    command[0] = 0;
+#if MESH_USB_CONSOLE_COOPERATIVE
+    the_mesh.cancelPendingSerialOutput();
+#endif
+    usb_ready = false;
+  }
+#endif
+#if MESH_USB_CONSOLE_COOPERATIVE
+  if (usb_ready) mesh::serviceUsbTerminalPort();
+  usb_ready = usb_ready && mesh::tryCompleteUsbTerminalSessionReset();
   usb_ready = usb_ready && !the_mesh.hasPendingSerialOutput()
       && mesh::canAcceptUsbConsoleCommand();
 #endif
@@ -449,6 +467,9 @@ void loop() {
   board.loop();
   if (mesh::serviceUsbLoggingWatchdog(usbLoggingRecoverySafe)) board.reboot();
 #if MESH_USB_CONSOLE_COOPERATIVE
+#if MESH_ENABLE_HOST_KISS
+  if (!mesh::hostkiss::usbActive())
+#endif
   mesh::serviceUsbTerminalPort();
 #endif
 #ifdef TBEAM_1W
@@ -477,6 +498,10 @@ void loop() {
       && sleep_guard(!board.isUsbDataConnected(), mesh::powerdiag::Reason::UsbSession)
       && sleep_guard(!mesh::isUsbLoggingWatchdogArmed(), mesh::powerdiag::Reason::UsbRecovery)
       && sleep_guard(!mesh::wireless::control().pending(), mesh::powerdiag::Reason::Wireless);
+#if MESH_ENABLE_HOST_KISS
+  can_power_save = can_power_save
+      && sleep_guard(!mesh::hostkiss::usbActive(), mesh::powerdiag::Reason::UsbSession);
+#endif
 #if defined(MOMENTARY_BUTTON_WAKE_FROM_SLEEP) \
     && MOMENTARY_BUTTON_WAKE_FROM_SLEEP \
     && defined(PIN_USER_BTN) && defined(DISPLAY_CLASS)

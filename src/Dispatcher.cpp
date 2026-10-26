@@ -1,4 +1,5 @@
 #include "Dispatcher.h"
+#include "helpers/HostKissHooks.h"
 #include "helpers/ota/OtaTiming.h"
 #if MESH_ENABLE_OTA_KISS_DIRECT
 #include "helpers/ota/OtaDirectWire.h"
@@ -290,6 +291,9 @@ bool Dispatcher::supportsForeignRadioProtocol(RadioProfileProtocol protocol) con
 #if MESH_ENABLE_ETHERNET_TUNNEL
     case RadioProfileProtocol::Ethernet: return _radio->supportsEthernetTunnel();
 #endif
+#if MESH_ENABLE_HOST_KISS
+    case RadioProfileProtocol::Kiss: return _radio->supportsHostKiss();
+#endif
     default: return false;
   }
 }
@@ -370,6 +374,9 @@ bool Dispatcher::queueForeignRadioFrame(const uint8_t* bytes, size_t length,
 void Dispatcher::finishForeignRadioFrame(bool success, bool account_airtime) {
   if (!hasForeignRadioFrame()) return;
   const bool direct_ota = foreign_radio_protocol == RadioProfileProtocol::MeshCore;
+#if MESH_ENABLE_HOST_KISS
+  const bool host_kiss = foreign_radio_protocol == RadioProfileProtocol::Kiss;
+#endif
   if (account_airtime) {
     const uint32_t elapsed = (uint32_t)_ms->getMillis() - foreign_radio_start;
     total_air_time += elapsed;
@@ -400,6 +407,10 @@ void Dispatcher::finishForeignRadioFrame(bool success, bool account_airtime) {
   // either transport's application counters or trigger its callbacks.
   if (direct_ota) {
     if (success) ++n_sent_direct;
+#if MESH_ENABLE_HOST_KISS
+  } else if (host_kiss) {
+    hostkiss::sendComplete(success);
+#endif
   } else onForeignRadioSendComplete(success);
 }
 
@@ -1086,6 +1097,11 @@ void Dispatcher::checkRecv() {
             && _radio->receiveProfileGeneration() == profiles->generation[profile]) {
           rx_air_time += _radio->getProfileAirtime(profile, len);
           ++_radio->profiles()->rx_packets[profile];
+#if MESH_ENABLE_HOST_KISS
+          if (profiles->params(profile).protocol == RadioProfileProtocol::Kiss) {
+            hostkiss::receive(raw, (size_t)len, profile, profiles->generation[profile], snr, rssi);
+          } else
+#endif
           onForeignRadioFrame(raw, (size_t)len, profile, profiles->generation[profile], snr, rssi);
         }
 #endif

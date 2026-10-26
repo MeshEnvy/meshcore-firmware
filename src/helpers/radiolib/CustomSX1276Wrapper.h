@@ -11,6 +11,9 @@ class CustomSX1276Wrapper : public RadioLibWrapper {
 public:
   ~CustomSX1276Wrapper() { unregisterInterruptAction(); }
   CustomSX1276Wrapper(CustomSX1276& radio, mesh::MainBoard& board) : RadioLibWrapper(radio, board) { }
+#if MESH_ENABLE_HOST_KISS
+  bool supportsHostKiss() const override { return true; }
+#endif
   bool supportsCarrierWave() const override { return supportsRadioDeepInit(); }
   bool supportsMorseRx() const override { return MESH_ENABLE_MORSE_RX && supportsRadioDeepInit(); }
 #if MESH_ENABLE_MESHTEXT_WIRE
@@ -26,7 +29,7 @@ public:
   }
 
 protected:
-#if MESH_ENABLE_MESHTEXT_WIRE || MESH_ENABLE_ETHERNET_WIRE
+#if MESH_ENABLE_MESHTEXT_WIRE || MESH_ENABLE_ETHERNET_WIRE || MESH_ENABLE_HOST_KISS
   bool applyProtocol(mesh::RadioProfileProtocol protocol) override {
     uint8_t sync = 0x12;
     if (protocol == mesh::RadioProfileProtocol::Meshtext) {
@@ -36,6 +39,10 @@ protected:
     } else if (protocol == mesh::RadioProfileProtocol::Ethernet) {
       if (!supportsEthernetTunnel()) return false;
       sync = 0x16;
+#endif
+#if MESH_ENABLE_HOST_KISS
+    } else if (protocol == mesh::RadioProfileProtocol::Kiss) {
+      if (!supportsHostKiss()) return false;
 #endif
     } else if (protocol != mesh::RadioProfileProtocol::MeshCore) return false;
     return static_cast<CustomSX1276*>(_radio)->setProfileProtocol(sync) == RADIOLIB_ERR_NONE;

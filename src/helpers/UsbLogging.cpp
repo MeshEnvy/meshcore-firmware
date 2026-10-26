@@ -1,5 +1,8 @@
 #include "UsbLogging.h"
 #include "UsbLoggingClientActivity.h"
+#if MESH_ENABLE_HOST_KISS
+#include "UsbBinaryTextGuard.h"
+#endif
 
 #if defined(ARDUINO)
 #include <Arduino.h>
@@ -91,6 +94,19 @@ static std::atomic<bool> usb_logging_enabled{true};
 #endif
 static std::atomic<bool> usb_logging_preference_known{false};
 static std::atomic<bool> usb_debug_enabled{false};
+#if MESH_ENABLE_HOST_KISS
+static std::atomic<bool> usb_binary_stream_owned{false};
+static std::atomic<uint32_t> usb_text_writers{0};
+
+static bool beginUsbTextWrite() {
+  if (usb_binary_stream_owned.load()) return false;
+  usb_text_writers.fetch_add(1);
+  if (!usb_binary_stream_owned.load()) return true;
+  usb_text_writers.fetch_sub(1);
+  return false;
+}
+static void endUsbTextWrite() { usb_text_writers.fetch_sub(1); }
+#endif
 static std::atomic<uint32_t> usb_logging_tx_progress{0};
 static std::atomic<bool> usb_logging_tx_waiting{false};
 #if MESH_ESP32_TINYUSB_NONBLOCKING \
@@ -364,7 +380,11 @@ static void serviceEsp32TinyUsbPorts() {
     esp32_tinyusb_terminal_reported_dropped_bytes =
         esp32_tinyusb_terminal_dropped_bytes.load(std::memory_order_relaxed);
   }
-  if (canAccessEsp32TinyUsb(nullptr)) {
+  if (isUsbBinaryStreamOwned()) {
+    esp32_tinyusb_text_queue.discardPending();
+    esp32_tinyusb_terminal_reported_dropped_bytes =
+        esp32_tinyusb_terminal_dropped_bytes.load(std::memory_order_relaxed);
+  } else if (canAccessEsp32TinyUsb(nullptr)) {
     esp32_tinyusb_text_queue.service();
     const uint32_t dropped =
         esp32_tinyusb_terminal_dropped_bytes.load(std::memory_order_relaxed);
@@ -1245,6 +1265,31 @@ static WholeRecordNonBlockingStream<>
   #endif
 #endif
 
+#if MESH_ENABLE_HOST_KISS
+bool isUsbBinaryStreamOwned() {
+  return usb_binary_stream_owned.load();
+}
+
+void setUsbBinaryStreamOwned(bool owned) {
+  usb_binary_stream_owned.store(owned);
+  if (owned) {
+    discardUsbTerminalOutput();
+#if MESH_ESP32_HWCDC_SESSION_GUARD
+    invalidateEsp32SdkLogging();
+#endif
+  }
+  setPlatformDebugOutputEnabled(isUsbDebugLoggingEnabled());
+}
+
+bool isUsbBinaryStreamReady() {
+  // The producer may have obtained its cached Stream before ownership changed.
+  // Never wait for it here: the raw session retries this gate next loop.
+  if (!isUsbBinaryStreamOwned() || usb_text_writers.load() != 0) return false;
+  discardUsbTerminalOutput();
+  return !hasPendingUsbTerminalOutput();
+}
+#endif
+
 bool isUsbLoggingEnabled() {
   return usb_logging_enabled.load(std::memory_order_relaxed);
 }
@@ -1598,7 +1643,7 @@ bool resetUsbCompanionTransport() {
   return true;
 }
 
-Stream& usbLoggingPort() {
+static Stream& rawUsbLoggingPort() {
 #if defined(MESH_DUAL_CDC_LOGGING)
   if (!isUsbLoggingPacketStream()) {
     if (isUsbLoggingEnabled() && dedicated_usb_logging_port_started
@@ -1618,6 +1663,16 @@ Stream& usbLoggingPort() {
   #else
     return Serial;
   #endif
+}
+
+Stream& usbLoggingPort() {
+#if MESH_ENABLE_HOST_KISS
+  static UsbBinaryTextGuard guarded(isUsbBinaryStreamOwned, beginUsbTextWrite, endUsbTextWrite);
+  guarded.use(rawUsbLoggingPort());
+  return guarded;
+#else
+  return rawUsbLoggingPort();
+#endif
 }
 
 Stream& usbDebugPort() {
@@ -1655,7 +1710,7 @@ Stream& usbMotaPort() {
 #endif
 }
 
-Stream& usbTerminalPort(bool enabled) {
+static Stream& rawUsbTerminalPort(bool enabled) {
   if (!enabled) return null_usb_logging_stream;
 #if MESH_ESP32_TINYUSB_NONBLOCKING
   return buffered_esp32_tinyusb_terminal_port;
@@ -1666,7 +1721,7 @@ Stream& usbTerminalPort(bool enabled) {
 #endif
 }
 
-Stream& usbConsolePort() {
+static Stream& rawUsbConsolePort() {
 #if MESH_ESP32_TINYUSB_NONBLOCKING
   return buffered_esp32_tinyusb_terminal_port;
 #elif MESH_ESP32_HWCDC_SESSION_GUARD
@@ -1678,7 +1733,29 @@ Stream& usbConsolePort() {
 #endif
 }
 
+Stream& usbTerminalPort(bool enabled) {
+#if MESH_ENABLE_HOST_KISS
+  static UsbBinaryTextGuard guarded(isUsbBinaryStreamOwned, beginUsbTextWrite, endUsbTextWrite);
+  if (!enabled) return null_usb_logging_stream;
+  guarded.use(rawUsbTerminalPort(true));
+  return guarded;
+#else
+  return rawUsbTerminalPort(enabled);
+#endif
+}
+
+Stream& usbConsolePort() {
+#if MESH_ENABLE_HOST_KISS
+  static UsbBinaryTextGuard guarded(isUsbBinaryStreamOwned, beginUsbTextWrite, endUsbTextWrite);
+  guarded.use(rawUsbConsolePort());
+  return guarded;
+#else
+  return rawUsbConsolePort();
+#endif
+}
+
 bool canAcceptUsbConsoleCommand() {
+  if (isUsbBinaryStreamOwned()) return false;
 #if MESH_ESP32_TINYUSB_NONBLOCKING
   return buffered_esp32_tinyusb_terminal_port.availableForWrite()
       >= static_cast<int>(esp32_tinyusb_functional_reserve);
@@ -1707,6 +1784,11 @@ void serviceUsbTerminalPort() {
   if (primary_usb_terminal_discard_pending.exchange(false, std::memory_order_acq_rel)
       && !buffered_primary_usb_terminal_port.tryDiscardPending()) {
     primary_usb_terminal_discard_pending.store(true, std::memory_order_release);
+    return;
+  }
+  if (isUsbBinaryStreamOwned()) {
+    if (!buffered_primary_usb_terminal_port.tryDiscardPending())
+      primary_usb_terminal_discard_pending.store(true, std::memory_order_release);
     return;
   }
   buffered_primary_usb_terminal_port.service();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "UsbLoggingStatus.h"
+#include "HostKissConfig.h"
 
 // Canonical USB-capable images compile at least one of these two diagnostics.
 // A master USB output gate and a separate debug-verbosity gate keep packet
@@ -53,6 +54,19 @@
 
 namespace mesh {
 
+// A raw host session owns the primary USB byte stream without changing the
+// saved packet/debug logging preference. Functional text and diagnostics must
+// stay out of that binary stream, including writers retaining a Stream reference.
+#if MESH_ENABLE_HOST_KISS
+bool isUsbBinaryStreamOwned();
+void setUsbBinaryStreamOwned(bool owned);
+bool isUsbBinaryStreamReady();
+#else
+inline bool isUsbBinaryStreamOwned() { return false; }
+inline void setUsbBinaryStreamOwned(bool) { }
+inline bool isUsbBinaryStreamReady() { return true; }
+#endif
+
 #ifndef MESH_ESP32_USB_TX_BUFFER_SIZE
   #define MESH_ESP32_USB_TX_BUFFER_SIZE 4096
 #endif
@@ -83,7 +97,7 @@ void setUsbLoggingEnabled(bool enabled);
 bool isUsbDebugEnabled();
 void setUsbDebugEnabled(bool enabled);
 inline bool isUsbDebugLoggingEnabled() {
-  return isUsbLoggingEnabled() && isUsbDebugEnabled();
+  return !isUsbBinaryStreamOwned() && isUsbLoggingEnabled() && isUsbDebugEnabled();
 }
 
 // Kept as a platform-neutral persistence hook. Single-TTY builds need no

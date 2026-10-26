@@ -23,6 +23,14 @@ exposes equivalent RAM-only binary `SetRadio2`/`SetTempRadio2` commands and
 logical KISS Data ports, documented in [the KISS modem protocol](kiss_modem_protocol.md).
 It does not use the Mesh CLI's persistent profile file or Mesh retry queues.
 
+Full ESP32 and nRF52 LoRa images also offer an optional
+[raw host KISS service](kiss_modem_protocol.md#full-firmware-host-kiss).
+`set kiss on` enables it, default off, while radio1 retains its normal role.
+It borrows an explicitly configured saved `radio2` profile for the host's
+session. Meshtext, Ethernet and temporary radio2 owners cannot share that
+lease. This service is a raw modem; the connected computer handles its own
+network protocol and routing.
+
 ## Quick setup
 
 Keep the primary channel configured with `radio`, then add the second:

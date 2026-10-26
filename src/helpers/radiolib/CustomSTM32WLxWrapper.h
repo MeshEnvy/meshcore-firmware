@@ -31,17 +31,23 @@ public:
 #if MESH_ENABLE_MESHTEXT_WIRE
   bool supportsMeshtext() const override { return true; }
 #endif
+#if MESH_ENABLE_HOST_KISS
+  bool supportsHostKiss() const override { return true; }
+#endif
 #if MESH_ENABLE_MORSE_RX
   bool supportsMorseRx() const override { return supportsRadioDeepInit(); }
 #endif
   void setDeepInitCallback(DeepInitCallback callback) { _deep_init = callback; }
 
 protected:
-#if MESH_ENABLE_MESHTEXT_WIRE
+#if MESH_ENABLE_MESHTEXT_WIRE || MESH_ENABLE_HOST_KISS
   bool applyProtocol(mesh::RadioProfileProtocol protocol) override {
     uint8_t sync;
     if (protocol == mesh::RadioProfileProtocol::MeshCore) sync = 0x12;
     else if (protocol == mesh::RadioProfileProtocol::Meshtext) sync = 0x2b;
+#if MESH_ENABLE_HOST_KISS
+    else if (protocol == mesh::RadioProfileProtocol::Kiss) sync = 0x12;
+#endif
     else return false;
     return static_cast<CustomSTM32WLx*>(_radio)->setProfileProtocol(sync) == RADIOLIB_ERR_NONE;
   }

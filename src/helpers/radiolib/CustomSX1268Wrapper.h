@@ -23,6 +23,9 @@ public:
 #if MESH_ENABLE_MESHTEXT_WIRE
   bool supportsMeshtext() const override { return true; }
 #endif
+#if MESH_ENABLE_HOST_KISS
+  bool supportsHostKiss() const override { return true; }
+#endif
 
   void powerOff() {
     if (isCarrierWaveActive()) setCarrierWave(0, 0);
@@ -30,10 +33,14 @@ public:
   }
 
 protected:
-#if MESH_ENABLE_MESHTEXT_WIRE
+#if MESH_ENABLE_MESHTEXT_WIRE || MESH_ENABLE_HOST_KISS
   bool applyProtocol(mesh::RadioProfileProtocol protocol) override {
     if (protocol != mesh::RadioProfileProtocol::MeshCore
-        && protocol != mesh::RadioProfileProtocol::Meshtext) return false;
+        && protocol != mesh::RadioProfileProtocol::Meshtext
+#if MESH_ENABLE_HOST_KISS
+        && protocol != mesh::RadioProfileProtocol::Kiss
+#endif
+        ) return false;
     const uint8_t sync = protocol == mesh::RadioProfileProtocol::Meshtext ? 0x2b : 0x12;
     return static_cast<CustomSX1268*>(_radio)->setProfileProtocol(sync) == RADIOLIB_ERR_NONE;
   }

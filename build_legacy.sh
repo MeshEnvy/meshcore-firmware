@@ -5504,6 +5504,20 @@ build_firmware_one_profile() {
   apply_rak4631_rak15002_sd_store_profile "$env_name"
   apply_radio_overrides
   apply_firmware_profile_overrides
+  # Full LoRa images retain their normal role while a connected host uses
+  # an explicitly enabled raw radio2 KISS session. Reduced profiles omit it.
+  if [ "$BUILD_PROFILE_FOR_TARGET" = "full" ] \
+      || { [ "$env_platform" = "NRF52_PLATFORM" ] \
+        && [ "${NRF52_OTA_SENSOR_PROFILE:-}" = "full" ] \
+        && is_nrf52_sensor_ota_pair_target "$env_name"; }; then
+    case "$env_platform" in
+      ESP32_PLATFORM|NRF52_PLATFORM)
+        if ! is_kiss_modem_target "$env_name"; then
+          export PLATFORMIO_BUILD_FLAGS="${PLATFORMIO_BUILD_FLAGS} -DMESH_ENABLE_HOST_KISS=1"
+        fi
+        ;;
+    esac
+  fi
   declare_build_capability_contract "$env_name" "$env_platform"
 
   if [ "$ESP32_FULL_BUILD" = "1" ] || is_esp32_companion_radio_full_target "$env_name"; then

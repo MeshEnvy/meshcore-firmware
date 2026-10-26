@@ -9,7 +9,7 @@ namespace mesh {
 
 enum class RadioProfileMode : uint8_t { Off = 0, Rx = 1, RxTx = 2 };
 enum class RadioCrossMode : uint8_t { Auto = 0, On = 1, Off = 2 };
-enum class RadioProfileProtocol : uint8_t { MeshCore = 0, Meshtext = 1, Ethernet = 2 };
+enum class RadioProfileProtocol : uint8_t { MeshCore = 0, Meshtext = 1, Ethernet = 2, Kiss = 3 };
 
 // These are modulation profiles of ONE transceiver, never additional radios.
 struct RadioProfileParams {
@@ -150,7 +150,7 @@ class RadioProfiles {
     if (!(p.freq >= 137 && p.freq <= 2500)
         || p.sf < 5 || p.sf > 12 || p.cr < 5 || p.cr > 8
         || (p.protocol != RadioProfileProtocol::MeshCore && p.protocol != RadioProfileProtocol::Meshtext
-            && p.protocol != RadioProfileProtocol::Ethernet)
+            && p.protocol != RadioProfileProtocol::Ethernet && p.protocol != RadioProfileProtocol::Kiss)
         || (p.preamble != 0 && (p.preamble < 8 || p.preamble > MaxPreamble))) return false;
     // The first ten entries are the shared SX126x/SX127x bandwidth subset.
     static constexpr float bandwidths[] = {7.8f, 10.4f, 15.6f, 20.8f, 31.25f, 41.7f,

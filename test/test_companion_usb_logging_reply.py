@@ -9,6 +9,8 @@ from test_replay_reset_integration import extract_braced
 ROOT = Path(__file__).resolve().parents[1]
 
 HARNESS = r'''
+#define MESH_ENABLE_HOST_KISS 0
+#include "helpers/HostKiss.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>

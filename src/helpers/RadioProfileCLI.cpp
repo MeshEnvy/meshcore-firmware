@@ -184,7 +184,7 @@ bool RadioProfileCLI::prepareSavedImage(const char* path, const RadioProfileConf
                                       uint16_t preamble, RadioCrossMode cross, int8_t manual_secondary) {
   if (!fs_ || hold_) return false;
   uint8_t image[ImageSize] = {'R', '2', 1, (uint8_t)config.mode};
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
   // Version 2 keeps the 24-byte layout and CRC; bit 7 records explicit radio2
   // intent. Other settings can save an unused Off slot without claiming it.
   image[2] = 2;
@@ -408,7 +408,7 @@ void RadioProfileCLI::begin(FILESYSTEM* fs, Radio* radio, RTCClock* rtc, bool in
   recoverable_corrupt_store_ = false;
   manual_secondary_ = false;
   secondary_intent_generation_ = 0;
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
   auto_secondary_requested_ = secondary_protocol_overlay_ = false;
   owns_secondary_runtime_ = external_secondary_override_ = false;
 #endif
@@ -512,7 +512,7 @@ void RadioProfileCLI::publish() {
       ? (validReplySetting(reply_setting_) ? reply_setting_ & 7 : RADIO_TX_BOTH) : RADIO_TX_AUTO;
   profiles->reply_force = infrastructure_replies_
       && validReplySetting(reply_setting_) && (reply_setting_ & 8);
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
   protectExternalSecondary();
   if (external_secondary_override_) return;
 #endif
@@ -522,7 +522,7 @@ void RadioProfileCLI::publish() {
   if (hasReplyMutation() && !remote_delivered_) return;
   publish_pending_ = false;
   RadioProfileConfig config = temp_active_ ? temporary_ : saved_;
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
   if (auto_secondary_requested_ && canAutoSecondary()) config = auto_secondary_;
   else if (secondary_protocol_overlay_ && manualSecondaryConfigured() && !secondaryRuntimeBusy()) {
     config.params.protocol = secondary_protocol_;
@@ -530,7 +530,7 @@ void RadioProfileCLI::publish() {
   }
 #endif
   profiles->setSecondary(config, temp_active_);
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
   owns_secondary_runtime_ = auto_secondary_requested_ || secondary_protocol_overlay_;
   if (owns_secondary_runtime_) {
     owned_secondary_snapshot_ = config;
@@ -539,7 +539,7 @@ void RadioProfileCLI::publish() {
 #endif
 }
 
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
 bool RadioProfileCLI::runtimeSecondaryUnchanged() const {
   if (!owns_secondary_runtime_ || !radio_ || !radio_->profiles()) return true;
   const auto* profiles = radio_->profiles();
@@ -564,7 +564,7 @@ bool RadioProfileCLI::hasSecondarySchedule() const {
 }
 
 bool RadioProfileCLI::secondaryRuntimeBusy() const {
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
   if (external_secondary_override_ || !runtimeSecondaryUnchanged()) return true;
 #endif
   if (!fs_ || !radio_) return true;
@@ -576,14 +576,14 @@ bool RadioProfileCLI::secondaryRuntimeBusy() const {
 
 void RadioProfileCLI::noteSecondaryManualChange() {
   ++secondary_intent_generation_;
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
   auto_secondary_requested_ = secondary_protocol_overlay_ = false;
   owns_secondary_runtime_ = external_secondary_override_ = false;
 #endif
 }
 
 bool RadioProfileCLI::canAutoSecondary() const {
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
   if (manual_secondary_ || saved_.mode != RadioProfileMode::Off || secondaryRuntimeBusy()) return false;
   const auto& current = radio_->profiles()->secondary;
   return current.mode == RadioProfileMode::Off || (auto_secondary_requested_
@@ -594,7 +594,7 @@ bool RadioProfileCLI::canAutoSecondary() const {
 }
 
 bool RadioProfileCLI::requestAutoSecondary(const RadioProfileConfig& config) {
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
   if (!canAutoSecondary() || config.mode == RadioProfileMode::Off
       || (uint8_t)config.mode > (uint8_t)RadioProfileMode::RxTx
       || !radio_->validateProfile(config.params)) return false;
@@ -614,7 +614,7 @@ bool RadioProfileCLI::requestAutoSecondary(const RadioProfileConfig& config) {
 }
 
 void RadioProfileCLI::clearAutoSecondary() {
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
   if (!auto_secondary_requested_) return;
   protectExternalSecondary();
   auto_secondary_requested_ = false;
@@ -624,7 +624,7 @@ void RadioProfileCLI::clearAutoSecondary() {
 }
 
 bool RadioProfileCLI::autoSecondaryActive() const {
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
   if (!auto_secondary_requested_ || !canAutoSecondary()) return false;
   const auto& current = radio_->profiles()->secondary;
   return !radio_->profiles()->secondary_temporary && current.mode == auto_secondary_.mode
@@ -635,7 +635,7 @@ bool RadioProfileCLI::autoSecondaryActive() const {
 }
 
 bool RadioProfileCLI::useSecondaryProtocol(RadioProfileProtocol protocol) {
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
   if (protocol == RadioProfileProtocol::MeshCore) {
     clearSecondaryProtocol();
     return true;
@@ -646,6 +646,9 @@ bool RadioProfileCLI::useSecondaryProtocol(RadioProfileProtocol protocol) {
 #endif
 #if MESH_ENABLE_ETHERNET_TUNNEL
       protocol == RadioProfileProtocol::Ethernet ||
+#endif
+#if MESH_ENABLE_HOST_KISS
+      protocol == RadioProfileProtocol::Kiss ||
 #endif
       false;
   if (!supported_protocol || !manualSecondaryConfigured()
@@ -669,7 +672,7 @@ bool RadioProfileCLI::useSecondaryProtocol(RadioProfileProtocol protocol) {
 }
 
 void RadioProfileCLI::clearSecondaryProtocol() {
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
   if (!secondary_protocol_overlay_) return;
   protectExternalSecondary();
   secondary_protocol_overlay_ = false;
@@ -1146,7 +1149,7 @@ bool RadioProfileCLI::handle(const char* command, char* reply, size_t capacity, 
     return true;
   }
   if ((base || temporary) && verb == Get && !*args) {
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
     if (base && autoSecondaryActive()) {
       formatConfig(reply, capacity, auto_secondary_, false, 0, true);
       return true;
@@ -1161,7 +1164,7 @@ bool RadioProfileCLI::handle(const char* command, char* reply, size_t capacity, 
                       temporary, temp_pending_ ? pending_duration_ms_ : temp_remaining_ms_);
     return true;
   }
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
   if (base && verb == Set && !strcmp(args, "auto")) {
     // This clears only saved permission, never an active/pending lease or a
     // schedule. Remote acknowledgement staging must not weaken that contract.
@@ -1322,7 +1325,7 @@ bool RadioProfileCLI::handle(const char* command, char* reply, size_t capacity, 
       noteSecondaryManualChange();
       pending_temporary_ = config; pending_duration_ms_ = minutes * 60000UL;
       temp_start_ms_ = millis() + 2000; temp_pending_ = true;
-#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL
+#if MESH_ENABLE_MESHTEXT_CHAT || MESH_ENABLE_ETHERNET_TUNNEL || MESH_ENABLE_HOST_KISS
       publish_pending_ = true; publish_after_ms_ = temp_start_ms_;
 #endif
     }

@@ -34,6 +34,7 @@
 #include <helpers/MeshtextConfig.h>
 #if MESH_ENABLE_ETHERNET_TUNNEL
 #include <helpers/EthernetTunnelSettings.h>
+#include <helpers/HostKiss.h>
 #include <helpers/esp32/EthernetKissServer.h>
 #endif
 namespace mesh { class BeaconManager; }
@@ -443,6 +444,9 @@ protected:
   // Direct-only OTA inherits the Dispatcher's drop/no-op foreign callbacks.
   bool allowForeignRadioTransmit() const override {
     return _radio_available && _scheduled_reboot_at == 0 && (
+#if MESH_ENABLE_HOST_KISS
+        mesh::hostkiss::radioActive() ||
+#endif
 #if MESH_ENABLE_MESHTEXT_CHAT
         _mt_active ||
 #endif

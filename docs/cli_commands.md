@@ -1212,6 +1212,39 @@ station port 5003. It does not add an SSH server, use `tx.ssh` tags, or bridge
 Ethernet into MeshCore. Conflicting radio2 owners are not overwritten.
 See [Ethernet setup, host commands and limits](radio_profiles.md#esp32-companion-ethernet-over-lora-kiss).
 
+## Full firmware raw radio2 KISS modem
+
+```text
+get kiss
+set kiss.transport usb
+set kiss on
+set kiss off
+```
+
+Full ESP32 and nRF52 LoRa images can keep their normal MeshCore role on
+radio1 while a connected computer sends and receives raw packets on radio2.
+The setting is saved and defaults to **off**. First configure an explicit
+saved `radio2` tuple in `rxtx` mode. `get kiss` reports the transport, state,
+packet counters and any radio2 conflict. Setting changes require a local
+USB, BLE or network management connection.
+
+With USB selected, the normal CLI stays available until the computer sends
+a KISS frame delimiter (`0xC0`). That session then owns USB; functional text
+and debug logging are suppressed without changing their saved preferences.
+KISS RETURN (`C0 FF C0`) or a detected USB disconnect returns to the CLI.
+
+On ESP32, `set kiss.transport tcp` selects a separate KISS listener on the
+station WiFi address, port **5004**. It does not start WiFi or listen on the
+setup AP. One computer can connect at a time. This is an unauthenticated raw
+modem endpoint for a trusted LAN, like the existing Ethernet KISS service.
+
+KISS port 0 DATA maps only to radio2. Packets are 1-255 bytes, unchanged over
+the air, using the normal private LoRa sync word, explicit headers, CRC and
+normal IQ. The host must honor transmit pacing. This interface does not add
+RNode framing, fragmentation or Reticulum routing; those remain host tasks.
+See [Full host KISS framing and limits](kiss_modem_protocol.md#full-firmware-host-kiss)
+for the wire protocol and session rules.
+
 ## Set repeater, room-server, and sensor reply profiles
 
 ```text

@@ -21,6 +21,7 @@
 #include <helpers/UsbLogging.h>
 #include <helpers/UsbLoggingWatchdog.h>
 #include <helpers/UsbLoggingClientActivity.h>
+#include <helpers/HostKiss.h>
 #include <helpers/MorseLoopPolicy.h>
 #include <helpers/PowerManagementUtils.h>
 #if defined(NRF52_PLATFORM) && MESH_ENABLE_SENSOR_TRACKER
@@ -325,6 +326,9 @@ void setup() {
 }
 
 static bool usbLoggingRecoverySafe(void*) {
+#if MESH_ENABLE_HOST_KISS
+  if (mesh::hostkiss::usbActive()) return false;
+#endif
   if (board.isOTAUpdateRunning() || board.isRadioTestActive()
       || radio_driver.isWatchdogObserving() || radio_driver.isCalibratingNoiseFloor()
       || !the_mesh.canRecoverUsbLogging()) return false;
@@ -343,9 +347,22 @@ void loop() {
   bool usb_ready = true;
 #if MESH_USB_CONSOLE_COOPERATIVE
   mesh::serviceUsbLoggingPort();
-  mesh::serviceUsbTerminalPort();
-  if (mesh::takeUsbTerminalSessionReset()) command[0] = 0;
-  usb_ready = mesh::tryCompleteUsbTerminalSessionReset()
+  if (mesh::takeUsbTerminalSessionReset()) {
+#if MESH_ENABLE_HOST_KISS
+    mesh::hostkiss::resetUsbSession();
+#endif
+    command[0] = 0;
+  }
+#endif
+#if MESH_ENABLE_HOST_KISS
+  if (mesh::hostkiss::serviceUsb()) {
+    command[0] = 0;
+    usb_ready = false;
+  }
+#endif
+#if MESH_USB_CONSOLE_COOPERATIVE
+  if (usb_ready) mesh::serviceUsbTerminalPort();
+  usb_ready = usb_ready && mesh::tryCompleteUsbTerminalSessionReset()
       && mesh::canAcceptUsbConsoleCommand();
 #endif
   Stream& console = mesh::usbConsolePort();
@@ -405,6 +422,9 @@ void loop() {
   rtc_clock.tick();
   if (mesh::serviceUsbLoggingWatchdog(usbLoggingRecoverySafe)) board.reboot();
 #if MESH_USB_CONSOLE_COOPERATIVE
+#if MESH_ENABLE_HOST_KISS
+  if (!mesh::hostkiss::usbActive())
+#endif
   mesh::serviceUsbTerminalPort();
 #endif
 #ifdef HAS_EXTERNAL_WATCHDOG
@@ -430,6 +450,10 @@ void loop() {
       && sleep_guard(!morse_timing, mesh::powerdiag::Reason::Morse)
       && sleep_guard(!board.isUsbDataConnected(), mesh::powerdiag::Reason::UsbSession)
       && sleep_guard(!mesh::isUsbLoggingWatchdogArmed(), mesh::powerdiag::Reason::UsbRecovery);
+#if MESH_ENABLE_HOST_KISS
+  can_power_save = can_power_save
+      && sleep_guard(!mesh::hostkiss::usbActive(), mesh::powerdiag::Reason::UsbSession);
+#endif
 #if defined(MOMENTARY_BUTTON_WAKE_FROM_SLEEP) \
     && MOMENTARY_BUTTON_WAKE_FROM_SLEEP \
     && defined(PIN_USER_BTN) && defined(DISPLAY_CLASS)

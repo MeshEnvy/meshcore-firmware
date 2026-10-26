@@ -13,6 +13,7 @@
 #endif
 #include "PrefsSaveReplyGuard.h"
 #include "UsbLoggingWatchdog.h"
+#include "HostKiss.h"
 #include "PowerSavingDiagnostics.h"
 #include "HilStartupTrace.h"
 #if defined(ESP32_PLATFORM)
@@ -182,6 +183,9 @@ void CommonCLI::loop() {
     servicePendingTxPower();
     servicePendingRxSettings();
     _radio_profiles.loop();
+#if MESH_ENABLE_HOST_KISS
+    mesh::hostkiss::loop();
+#endif
     loopManagement();
 #if MESH_ENABLE_TX_BEACONS
     loopBeacons();
@@ -3486,6 +3490,9 @@ bool CommonCLI::handleUDPBridgeCommand(uint32_t sender_timestamp,
 void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* reply) {
     PrefsSaveReplyGuard save_reply(_prefs_save_failures, reply);
     mesh::cli::normalizeCommandVerb(command);
+#if MESH_ENABLE_HOST_KISS
+    if (mesh::hostkiss::handleCommand(command, reply, 157, sender_timestamp == 0)) return;
+#endif
     if (mesh::power::handleBatteryCalibrationCommand(*_board, command, reply, 160,
           [this](float multiplier, char* result, size_t capacity) {
             return applyAndSaveAdcMultiplier(multiplier, result, capacity);

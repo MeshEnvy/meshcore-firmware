@@ -21,6 +21,8 @@ def function(signature):
 
 
 HARNESS = r'''
+#define MESH_ENABLE_HOST_KISS 0
+#include "helpers/HostKiss.h"
 #include <cassert>
 #include <cstdint>
 #include <initializer_list>

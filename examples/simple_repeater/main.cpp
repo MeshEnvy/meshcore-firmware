@@ -17,6 +17,7 @@
 #endif
 #include <helpers/UsbLoggingWatchdog.h>
 #include <helpers/UsbLoggingClientActivity.h>
+#include <helpers/HostKiss.h>
 #include <helpers/MorseLoopPolicy.h>
 #include <helpers/PowerManagementUtils.h>
 #include <helpers/HilStartupTrace.h>
@@ -476,14 +477,31 @@ static void __attribute__((noinline)) serviceCommandInterfaces() {
   bool usb_ready = true;
 #if MESH_USB_CONSOLE_COOPERATIVE
   mesh::serviceUsbLoggingPort();
-  mesh::serviceUsbTerminalPort();
   if (mesh::takeUsbTerminalSessionReset()) {
+#if MESH_ENABLE_HOST_KISS
+    mesh::hostkiss::resetUsbSession();
+#endif
     command[0] = 0;
     command_overflow = false;
     the_mesh.cancelPendingSerialOutput();
   }
+#endif
+#if MESH_ENABLE_HOST_KISS
+  // Claim binary input before a pending terminal listing can append text.
+  // Keep the rest of this function alive for Ethernet and board housekeeping.
+  if (mesh::hostkiss::serviceUsb()) {
+    command[0] = 0;
+    command_overflow = false;
+#if MESH_USB_CONSOLE_COOPERATIVE
+    the_mesh.cancelPendingSerialOutput();
+#endif
+    usb_ready = false;
+  }
+#endif
+#if MESH_USB_CONSOLE_COOPERATIVE
+  if (usb_ready) mesh::serviceUsbTerminalPort();
   // A busy USB session cleanup may defer the CLI, never the radio loop.
-  usb_ready = mesh::tryCompleteUsbTerminalSessionReset();
+  usb_ready = usb_ready && mesh::tryCompleteUsbTerminalSessionReset();
   // Large listings advance from MyMesh::loop without blocking radio service.
   usb_ready = usb_ready && !the_mesh.hasPendingSerialOutput()
       && mesh::canAcceptUsbConsoleCommand();
@@ -614,6 +632,9 @@ static void __attribute__((noinline)) serviceCommandInterfaces() {
 }
 
 static bool usbLoggingRecoverySafe(void*) {
+#if MESH_ENABLE_HOST_KISS
+  if (mesh::hostkiss::usbActive()) return false;
+#endif
   if (board.isOTAUpdateRunning() || board.isRadioTestActive()
       || radio_driver.isWatchdogObserving() || radio_driver.isCalibratingNoiseFloor()
       || !the_mesh.canRecoverUsbLogging()) return false;
@@ -670,6 +691,9 @@ void loop() {
   rtc_clock.tick();
   if (mesh::serviceUsbLoggingWatchdog(usbLoggingRecoverySafe)) board.reboot();
 #if MESH_USB_CONSOLE_COOPERATIVE
+#if MESH_ENABLE_HOST_KISS
+  if (!mesh::hostkiss::usbActive())
+#endif
   mesh::serviceUsbTerminalPort();
 #endif
 
@@ -702,6 +726,10 @@ void loop() {
       && sleep_guard(!board.isUsbDataConnected(), mesh::powerdiag::Reason::UsbSession)
       && sleep_guard(!mesh::isUsbLoggingWatchdogArmed(), mesh::powerdiag::Reason::UsbRecovery)
       && sleep_guard(!mesh::wireless::control().pending(), mesh::powerdiag::Reason::Wireless);
+#if MESH_ENABLE_HOST_KISS
+  can_power_save = can_power_save
+      && sleep_guard(!mesh::hostkiss::usbActive(), mesh::powerdiag::Reason::UsbSession);
+#endif
 #if defined(MOMENTARY_BUTTON_WAKE_FROM_SLEEP) \
     && MOMENTARY_BUTTON_WAKE_FROM_SLEEP \
     && defined(PIN_USER_BTN) && defined(DISPLAY_CLASS)

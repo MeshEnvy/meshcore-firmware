@@ -69,6 +69,9 @@ public:
   }
   ~CustomSX1262Wrapper() { unregisterInterruptAction(); }
   CustomSX1262Wrapper(CustomSX1262& radio, mesh::MainBoard& board) : RadioLibWrapper(radio, board) { }
+#if MESH_ENABLE_HOST_KISS
+  bool supportsHostKiss() const override { return true; }
+#endif
   bool supportsCarrierWave() const override { return true; }
   bool supportsMorseRx() const override { return MESH_ENABLE_MORSE_RX && supportsRadioDeepInit(); }
 #if MESH_ENABLE_MESHTEXT_WIRE
@@ -103,7 +106,7 @@ protected:
     return restoreSX126xPacketRamp(static_cast<CustomSX1262*>(_radio)) == RADIOLIB_ERR_NONE
         && RadioLibWrapper::restoreCarrierWaveModem();
   }
-#if MESH_ENABLE_MESHTEXT_WIRE || MESH_ENABLE_ETHERNET_WIRE
+#if MESH_ENABLE_MESHTEXT_WIRE || MESH_ENABLE_ETHERNET_WIRE || MESH_ENABLE_HOST_KISS
   bool applyProtocol(mesh::RadioProfileProtocol protocol) override {
     uint8_t sync = 0x12;
     if (protocol == mesh::RadioProfileProtocol::Meshtext) {
@@ -114,10 +117,14 @@ protected:
       if (!supportsEthernetTunnel()) return false;
       sync = 0x16;
 #endif
+#if MESH_ENABLE_HOST_KISS
+    } else if (protocol == mesh::RadioProfileProtocol::Kiss) {
+      if (!supportsHostKiss()) return false;
+#endif
     } else if (protocol != mesh::RadioProfileProtocol::MeshCore) return false;
     // No alternate wire implementation means no modem write is needed.
     // Ethernet-only builds must still restore the MeshCore syncword.
-#if !MESH_ENABLE_ETHERNET_WIRE
+#if !MESH_ENABLE_ETHERNET_WIRE && !MESH_ENABLE_HOST_KISS
     if (!supportsMeshtext()) return protocol == mesh::RadioProfileProtocol::MeshCore;
 #endif
     auto* radio = static_cast<CustomSX1262*>(_radio);

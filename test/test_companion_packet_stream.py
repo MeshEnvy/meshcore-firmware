@@ -174,7 +174,8 @@ class CompanionPacketStreamTests(unittest.TestCase):
         functions = usb[start:end] + '\n' + '\n'.join(method(usb, sig) for sig in (
             'bool hasDedicatedUsbLoggingPort()', 'bool isDedicatedUsbLoggingPortConfigured()',
             'bool usbLoggingInterfaceRestartRequired()', 'const char* usbLoggingPortDescription()',
-            'void beginUsbLoggingPort()', 'Stream& usbLoggingPort()'))
+            'void beginUsbLoggingPort()', 'static Stream& rawUsbLoggingPort()',
+            'Stream& usbLoggingPort()'))
         start = mesh.index('  if (strcmp(command, "get usb.logging") == 0)')
         end = mesh.index('\n#endif', start)
         boot_start = mesh.index('  const bool usb_logging_enabled = _prefs.usb_logging_enabled != 0;')

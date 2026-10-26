@@ -114,6 +114,9 @@ public:
   virtual bool validateProfile(const RadioProfileParams&) const { return false; }
   virtual bool supportsMeshtext() const { return false; }
   virtual bool supportsEthernetTunnel() const { return false; }
+#if MESH_ENABLE_HOST_KISS
+  virtual bool supportsHostKiss() const { return false; }
+#endif
 #if MESH_ENABLE_TX_BEACONS
   // Check the requested antenna power at the prospective beacon frequency.
   // Validation must not retune the radio or alter its current power setting.
@@ -677,6 +680,17 @@ public:
   void setBeaconWakeDelay(uint32_t now, uint32_t delay, bool enabled) {
     beacon_wake_at = now + delay;
     beacon_wake_enabled = enabled;
+  }
+#endif
+#if MESH_ENABLE_HOST_KISS
+  // The raw host modem can use radio2 only. It shares the bounded scheduler
+  // slot and normal TX admission; it never falls back onto radio1.
+  bool submitHostKissFrame(const uint8_t* bytes, size_t length, uint32_t generation) {
+    return queueForeignRadioFrame(bytes, length, 1, generation, RadioProfileProtocol::Kiss);
+  }
+  bool cancelHostKissFrame() { return discardQueuedForeignRadioFrame(RadioProfileProtocol::Kiss); }
+  bool hostKissFramePending() const {
+    return hasForeignRadioFrame() && foreign_radio_protocol == RadioProfileProtocol::Kiss;
   }
 #endif
   Radio* getProfileRadio() { return _radio; }

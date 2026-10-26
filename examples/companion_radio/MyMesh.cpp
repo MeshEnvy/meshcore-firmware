@@ -28,6 +28,7 @@
 #include <helpers/ui/StartupScreen.h>
 #include "NotificationSettingsFile.h"
 #include "MyMesh.h"
+#include <helpers/HostKiss.h>
 #if defined(RAK_4631) && defined(COMPANION_RADIO_FULL) \
     || (defined(STM32_PLATFORM) && defined(STM32WLxx) && COMPANION_FEATURE_TEXT_TERMINAL)
 #include "CompanionHelpWriter.h"
@@ -3388,6 +3389,9 @@ void MyMesh::begin(bool has_display, bool radio_available,
 #endif
 
   configureRadioFromPrefs();
+#if MESH_ENABLE_HOST_KISS
+  mesh::hostkiss::begin(_store->getPrimaryFS(), *_radio, _radio_profiles, *this);
+#endif
 #if MESH_ENABLE_TX_BEACONS
   beginBeacons();
 #endif
@@ -10790,6 +10794,9 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
   if (mesh::esp32::handlePowerTestCommand(command, reply, reply_capacity,
                                          sender_timestamp == 0)) return true;
 #endif
+#if MESH_ENABLE_HOST_KISS
+  if (mesh::hostkiss::handleCommand(command, reply, reply_capacity, sender_timestamp == 0)) return true;
+#endif
   if (mesh::power::handleRegulatorCommand(command, reply, reply_capacity)) return true;
 #if defined(WIO_E5_MINI_HEADLESS_COMPANION_UI)
   if (handleCompactLedCommand(command, reply, reply_capacity)) return true;
@@ -11164,6 +11171,7 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
 }
 
 void MyMesh::checkCLIRescueCmd() {
+  if (mesh::isUsbBinaryStreamOwned()) return;
   Stream& output = mesh::usbTerminalPort();
   Stream& input = mesh::usbCompanionPort();
   size_t len = strnlen(cli_command, sizeof(cli_command));
@@ -11525,6 +11533,9 @@ void MyMesh::loop() {
 #endif
 
   if (!mesh::morseTimingActive(_radio)) _radio_profiles.loop();
+#if MESH_ENABLE_HOST_KISS
+  if (!mesh::morseTimingActive(_radio)) mesh::hostkiss::loop();
+#endif
 #if MESH_ENABLE_TX_BEACONS
   if (!mesh::morseTimingActive(_radio)) loopBeacons();
 #endif

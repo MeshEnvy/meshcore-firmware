@@ -1,5 +1,9 @@
 #include "ManagementFeatureConfig.h"
 #include "CommonCLI.h"
+#include "HostKissConfig.h"
+#if MESH_ENABLE_HOST_KISS
+#include "HostKiss.h"
+#endif
 #include <new>
 #if MESH_ENABLE_MANAGEMENT_REPORTING
 #include "ManagementReporter.h"
@@ -264,6 +268,10 @@ static bool resolveDataScope(DataRouteState& route, TransportKey& scope,
 
 void CommonCLI::beginManagement(mesh::Mesh& mesh, FILESYSTEM* fs) {
   _management_mesh = &mesh; _management_fs = fs;
+#if MESH_ENABLE_HOST_KISS
+  if (auto* radio = _callbacks->getProfileRadio())
+    mesh::hostkiss::begin(fs, *radio, _radio_profiles, mesh);
+#endif
 #if MESH_ENABLE_TX_BEACONS
   beginBeacons();
 #endif

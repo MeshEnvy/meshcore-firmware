@@ -16,6 +16,8 @@ CONTEXT = (ROOT / "src/helpers/ota/OtaContext.h").read_text()
 
 
 HARNESS = r'''
+#define MESH_ENABLE_HOST_KISS 0
+#include "helpers/HostKiss.h"
 #include <cassert>
 #include <algorithm>
 #include <cstdio>

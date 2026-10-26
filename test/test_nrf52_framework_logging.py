@@ -64,6 +64,7 @@ class Stream {
 """
 
 RUNTIME = r'''
+#define MESH_ENABLE_HOST_KISS 0
 #include <atomic>
 #include <cassert>
 #include <cstring>
@@ -202,8 +203,10 @@ class Nrf52FrameworkLoggingTest(unittest.TestCase):
         source = (ROOT / "src/helpers/UsbLogging.cpp").read_text()
         header = (ROOT / "src/helpers/UsbLogging.h").read_text()
         parts = {
-            "DEBUG_GATE": extract_braced(header, "inline bool isUsbDebugLoggingEnabled("),
-            "LOGGING_PORT": extract_braced(source, "Stream& usbLoggingPort("),
+            "DEBUG_GATE": extract_braced(header, "inline bool isUsbBinaryStreamOwned(") + "\n"
+                + extract_braced(header, "inline bool isUsbDebugLoggingEnabled("),
+            "LOGGING_PORT": "\n".join(extract_braced(source, signature) for signature in (
+                "static Stream& rawUsbLoggingPort(", "Stream& usbLoggingPort(")),
             "DEBUG_PORT": extract_braced(source, "Stream& usbDebugPort("),
         }
         hook = extract_braced(source, 'extern "C" size_t meshNrf52FrameworkDebugWrite(')

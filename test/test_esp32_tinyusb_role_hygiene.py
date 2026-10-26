@@ -5,6 +5,8 @@ from pathlib import Path
 import re
 import unittest
 
+from cpp_source import body
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ROLES = ("simple_repeater", "simple_room_server")
@@ -19,7 +21,7 @@ class Esp32TinyUsbRoleHygieneTest(unittest.TestCase):
         text = source("src/helpers/UsbLogging.cpp")
         self.assertRegex(
             text,
-            r"Stream& usbConsolePort\(\)\s*\{\s*"
+            r"static Stream& rawUsbConsolePort\(\)\s*\{\s*"
             r"#if MESH_ESP32_TINYUSB_NONBLOCKING\s+"
             r"return buffered_esp32_tinyusb_terminal_port;\s+"
             r"#elif MESH_ESP32_HWCDC_SESSION_GUARD\s+"
@@ -28,6 +30,11 @@ class Esp32TinyUsbRoleHygieneTest(unittest.TestCase):
             r"return buffered_primary_usb_terminal_port;\s+"
             r"#else\s+return Serial;\s+#endif",
         )
+        # The shared binary-owner facade wraps the same transport selection.
+        # With host KISS omitted, every platform still gets its original port.
+        facade = body(text, "Stream& usbConsolePort()")
+        self.assertIn("guarded.use(rawUsbConsolePort());", facade)
+        self.assertRegex(facade, r"#else\s+return rawUsbConsolePort\(\);\s+#endif")
 
     def test_role_output_never_bypasses_the_usb_facade(self):
         # A capacity check outside Serial.write() cannot make Arduino's

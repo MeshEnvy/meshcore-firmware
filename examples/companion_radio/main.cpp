@@ -18,6 +18,7 @@
 #include <Mesh.h>
 #include <helpers/BluetoothMac.h>
 #include "MyMesh.h"
+#include <helpers/HostKiss.h>
 #include <helpers/CompanionReader.h>
 #include "CompanionBluetooth.h"
 #include "CompanionWireless.h"
@@ -1050,9 +1051,21 @@ static bool serviceUsbMotaResponseBoundary() {
 // loss edge, before any protocol parser runs. No line, login, recipient, queued
 // text, or mOTA attachment may survive into the next host session.
 static bool usb_terminal_host_reset_completion_pending = false;
+#if MESH_ENABLE_HOST_KISS
+static bool host_kiss_usb_parked = false;
+static bool host_kiss_usb_restore_enabled = false;
+#endif
 static uint32_t usb_terminal_host_reset_retry_at = 0;
 
 static void resetUsbTerminalHostSession() {
+#if MESH_ENABLE_HOST_KISS
+  mesh::hostkiss::resetUsbSession();
+  if (host_kiss_usb_parked) {
+    mesh::setUsbBinaryStreamOwned(false);
+    if (host_kiss_usb_restore_enabled && interface_manager.isEnabled()) usb_serial_interface.enable();
+    host_kiss_usb_parked = host_kiss_usb_restore_enabled = false;
+  }
+#endif
 #if COMPANION_FEATURE_READER
   mesh::cancelReaderCommand(&mesh::usbTerminalPort());
 #endif
@@ -1093,6 +1106,49 @@ static void resetUsbTerminalHostSession() {
   }
   usb_terminal_host_reset_completion_pending = false;
   usb_hwcdc_host_presence.reset();
+#endif
+}
+
+// A saved KISS feature takes USB only after an explicit KISS delimiter.
+// Park this one Companion transport; BLE/WiFi and the primary mesh stay live.
+static bool serviceCompanionHostKissUsb() {
+#if MESH_ENABLE_HOST_KISS
+  const bool claimed = mesh::hostkiss::serviceUsb();
+  if (claimed && mesh::hostkiss::usbActive() && !host_kiss_usb_parked) {
+    host_kiss_usb_restore_enabled = usb_serial_interface.isEnabled();
+    cancelUsbSerialOperations();
+#if COMPANION_FEATURE_READER
+    mesh::cancelReaderCommand(&mesh::usbTerminalPort());
+#endif
+    the_mesh.resetUsbHostSessionInput();
+#if COMPANION_FEATURE_USB_MOTA_SOURCE
+    if (usb_mota_mode) leaveUsbMotaMode(false);
+    mesh::ota::OtaContext::serialFolderSource().resetSessionState();
+#endif
+    if (the_mesh.isTerminalMode()) leaveUsbTerminalMode(false);
+    usb_binary_startup_probe.cancel();
+    usb_ascii_session_default.cancel();
+    clearUsbTerminalLine();
+    usb_terminal_discard_line = usb_logging_terminal_mode = false;
+    mesh::discardUsbTerminalOutput();
+    usb_serial_interface.disable();
+    host_kiss_usb_parked = true;
+  }
+  if (host_kiss_usb_parked && !claimed && !mesh::hostkiss::usbActive()) {
+    mesh::setUsbBinaryStreamOwned(false);
+    host_kiss_usb_parked = false;
+    if (host_kiss_usb_restore_enabled && interface_manager.isEnabled()) usb_serial_interface.enable();
+    host_kiss_usb_restore_enabled = false;
+    clearUsbTerminalLine();
+    usb_terminal_discard_line = false;
+    usb_serial_interface.resetSessionState();
+    usb_ascii_session_default.request(usb_serial_interface.getCompletedFrameCount());
+  }
+  if (host_kiss_usb_parked && claimed && !mesh::hostkiss::usbActive())
+    mesh::setUsbBinaryStreamOwned(true);  // RETURN retires at the next poll.
+  return claimed;
+#else
+  return false;
 #endif
 }
 
@@ -1392,6 +1448,7 @@ static void serviceUsbTerminal() {
 }
 
 static void serviceUsbLoggingOwnership(bool logging_enabled) {
+  if (mesh::hostkiss::usbActive()) return;
   // A saved logging-on preference makes the one available TTY behave like a
   // logging repeater: plaintext diagnostics plus an input-capable CLI. Put the
   // Companion interface into passthrough before it can mix framed traffic with
@@ -4199,6 +4256,7 @@ static void serviceUsbLoggingOnlySession() {
 }
 
 static bool usbLoggingRecoverySafe(void*) {
+  if (mesh::hostkiss::usbActive()) return false;
   if (board.isOTAUpdateRunning() || board.isRadioTestActive()
       || radio_driver.isWatchdogObserving() || radio_driver.isCalibratingNoiseFloor()
       || !the_mesh.canRecoverUsbLogging()) return false;
@@ -4245,9 +4303,12 @@ void loop() {
   serviceUsbLoggingOnlySession();
 #if defined(ENABLE_USB_INTERFACE)
   serviceUsbTerminalHostSessionReset();
-  serviceUsbAsciiSessionDefault();
-  serviceUsbLoggingReplyBarrier();
-  serviceUsbLoggingOwnership(mesh::isUsbLoggingEnabled()); // Before framed dispatch.
+  const bool host_kiss_usb_claimed = serviceCompanionHostKissUsb();
+  if (!host_kiss_usb_claimed) {
+    serviceUsbAsciiSessionDefault();
+    serviceUsbLoggingReplyBarrier();
+    serviceUsbLoggingOwnership(mesh::isUsbLoggingEnabled()); // Before framed dispatch.
+  }
 #endif
   // Identify nRF52 CDC 1 when a terminal opens it. Doing this on the connection
   // edge avoids losing the marker before the host has opened the port.
@@ -4258,13 +4319,15 @@ void loop() {
   mesh::serviceUsbTerminalPort();
 #endif
 #if defined(ENABLE_USB_INTERFACE)
-  expireUsbBinaryStartupProbeBeforeDispatch();
+  if (!host_kiss_usb_claimed) {
+    expireUsbBinaryStartupProbeBeforeDispatch();
 #if COMPANION_FEATURE_USB_MOTA_SOURCE
-  serviceUsbMotaResponseBoundary();
+    serviceUsbMotaResponseBoundary();
 #endif
+  }
 #endif
 #if defined(ENABLE_USB_INTERFACE)
-  syncUsbTerminalInputEditing();
+  if (!host_kiss_usb_claimed) syncUsbTerminalInputEditing();
 #endif
   the_mesh.loop();
 #if defined(NRF52_PLATFORM) && defined(EXTRAFS) && !defined(QSPIFLASH)
@@ -4286,8 +4349,10 @@ void loop() {
   serviceCompanionRadioRecovery();
 #endif
 #if defined(ENABLE_USB_INTERFACE)
-  serviceUsbTerminal();
-  syncUsbTerminalInputEditing();
+  if (!host_kiss_usb_claimed) {
+    serviceUsbTerminal();
+    syncUsbTerminalInputEditing();
+  }
   // Commands can synchronously enqueue a multi-line reply. Give it the
   // remaining CDC FIFO capacity now; later loops retain any unwritten suffix.
   mesh::serviceUsbTerminalPort();
