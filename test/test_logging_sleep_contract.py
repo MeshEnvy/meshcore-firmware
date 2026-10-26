@@ -44,8 +44,10 @@ struct MyMesh {
   const AbstractBridge* activeBridge() const { return bridge; }
   struct { bool pending = false; } deferred_cli_command;
   struct {
+    bool radio_settings_pending = false;
     bool hasActiveUserGpioTimer() const { return false; }
     bool hasPendingTxPower() const { return false; }
+    bool hasPendingRadioSettings() const { return radio_settings_pending; }
   } _cli;
   struct { int getNumClients() const { return 0; } } acl;
   struct { bool battery_alert_enabled = false; } _prefs;
@@ -83,6 +85,11 @@ int main() {
   try {
     MyMesh node;
     require(node.getPowerSaveSleepSeconds(30) == 30, "quiet node cannot sleep");
+    node._cli.radio_settings_pending = true;
+    require(node.hasPendingWork(), "pending radio settings lost their sleep blocker");
+    require(node.getPowerSaveSleepSeconds(30) == 0,
+            "device sleep can interrupt pending radio settings");
+    node._cli.radio_settings_pending = false;
     MQTTBridge logger;
     node.bridge = &logger;
     require(node.getPowerSaveSleepSeconds(30) == 30, "stopped MQTT blocked sleep");

@@ -42,9 +42,10 @@ struct Board{
  void setInhibitSleep(bool enabled){inhibit_sleep=enabled;}
 }board;
 struct Mesh{
- bool setup=false,recovery=false,active=false;
+ bool setup=false,recovery=false,active=false,stopping=false;
  bool isWebConfigSetupActive(){return setup;}
  bool isWebConfigWiFiRecoveryActive(){return recovery;}
+ bool isWebConfigWiFiTransitionActive(){return setup||stopping;}
  bool isWebConfigActiveOrStopping(){return active;}
  bool startWebConfig(bool,char*){return false;}
  void stopWebConfig(){setup=false;}
@@ -113,6 +114,17 @@ int main(int argc,char** argv){
   sdk_mode=WIFI_STA;board.ota=false;serviceCompanionWiFiCredentialReload();
   assert(!companion_wifi_credential_reload_pending&&companion_wifi_credential_reload_at==0);
   assert(credential_loads==1&&mode_writes==1&&disconnects==1&&joins==1);
+ }else if(scenario=="transition_reload"){
+#ifdef WITH_WEBCONFIG
+  sdk_mode=WIFI_STA;board.ota=false;the_mesh.stopping=true;
+  serviceCompanionWiFiCredentialReload();
+  assert(companion_wifi_credential_reload_pending&&companion_wifi_credential_reload_at==1);
+  assert(credential_loads==0&&mode_writes==0&&disconnects==0&&joins==0);
+  // The SDK AP may be gone while WebConfig still owns its teardown barrier.
+  the_mesh.stopping=false;serviceCompanionWiFiCredentialReload();
+  assert(!companion_wifi_credential_reload_pending&&companion_wifi_credential_reload_at==0);
+  assert(credential_loads==1&&mode_writes==1&&disconnects==1&&joins==1);
+#endif
  }else if(scenario=="setup_handoff"){
 #ifdef WITH_WEBCONFIG
   sdk_mode=WIFI_AP_STA;board.ota=false;the_mesh.setup=the_mesh.recovery=true;

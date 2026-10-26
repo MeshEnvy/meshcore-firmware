@@ -145,8 +145,9 @@ struct MyMesh : Callbacks {
   }
   struct { bool pending = false; } deferred_cli_command;
   struct {
+    bool pending_radio_settings = false;
     bool hasActiveUserGpioTimer() const { return false; }
-    bool hasPendingTxPower() const { return false; }
+    bool hasPendingRadioSettings() const { return pending_radio_settings; }
   } _cli;
   struct {
     bool isWatchdogObserving() const { return false; }
@@ -188,6 +189,13 @@ int main() {
   {
     MyMesh node;
     assert(node.getPowerSaveSleepSeconds(30) == 30);
+    // Deferred radio settings own an awake loop even without an active UART.
+    node._cli.pending_radio_settings = true;
+    assert(node.pendingWorkReason() == mesh::powerdiag::mask(mesh::powerdiag::Reason::Scheduled));
+    assert(node.hasPendingWork() && node.getPowerSaveSleepMilliseconds(30000) == 0);
+    assert(node.getPowerSaveSleepSeconds(30) == 0);
+    node._cli.pending_radio_settings = false;
+    assert(!node.hasPendingWork() && node.getPowerSaveSleepSeconds(30) == 30);
     char status[161]; std::memset(status, '!', sizeof(status));
     node.formatRs232Status(status); assert(status[160] == '!');
     assert(std::strstr(status, "saved=off running=off"));

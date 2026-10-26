@@ -325,6 +325,7 @@ struct RadioLibWrapper {
   bool supported=true;
   bool supportsMeshtext() const { return supported; }
   bool _rx_ps_armed=true,_params_valid=true,_dbm_valid=false,_dbm_applied=false,_rx_boosted_gain_valid=false;
+  bool _rx_boosted_gain_applied=true,gain_ok=true;
   int state=1;uint8_t _cur_sf=11,_cur_cr=5;float _cur_freq=906.875,_cur_bw=250;
   int8_t _cur_dbm=22;bool _cur_rx_boosted_gain=false;
   mesh::RadioProfileProtocol _physical_protocol=mesh::RadioProfileProtocol::Meshtext;
@@ -333,7 +334,7 @@ struct RadioLibWrapper {
   bool applyParams(float,float,uint8_t,uint8_t) { return true; }
   uint16_t currentPreambleLength() { return 16; }
   int applyCachedTxPower(int8_t) { return 0; }
-  bool applyRxBoostedGainMode(bool) { return true; }
+  bool applyRxBoostedGainMode(bool) { return gain_ok; }
   void recalibrateNoiseFloor() {}
   @WIRE@
   bool restoreAfterDeepInit();
@@ -353,8 +354,10 @@ int main() {
   assert(!invalid.applyProtocol(static_cast<Protocol>(99)) && invalid.chip.step==0);
   RadioLibWrapper w;assert(w.restoreAfterDeepInit());
   assert(w.chip.sync==0x2b && w.chip.crc && w.chip.explicit_header && !w.chip.iq);
-  assert(!w._rx_ps_armed && w.state==STATE_IDLE);
+  assert(!w._rx_ps_armed && w.state==STATE_IDLE && !w._rx_boosted_gain_applied);
   w._physical_protocol=Protocol::MeshCore;assert(w.restoreAfterDeepInit());assert(w.chip.sync==0x12);
+  w._rx_boosted_gain_valid=true;assert(w.restoreAfterDeepInit() && w._rx_boosted_gain_applied);
+  w.gain_ok=false;assert(!w.restoreAfterDeepInit() && !w._rx_boosted_gain_applied);
   RadioLibWrapper disabled;disabled.supported=false;
   assert(disabled.applyProtocol(Protocol::MeshCore));
   assert(!disabled.applyProtocol(Protocol::Meshtext) && disabled.chip.step==0);

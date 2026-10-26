@@ -76,6 +76,7 @@ struct RadioLibWrapper {
   PhysicalLayer* _radio;
   mesh::MainBoard* _board;
   bool _params_valid = true, _rx_ps_armed = true, _dbm_valid = false, _dbm_applied = false, _rx_boosted_gain_valid = false;
+  bool _rx_boosted_gain_applied = true;
   bool _profile_repair_required = false;
   int state = 1;
   float _cur_freq = 906.875f, _cur_bw = 250;
@@ -142,7 +143,7 @@ static void failures_and_recovery() {
     assert(wrapper.restoreAfterDeepInit());
     assert(!wrapper._profile_repair_required);
     assert(chip.sync == 0x2b && chip.crc && chip.explicit_header && !chip.iq);
-    assert(!wrapper._rx_ps_armed && wrapper.state == STATE_IDLE);
+    assert(!wrapper._rx_ps_armed && wrapper.state == STATE_IDLE && !wrapper._rx_boosted_gain_applied);
     chip.fail_at = fail;
     wrapper._profile_repair_required = true;
     assert(!wrapper.restoreAfterDeepInit());

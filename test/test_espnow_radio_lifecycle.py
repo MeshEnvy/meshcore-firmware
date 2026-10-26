@@ -142,10 +142,9 @@ class EspNowLifecycleTests(unittest.TestCase):
         mqtt_switch = method(common, 'if (strncmp(config, "mqtt.enabled ", 13) == 0)')
         self.assertIn('enable ? _callbacks->setMqttBridgeState(true)', mqtt_switch)
         self.assertIn(': _callbacks->requestMqttBridgeStop()', mqtt_switch)
-        # Reject an unsafe restart before changing saved intent. An accepted
-        # OFF command saves successfully before signalling cooperative stop.
-        self.assertLess(mqtt_switch.index('isMqttBridgeStopping()'),
-                        mqtt_switch.index('_prefs->bridge_enabled ='))
+        # Save desired state even during teardown; the role queues startup
+        # until stopping finishes. OFF still saves before cooperative stop.
+        self.assertNotIn('isMqttBridgeStopping()', mqtt_switch)
         self.assertLess(mqtt_switch.index('if (!trySavePrefs())'),
                         mqtt_switch.index('setMqttBridgeState(true)'))
         self.assertLess(mqtt_switch.index('if (!trySavePrefs())'),
@@ -161,6 +160,7 @@ class EspNowLifecycleTests(unittest.TestCase):
             espnow = method(header, 'bool setEspNowBridgeState(bool enable) override')
             self.assertIn('if (espnow_bridge.isRunning()) espnow_bridge.end();', mqtt)
             self.assertLess(mqtt.index('isStopping()'), mqtt.index('espnow_bridge.end()'))
+            self.assertIn('->isStartPending()', mqtt)
             self.assertIn('->requestStop()', stop)
             self.assertNotIn('->end()', stop)
             self.assertIn('if (mqtt_bridge' if role == 'simple_repeater' else 'if (bridge', espnow)

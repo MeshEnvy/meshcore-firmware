@@ -253,8 +253,10 @@ mesh::RadioParamApplyResult CommonCLI::applyRxSetting(uint8_t setting) {
   const mesh::Radio* radio = _callbacks->getProfileRadio();
   if (mesh::morseTimingActive(radio) || (radio && radio->isCarrierWaveActive())) return Result::BUSY;
   switch (setting) {
+#if !defined(STM32_PLATFORM) || !defined(STM32WLxx) || !defined(USE_STM32WL)
     case RxGain:
       return _callbacks->trySetRxBoostedGain(_prefs->rx_boosted_gain != 0);
+#endif
     case RxPowerSaving:
       return _callbacks->trySetRxPowerSaving(_prefs->rx_powersaving_enabled != 0,
           _prefs->rx_ps_rx_us, _prefs->rx_ps_sleep_us);
@@ -265,9 +267,11 @@ mesh::RadioParamApplyResult CommonCLI::applyRxSetting(uint8_t setting) {
       return _callbacks->tryConfigSideDetectors(_prefs->extra_sf, count, _prefs->bw);
     }
 #endif
+#if !defined(STM32_PLATFORM) || !defined(STM32WLxx) || !defined(USE_STM32WL)
     case RxRfRx:
       return _callbacks->trySetRxPowerSavingRfRxDisabled(
           (_rx_settings_pending & RxRfRxDisabled) != 0);
+#endif
     default: return Result::FAILED;
   }
 }
@@ -276,7 +280,14 @@ void CommonCLI::servicePendingRxSettings() {
   if (!(_rx_settings_pending & RxPendingMask) || (_rx_settings_retry_at
       && static_cast<int32_t>(millis() - _rx_settings_retry_at) < 0)) return;
   bool failed = false;
-  for (uint8_t setting = RxGain; setting <= RxRfRx; setting <<= 1) {
+#if defined(STM32_PLATFORM) && defined(STM32WLxx) && defined(USE_STM32WL)
+  // The integrated driver supports only the RXPS-off transaction below.
+  // Gain, RF_RX control and side detectors cannot acquire pending targets.
+  constexpr uint8_t first = RxPowerSaving, last = RxPowerSaving;
+#else
+  constexpr uint8_t first = RxGain, last = RxRfRx;
+#endif
+  for (uint8_t setting = first; setting <= last; setting <<= 1) {
     if (!(_rx_settings_pending & setting)) continue;
     const auto result = applyRxSetting(setting);
     if (result == mesh::RadioParamApplyResult::APPLIED) _rx_settings_pending &= ~setting;
@@ -4782,7 +4793,14 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       mesh::cli::formatError(reply, 160, "state must be on or off");
       return;
     }
-    if (!_callbacks->supportsRxBoostedGain()) {
+#if defined(STM32_PLATFORM) && defined(STM32WLxx) && defined(USE_STM32WL)
+    // CustomSTM32WLxWrapper has no runtime gain/RXPS/RF_RX controls. Fold
+    // unreachable setters without changing their validation or error replies.
+    constexpr bool gain_supported = false;
+#else
+    const bool gain_supported = _callbacks->supportsRxBoostedGain();
+#endif
+    if (!gain_supported) {
       mesh::cli::formatError(reply, 160, "unsupported");
       return;
     }
@@ -4865,7 +4883,12 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       return;
     }
 
-    if (!_callbacks->supportsRxPowerSavingRfRxDisable()) {
+#if defined(STM32_PLATFORM) && defined(STM32WLxx) && defined(USE_STM32WL)
+    constexpr bool rf_rx_control_supported = false;
+#else
+    const bool rf_rx_control_supported = _callbacks->supportsRxPowerSavingRfRxDisable();
+#endif
+    if (!rf_rx_control_supported) {
       mesh::cli::formatError(reply, 160, "unsupported");
       return;
     }
@@ -4909,7 +4932,16 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       return;
     }
     using mesh::cli::RxPowerSavingArgumentMode;
-    if (!_callbacks->supportsRxPowerSaving() && parsed.mode != RxPowerSavingArgumentMode::Off) {
+#if defined(STM32_PLATFORM) && defined(STM32WLxx) && defined(USE_STM32WL)
+#ifdef WRAPPER_CLASS
+    static_assert(!WRAPPER_CLASS::SupportsRxPowerSaving,
+        "Revisit STM32WL CLI folding when the integrated driver gains RXPS");
+#endif
+    constexpr bool powersaving_supported = false;
+#else
+    const bool powersaving_supported = _callbacks->supportsRxPowerSaving();
+#endif
+    if (!powersaving_supported && parsed.mode != RxPowerSavingArgumentMode::Off) {
       strcpy(reply, "ERROR: RX powersaving unsupported");
       return;
     }

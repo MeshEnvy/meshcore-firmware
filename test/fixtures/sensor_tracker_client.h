@@ -169,7 +169,15 @@ public:
   FakeTrigger* alert_tasks[4] = {&alert1, &alert2};
   int num_alert_tasks = 2;
   struct CLI {
-    void servicePendingTxPower() {}
+    unsigned tx_services = 0, rx_services = 0;
+    bool pending_radio_settings = false;
+    void servicePendingTxPower() { ++tx_services; }
+    void servicePendingRxSettings() { ++rx_services; }
+    struct Profiles {
+      unsigned tuning_services = 0;
+      void servicePendingTuning() { ++tuning_services; }
+    } profiles;
+    Profiles& radioProfiles() { return profiles; }
     bool batteryAllowsForward(bool) const { return true; }
     bool batteryAllowsTransmit(const mesh::Packet*) const { return true; }
     struct NoMorseReply { void complete(const void*) {} void fail(const void*) {} } morse;
@@ -180,13 +188,15 @@ public:
     SensorMesh* owner = nullptr;
     void loop();
     bool hasActiveUserGpioTimer() const { return active; }
-    bool hasPendingTxPower() const { return false; }
+    bool hasPendingRadioSettings() const { return pending_radio_settings; }
   } _cli;
   struct ClockSync { unsigned observed = 0, loops = 0;
     void loop() { ++loops; }
     void observeAcceptedFlood(const mesh::Packet*) { ++observed; } } _clock_sync;
   uint32_t set_radio_at = 0, revert_radio_at = 0;
   bool saved_radio_apply_pending = false, temporary = false, pending_ota = false, dual = false;
+  unsigned primary_radio_services = 0;
+  void servicePendingPrimaryRadioSettings(bool tx_gap) { assert(tx_gap); ++primary_radio_services; }
   bool queue_wake = false, retry_wake = false, available = true;
   bool allocation_failure = false, admission_failure = false;
   unsigned created = 0, direct_sends = 0, flood_sends = 0, adverts = 0, zero_hops = 0;

@@ -1,4 +1,8 @@
 #pragma once
+
+#ifndef USE_STM32WL
+#define USE_STM32WL
+#endif
 #include "SX126xReceiveMode.h"
 
 #include "CustomSTM32WLx.h"

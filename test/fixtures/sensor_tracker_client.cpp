@@ -53,7 +53,13 @@ static void transmitted(SensorMesh& mesh) {
   assert(mesh.pool.queued.size() == 1 && mesh.tracker_pending);
   Packet* packet = mesh.pool.removeOutboundByIdx(0);
   mesh.pool.in_flight = packet;
+  const auto tx_services = mesh._cli.tx_services, rx_services = mesh._cli.rx_services;
+  const auto tuning_services = mesh._cli.profiles.tuning_services;
+  const auto primary_services = mesh.primary_radio_services;
   mesh.onSendComplete(packet);
+  assert(mesh._cli.tx_services == tx_services + 1 && mesh._cli.rx_services == rx_services + 1);
+  assert(mesh._cli.profiles.tuning_services == tuning_services + 1);
+  assert(mesh.primary_radio_services == primary_services + 1);
   assert(mesh.tracker_sent && mesh.tracker_reply_until == uint32_t(mesh.now_ms + 20000));
   // The dispatcher owns and frees the original packet after this callback.
   mesh.pool.in_flight = nullptr; mesh.releasePacket(packet);
@@ -640,6 +646,7 @@ static void gpsAndMaintenance() {
   { SensorMesh mesh; configure(mesh); queueCheck(mesh); transmitted(mesh); assert(response(mesh, Safe));
     bool* inhibitors[] = {&mesh.board.usb, &mesh.board.ota, &mesh.board.test, &mesh.temporary,
       &mesh.pending_ota, &mesh.dual, &mesh.saved_radio_apply_pending, &mesh._cli.active,
+      &mesh._cli.pending_radio_settings,
       &mesh.queue_wake, &mesh.retry_wake, &mesh::test_logging_watchdog};
     for (bool* condition : inhibitors) {
       *condition = true; assert(mesh.trackerNeedsRadio()); mesh.serviceTracker();

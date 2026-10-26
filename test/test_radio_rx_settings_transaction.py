@@ -10,13 +10,13 @@ from test_replay_reset_integration import extract_braced
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def preprocess(source):
+def preprocess(source, defines=("USE_LR2021",)):
     return subprocess.run([os.environ.get("CXX", "g++"), "-E", "-P", "-x", "c++",
-                           "-DUSE_LR2021", "-"], input=source, text=True,
+                           *("-D" + value for value in defines), "-"], input=source, text=True,
                           capture_output=True, check=True).stdout
 
 
-def fixture():
+def fixture(defines=("USE_LR2021",)):
     source = (ROOT / "src/helpers/CommonCLI.cpp").read_text(encoding="ascii")
     header = (ROOT / "src/helpers/CommonCLI.h").read_text(encoding="ascii")
     methods = "\n".join(extract_braced(source, signature) for signature in (
@@ -24,18 +24,18 @@ def fixture():
         "void CommonCLI::servicePendingRxSettings(", "bool CommonCLI::saveRxSetting(",
         "void CommonCLI::restoreRxSetting(", "bool CommonCLI::trySavePrefs(",
         "void CommonCLI::loop(", "bool CommonCLI::calculateRxPowerSavingLevel("))
-    setter = preprocess(extract_braced(source, "void CommonCLI::handleSetCmd("))
+    setter = preprocess(extract_braced(source, "void CommonCLI::handleSetCmd("), defines)
     branches = [extract_braced(setter, signature) for signature in (
         'if (memcmp(config, "radio.rxgain ", 13) == 0)',
         'if (memcmp(config, "radio.rxps ", 11) == 0)',
         'if (strncmp(config, "radio.rxps.rfrx_disabled ", 25) == 0)',
         'if (strcmp(config, "extra.sf") == 0 || memcmp(config, "extra.sf ", 9) == 0)')]
     values = {
-        "METHODS": preprocess(methods),
-        "SETTERS": preprocess(" else ".join(branches)),
+        "METHODS": preprocess(methods, defines),
+        "SETTERS": preprocess(" else ".join(branches), defines),
         "ENUM": extract_braced(header, "enum RxSetting : uint8_t") + ";",
         "PENDING": extract_braced(header, "bool hasPendingRadioSettings() const"),
-        "NOTE": preprocess(extract_braced(source, "static void appendRxPowerSavingAdjustmentNote(")),
+        "NOTE": preprocess(extract_braced(source, "static void appendRxPowerSavingAdjustmentNote("), defines),
     }
     result = HARNESS
     for key, value in values.items():
@@ -313,10 +313,10 @@ int main() {
 
 
 class InfrastructureRxSettingsTests(unittest.TestCase):
-    def test_actual_commands_and_pending_transactions(self):
+    def compile_run(self, code):
         with tempfile.TemporaryDirectory(prefix="mesh-infra-rx-") as directory:
             source, exe = Path(directory) / "test.cpp", Path(directory) / "test"
-            source.write_text(fixture(), encoding="ascii")
+            source.write_text(code, encoding="ascii")
             built = subprocess.run([
                 os.environ.get("CXX", "g++"), "-std=c++17", "-Wall", "-Wextra", "-Werror",
                 "-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-pie", "-no-pie",
@@ -325,6 +325,96 @@ class InfrastructureRxSettingsTests(unittest.TestCase):
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
             result = subprocess.run([str(exe)], text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_actual_commands_and_pending_transactions(self):
+        self.compile_run(fixture())
+
+    def test_integrated_stm32_preserves_unsupported_errors_and_off_transactions(self):
+        code = fixture(("STM32_PLATFORM", "STM32WLxx", "USE_STM32WL")).split("static bool ok(", 1)[0]
+        code += r'''
+int main() {
+  char reply[160];
+  CommonCLI cli;
+  cli.callbacks.gain_supported = cli.callbacks.ps_supported = cli.callbacks.rf_supported = false;
+  for (const char* value : {"radio.rxgain on", "radio.rxgain off",
+                           "radio.rxps.rfrx_disabled on", "radio.rxps.rfrx_disabled off"}) {
+    cli.command(value, reply); assert(!strcmp(reply, "Error: unsupported"));
+  }
+  for (const char* value : {"radio.rxgain banana", "radio.rxgain on ",
+                           "radio.rxps.rfrx_disabled banana", "radio.rxps.rfrx_disabled off "}) {
+    cli.command(value, reply); assert(!strcmp(reply, "Error: state must be on or off"));
+  }
+  for (const char* value : {"radio.rxps on", "radio.rxps conservative", "radio.rxps balanced",
+                           "radio.rxps level 8 preamble 32", "radio.rxps 2000 3000"}) {
+    cli.command(value, reply); assert(!strcmp(reply, "ERROR: RX powersaving unsupported"));
+  }
+  cli.command("radio.rxps banana", reply); assert(strstr(reply, "ERROR: use off|on|"));
+  assert(!cli.callbacks.gain_attempts && !cli.callbacks.rf_attempts
+      && !cli.callbacks.ps_attempts && !cli.callbacks.saves && !cli.hasPendingRadioSettings());
+  // Off retains accepted timing/level intent, checked persistence and safe-gap
+  // application even though this integrated driver cannot enable duty cycling.
+  cli.prefs.rx_powersaving_enabled = 1; cli.prefs.rx_ps_rx_us = 2000;
+  cli.prefs.rx_ps_sleep_us = 3000; cli.prefs.rx_ps_level = 8; cli.prefs.rx_ps_preamble = 32;
+  cli.callbacks.hardware_ps = RxPowerSavingConfig(true, 2000, 3000, 8, 32);
+  cli.callbacks.transmitting = true;
+  cli.command("radio.rxps off", reply);
+  assert(!strcmp(reply, "OK - off,2000,3000; saved; pending"));
+  assert(!cli.prefs.rx_powersaving_enabled && cli.prefs.rx_ps_level == 8
+      && cli.prefs.rx_ps_preamble == 32 && cli.callbacks.saves == 1);
+  assert(!cli.callbacks.persisted.rx_powersaving_enabled && cli.callbacks.hardware_ps.enabled);
+  assert(cli.hasPendingRadioSettings() && cli._rx_settings_pending == CommonCLI::RxPowerSaving);
+  cli.callbacks.transmitting = false; cli.servicePendingRxSettings();
+  assert(!cli.hasPendingRadioSettings() && !cli.callbacks.hardware_ps.enabled);
+  assert(cli.callbacks.ps_attempts == 2 && cli.callbacks.saves == 1);
+  assert(!cli.callbacks.gain_attempts && !cli.callbacks.rf_attempts && !cli.callbacks.sf_attempts);
+  // A failed save restores the previous accepted values and pending deadline.
+  cli.callbacks.save_ok = false; cli.callbacks.transmitting = true;
+  cli._rx_settings_pending = CommonCLI::RxPowerSaving; cli._rx_settings_retry_at = 1234;
+  cli.command("radio.rxps off", reply);
+  assert(!strcmp(reply, "Error: RX save unconfirmed; reboot may differ"));
+  assert(cli._rx_settings_pending == CommonCLI::RxPowerSaving && cli._rx_settings_retry_at == 1234);
+  assert(cli.prefs.rx_ps_rx_us == 2000 && cli.prefs.rx_ps_sleep_us == 3000
+      && cli.prefs.rx_ps_level == 8 && cli.prefs.rx_ps_preamble == 32);
+  cli.callbacks.transmitting = false; now_ms = 1234; cli.servicePendingRxSettings();
+  assert(!cli.hasPendingRadioSettings());
+  cli.callbacks.save_ok = true;
+  cli.callbacks.ps_results = {Result::FAILED, Result::APPLIED};
+  const unsigned saves = cli.callbacks.saves;
+  cli.command("radio.rxps off", reply);
+  assert(!strcmp(reply, "Error: RX setting rejected") && cli.callbacks.saves == saves);
+  assert(!cli.hasPendingRadioSettings() && !cli.callbacks.hardware_ps.enabled);
+  // The existing Off path still normalizes absent timing values locally.
+  cli.prefs.rx_ps_rx_us = cli.prefs.rx_ps_sleep_us = 0;
+  cli.command("radio.rxps off", reply);
+  assert(!strncmp(reply, "OK - off,", 9) && cli.prefs.rx_ps_rx_us == RX_POWERSAVING_DEFAULT_RX_US
+      && cli.prefs.rx_ps_sleep_us == RX_POWERSAVING_DEFAULT_SLEEP_US);
+}
+'''
+        self.compile_run(code)
+
+    def test_other_platforms_and_external_radio_keep_supported_runtime_controls(self):
+        for defines in (("STM32_PLATFORM",), ("STM32WLxx",),
+                        ("STM32_PLATFORM", "STM32WLxx")):
+            with self.subTest(defines=defines):
+                code = fixture(defines).split("static bool ok(", 1)[0]
+                code += r'''
+int main() {
+  CommonCLI cli; char reply[160];
+  cli.command("radio.rxgain on", reply);
+  assert(!strcmp(reply, "OK") && cli.callbacks.hardware_gain && cli.callbacks.saves == 1);
+  cli.command("radio.rxps 2000 3000", reply);
+  assert(!strncmp(reply, "OK - on,", 8) && cli.callbacks.hardware_ps.enabled && cli.callbacks.saves == 2);
+  cli.command("radio.rxps.rfrx_disabled on", reply);
+  assert(strstr(reply, "OK - radio.rxps.rfrx_disabled on") && cli.callbacks.hardware_rf);
+}
+'''
+                self.compile_run(code)
+
+    def test_stm32_fold_matches_the_integrated_driver_capabilities(self):
+        driver = (ROOT / "src/helpers/radiolib/CustomSTM32WLxWrapper.h").read_text(encoding="ascii")
+        self.assertNotRegex(driver, r"\b(?:supportsRxBoostedGainMode|supportsRxPowerSavingRfRxDisable|supportsRxPowerSaving)\s*\(")
+        self.assertNotRegex(driver, r"\bSupportsRxPowerSaving\b")
+        self.assertIn("#define USE_STM32WL", driver)
 
     def test_pending_radio_settings_keep_all_infrastructure_roles_awake(self):
         for role, name in (("simple_repeater", "MyMesh"), ("simple_room_server", "MyMesh"),

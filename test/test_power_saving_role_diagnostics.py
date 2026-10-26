@@ -182,9 +182,9 @@ struct MyMesh {
   struct { bool busy_value = false; bool busy() const { return busy_value; } } _local_cli_output;
   struct { bool pending = false; } deferred_cli_command;
   struct {
-    bool gpio = false, tx_pending = false;
+    bool gpio = false, tx_pending = false, rx_pending = false;
     bool hasActiveUserGpioTimer() const { return gpio; }
-    bool hasPendingTxPower() const { return tx_pending; }
+    bool hasPendingRadioSettings() const { return tx_pending || rx_pending; }
   } _cli;
   struct { bool watchdog = false, calibration = false;
     bool isWatchdogObserving() const { return watchdog; }
@@ -245,6 +245,7 @@ int main() {
     check(node._local_cli_output.busy_value, Reason::SerialIO);
     check(node.deferred_cli_command.pending, Reason::Scheduled);
     check(node._cli.tx_pending, Reason::Scheduled);
+    check(node._cli.rx_pending, Reason::Scheduled);
     check(node.uart.running, Reason::Bridge);
     node.active_rs232_bridge_uart = 1;
     assert(node.pendingWorkReason() == mask(Reason::BridgeCleanup));

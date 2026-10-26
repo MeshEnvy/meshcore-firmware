@@ -191,7 +191,7 @@ int main() {
         common = (ROOT / 'src/helpers/CommonCLI.cpp').read_text()
         setter = body(common, 'if (memcmp(config, "radio.rxps ", 11) == 0)')
         if mutate:
-            guard = body(setter, 'if (!_callbacks->supportsRxPowerSaving()')
+            guard = body(setter, 'if (!powersaving_supported && parsed.mode')
             setter = setter.replace(guard, '', 1)
         code = HARNESS.replace('@SETTER@', setter)
         code = code.replace('@GETTER@', body(common, 'if (strcmp(config, "radio.rxps.config") == 0)'))

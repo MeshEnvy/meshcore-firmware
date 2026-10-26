@@ -27,6 +27,7 @@ HARNESS = r'''
 #include <string>
 #include <vector>
 #include <helpers/FleetCommand.h>
+#include <helpers/TempRadioReplyBarrier.h>
 #include "regulator_cli_stub.h"
 #include <helpers/CompanionFrameLimits.h>
 #include <openssl/evp.h>
@@ -132,6 +133,7 @@ struct Clock { uint32_t now = mesh::FleetCommand::MinEpoch + 1000;
 class MyMesh : public mesh::Mesh {
  public:
   struct NoMorseReply { void copy(const void*, const void*) {} } _morse_reply;
+  mesh::TempRadioReplyBarrier _primary_radio_reply;
   mesh::LocalIdentity self_id;
   Clock clock;
   ChannelDetails channels[MAX_GROUP_CHANNELS];

@@ -419,14 +419,36 @@ int main() {
                     subprocess.run([str(work/'test')], check=True)
 
     def test_roles_wire_filter_at_every_bridge_start_and_cross_hook(self):
+        # An on request during asynchronous MQTT teardown only retains start
+        # intent on the existing object. Its packet filter survives the stop;
+        # the fresh-start branches below must still configure admission first.
+        mqtt_begin = method((ROOT/'src/helpers/bridges/MQTTBridge.cpp').read_text(),
+                            'void MQTTBridge::begin(')
+        stop_guard = mqtt_begin.index('if (_initialized || _lifecycle.isStopInProgress())')
+        self.assertLess(mqtt_begin.index('_start_requested = true;'), stop_guard)
+        self.assertIn('return;', method(mqtt_begin[stop_guard:],
+                                      'if (_initialized || _lifecycle.isStopInProgress())'))
+        self.assertNotIn('setPacketFilter(', mqtt_begin)
+        self.assertNotIn('_packet_filter', mqtt_begin)
+        deferred_start = re.compile(
+            r'if \((?:enable && )?(?P<pointer>mqtt_bridge|bridge) && '
+            r'(?P=pointer)->isStopping\(\)\) \{\s*'
+            r'(?P=pointer)->begin\(\);\s*'
+            r'return (?P=pointer)->isStartPending\(\);\s*\}')
         for role in ['simple_repeater', 'simple_room_server']:
             header = (ROOT/f'examples/{role}/MyMesh.h').read_text()
             source = (ROOT/f'examples/{role}/MyMesh.cpp').read_text()
+            retained_starts = 0
             for text in [header, source]:
+                for match in deferred_start.finditer(text):
+                    self.assertIn('configureBridgeFilter(' + match['pointer'] + ');', header, role)
+                    retained_starts += 1
+                text = deferred_start.sub('', text)
                 lines = text.splitlines()
                 for index, line in enumerate(lines):
                     if 'bridge->begin();' in line:
                         self.assertIn('configureBridgeFilter(', lines[index-1], role)
+            self.assertEqual(retained_starts, 2, role)
             cross = method(header, 'bool allowRadioProfileCross(')
             self.assertIn('allowTransportPacket', cross)
             admission = method(source, 'bool MyMesh::allowTransportPacket(')

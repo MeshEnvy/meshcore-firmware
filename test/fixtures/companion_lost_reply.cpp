@@ -111,6 +111,7 @@ public:
     void endCommand() {}
   } _morse_reply;
   bool _morse_reply_admission = false;
+  bool _primary_radio_reply_admission = false;
   struct Prefs { uint8_t lost_reply = 0; } _prefs;
   Clock clock, *_ms = &clock;
   Manager manager, *_mgr = &manager;
@@ -462,8 +463,9 @@ static void localPolicyAndRemoteBoundary() {
   auto& peer = m.contact(1); peer.flags = 0x10;
   for (uint32_t timestamp : {uint32_t(0), uint32_t(1), uint32_t(0xffffffffU)}) {
     reply[0] = 0;
+    m._primary_radio_reply_admission = true;
     m.onCLICommandRecv(peer, &m.incoming, timestamp, "set lost.reply yes", reply);
-    assert(m._prefs.lost_reply == 0 && m.saves == 4);
+    assert(!m._primary_radio_reply_admission && m._prefs.lost_reply == 0 && m.saves == 4);
     reply[0] = 0;
     m.onCLICommandRecv(peer, &m.incoming, timestamp, "get lost.reply", reply);
     assert(std::string(reply) == "Unknown command");

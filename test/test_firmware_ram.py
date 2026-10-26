@@ -198,6 +198,7 @@ struct Bus {
 };
 struct Panel {
   uint16_t displayWidth=0,displayHeight=0,displayBufferSize=0,_buffheight=0,_RGB=0xffff;
+  uint16_t _lastRGB=0xffff;
   OLEDDISPLAY_GEOMETRY geometry=GEOMETRY_RAWMODE;
   unsigned logBufferSize=0,logBufferFilled=0,logBufferLine=0,logBufferMaxLines=0;
   uint8_t* buffer=nullptr; uint8_t* buffer_back=nullptr; uint8_t* logBuffer=nullptr;

@@ -159,7 +159,10 @@ int main() {
         start = mesh.index("bool MyMesh::hasFiniteDelayedReplyForRoute(")
         body = mesh[start : mesh.index("void MyMesh::servicePendingSerialReply()", start)]
         self.assertIn("_delayed_replies.hasReplyForRoute(route, _ms->getMillis())", body)
-        self.assertIn("command_radio_reply_route == route", body)
+        # Radio settings acknowledge their saved value immediately; automatic
+        # background application must not prolong the USB reply lease.
+        self.assertNotIn("command_radio_reply_route", body)
+        self.assertNotIn("saved_radio_apply_pending", body)
         delayed = source("src/helpers/CompanionDelayedReplies.cpp")
         lease = delayed[delayed.index("bool CompanionDelayedReplies::hasReplyForRoute("):]
         self.assertIn("{ &request, &trace }", lease)

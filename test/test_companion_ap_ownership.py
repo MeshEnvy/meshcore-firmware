@@ -62,6 +62,9 @@ class CompanionAccessPointOwnershipTest(unittest.TestCase):
         self.run_fixture("reload")
         self.run_fixture("reload", webconfig=False)
 
+    def test_credential_reload_waits_for_webconfig_teardown_after_sdk_ap_is_gone(self):
+        self.run_fixture("transition_reload")
+
     def test_starting_wifi_services_defers_without_consuming_requested_intent(self):
         self.run_fixture("start_wifi")
         self.run_fixture("start_wifi", webconfig=False)

@@ -47,10 +47,10 @@ MultiSerialInterface interface_manager;
 constexpr int EXPECTED_ACK_TABLE_SIZE = 6;
 struct MyMesh {
   bool streaming = false;
-  int stream_cancels = 0, pending_cancels = 0, radio_cancels = 0;
+  int stream_cancels = 0, pending_cancels = 0;
   int trace_cancels = 0, signing_cancels = 0, expirations = 0;
   mesh::CompanionDelayedReplies _delayed_replies;
-  BaseSerialInterface* command_radio_reply_route = nullptr;
+  bool saved_radio_apply_pending = false;
   BaseSerialInterface* sign_data_reply_route = nullptr;
   BaseSerialInterface* private_key_backup_route = nullptr;
   unsigned long private_key_backup_deadline = 0;
@@ -64,7 +64,6 @@ struct MyMesh {
     if (streaming) { streaming = false; interface_manager.unlockReplyRoute(); }
   }
   void clearPendingReqs() { ++pending_cancels; _delayed_replies.retireRequest(millis()); }
-  void cancelPendingRadioParamApply() { ++radio_cancels; command_radio_reply_route = nullptr; }
   void clearBinaryTraceReply() { ++trace_cancels; _delayed_replies.retireBinaryTrace(millis()); }
   void cancelSigningSession() { ++signing_cancels; sign_data_reply_route = nullptr; }
   void expireExpectedAcks() { ++expirations; }
@@ -91,7 +90,7 @@ int main() {
     assert(the_mesh._delayed_replies.reserveRequest(
         mesh::CompanionDelayedReplies::Binary, peer, owner, false, millis()));
     the_mesh._delayed_replies.armRequest(17, 1000, false, millis());
-    the_mesh.command_radio_reply_route = owner;
+    the_mesh.saved_radio_apply_pending = true;
     assert(the_mesh._delayed_replies.reserveBinaryTrace(17, 23, owner, millis()));
     the_mesh._delayed_replies.armBinaryTrace(1000, millis());
     the_mesh.sign_data_reply_route = owner;
@@ -111,12 +110,13 @@ int main() {
     assert(the_mesh.stream_cancels == int(cancelled));
     assert(the_mesh.streaming == !cancelled);
     assert(the_mesh.pending_cancels == int(cancelled));
-    assert(the_mesh.radio_cancels == int(cancelled));
     assert(the_mesh.trace_cancels == int(cancelled));
     assert(the_mesh.signing_cancels == int(cancelled));
     assert(the_mesh._delayed_replies.request.route == (cancelled ? nullptr : owner));
     assert(the_mesh._delayed_replies.hasRequest() == !cancelled);
-    assert(the_mesh.command_radio_reply_route == (cancelled ? nullptr : owner));
+    // The radio setting was already saved and acknowledged. Losing a client
+    // session must not cancel its automatic hardware application.
+    assert(the_mesh.saved_radio_apply_pending);
     assert(the_mesh._delayed_replies.trace.route == (cancelled ? nullptr : owner));
     assert(the_mesh._delayed_replies.hasBinaryTrace() == !cancelled);
     assert(the_mesh.sign_data_reply_route == (cancelled ? nullptr : owner));
