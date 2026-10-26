@@ -5132,6 +5132,7 @@ void MyMesh::serviceFleetScheduleReply() {
 #endif
 
 void MyMesh::processScheduledRadioSettings(bool tx_gap) {
+  if (!_cli.primaryRadioApplyReady()) return;
 #if MESH_ENABLE_FLEET_CONTROL
   if (!tx_gap) serviceFleetScheduleReply();
 #endif

@@ -1116,6 +1116,7 @@ bool SensorMesh::handleIncomingMsg(ClientInfo& from, uint32_t timestamp, uint8_t
 }
 
 void SensorMesh::servicePendingPrimaryRadioSettings(bool tx_gap) {
+  if (!_cli.primaryRadioApplyReady(!hasOutbound() && _mgr->getOutboundTotal() == 0)) return;
   const bool revert_radio_due = revert_radio_at && millisHasNowPassed(revert_radio_at);
   const bool radio_apply_ready = !radio_apply_retry_at || millisHasNowPassed(radio_apply_retry_at);
   bool radio_apply_failed = false;
@@ -1488,6 +1489,7 @@ bool SensorMesh::scheduleNormalRadio() {
   // path wait for an idle outbound queue before touching the radio.
   set_radio_at = 0;
   revert_radio_at = futureMillis(1);
+  saved_radio_apply_pending = true;
   radio_apply_retry_at = 0;
   radio_apply_failures = 0;
   return true;

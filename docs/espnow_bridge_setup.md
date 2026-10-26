@@ -46,7 +46,6 @@ for the first board and `Bridge-B` for the second, or choose your own names.
 set espnow.enabled off
 set name Bridge-A
 set radio <freq>,<bw>,<sf>,<cr>
-reboot
 ```
 
 Do not type the angle-bracket placeholders literally.
@@ -59,8 +58,9 @@ Do not type the angle-bracket placeholders literally.
 | `cr` | Coding-rate value, 5-8. Match that network's setting. |
 | `name` | A label to tell the two repeaters apart. It does not pair them. |
 
-**`set radio` requires a reboot to apply.** After reconnecting, `get radio`
-shows the saved settings. Use permanent radio settings for this setup;
+**`set radio` saves immediately and switches after two seconds, once the radio
+is free and the reply has drained.** No reboot is needed. `get radio` shows the
+saved settings; the device screen shows the applied settings. Use permanent radio settings for this setup;
 `tempradio` sessions expire.
 
 ## 3. Configure the ESP-NOW link on both boards

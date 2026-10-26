@@ -1877,7 +1877,10 @@ existing Companion apps. On dual-radio builds, use `get radio2` and
 
 **Note:** Companion USB, BLE and WebConfig changes apply automatically when
 the radio is free. A busy radio keeps the saved target across disconnects.
-Infrastructure retains its reboot-to-apply behavior. Companion LoRa CLI waits
+Infrastructure saves immediately, waits two seconds, then applies when the radio
+is free and its reply has drained. No reboot is needed; a permanent change ends
+pending or active TempRadio sessions. The device screen shows the applied radio
+settings during the wait. Companion LoRa CLI waits
 for the exact reply copies to drain before applying; active TempRadio leases
 reject this permanent change.
 If RXPS is enabled and the saved minimum
@@ -2065,7 +2068,9 @@ preamble. LoRa OTA treats v1.17.1.5 as that capability boundary.
 **Default:** `869.618`
 
 **Note:** Companion local changes apply automatically when the radio is free.
-Infrastructure requires a reboot to apply. Companion LoRa CLI applies after
+Infrastructure saves immediately and switches after two seconds, once the radio
+is free and its reply has drained. No reboot is needed. This ends pending or
+active TempRadio sessions. Companion LoRa CLI applies after
 its exact reply copies drain; an active TempRadio lease rejects the change.
 
 **Connections:** USB, browser/TCP/Ethernet CLI, Companion binary command

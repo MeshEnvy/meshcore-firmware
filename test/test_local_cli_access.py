@@ -394,11 +394,31 @@ class LocalCliAccessTest(unittest.TestCase):
 struct Prefs {
   float freq=910.525f,bw=62.5f;
   uint8_t sf=7,cr=5;
+  uint16_t primary_radio_preamble=32;
   int8_t tx_power_dbm=30;
 } prefs;
 Prefs* _prefs=&prefs;
 int saves=0;
-void savePrefs(){++saves;}
+int schedules=0;
+bool save_ok=true;
+bool savePrimaryRadioParams(float f,float bw,uint8_t sf,uint8_t cr,uint16_t preamble) {
+  ++saves;
+  if (!save_ok) return false;
+  _prefs->freq=f; _prefs->bw=bw; _prefs->sf=sf; _prefs->cr=cr;
+  _prefs->primary_radio_preamble=preamble;
+  _prefs->tx_power_dbm=mesh::clampLoRaTxPower(_prefs->tx_power_dbm,f);
+  return true;
+}
+bool applyAndSavePrimaryRadioParams(float f,float bw,uint8_t sf,uint8_t cr,uint16_t preamble,char* reply){
+  const auto previous_power=_prefs->tx_power_dbm;
+  if(!savePrimaryRadioParams(f,bw,sf,cr,preamble)) {
+    strcpy(reply,"Error: radio settings could not be saved");return false;
+  }
+  ++schedules;
+  strcpy(reply,previous_power!=_prefs->tx_power_dbm ?
+      "OK - applying in 2s; TX power limited" : "OK - applying in 2s");
+  return true;
+}
 void set(const char* config,uint32_t sender_timestamp,char* reply) {
 ''' + setter + r'''
 }
@@ -408,7 +428,7 @@ int main() {
     prefs=Prefs{};
     set("freq 915.25",stamp,reply);
     assert(prefs.freq==915.25f && prefs.tx_power_dbm==22);
-    assert(strstr(reply,"reboot to apply") && strstr(reply,"TX power limited"));
+    assert(strstr(reply,"applying in 2s") && strstr(reply,"TX power limited"));
     assert(prefs.bw==62.5f && prefs.sf==7 && prefs.cr==5);
     for(const char* bad:{"freq 149.9","freq 2500.1","freq 920oops",
                          "freq NaN","freq inf","freq 1e3","freq "}) {
@@ -418,10 +438,15 @@ int main() {
     }
     for(const char* boundary:{"freq 150","freq 2500"}) {
       set(boundary,stamp,reply);
-      assert(strstr(reply,"OK - reboot to apply"));
+      assert(strstr(reply,"OK - applying in 2s"));
     }
   }
-  assert(saves==9);
+  assert(saves==9 && schedules==9);
+  const float previous=prefs.freq;
+  save_ok=false;
+  set("freq 920",0,reply);
+  assert(strstr(reply,"Error") && prefs.freq==previous && schedules==9);
+  assert(prefs.primary_radio_preamble==32);
 }
 '''
         with tempfile.TemporaryDirectory() as temp:

@@ -195,14 +195,14 @@ void UITask::renderCurrScreen() {
     uint8_t sf = _node_prefs->sf;
     uint8_t cr = _node_prefs->cr;
     const char* profile_tag = "";
-    if (dual_radio) {
-      const uint8_t profile = secondary_page ? 1 : 0;
+    if (profiles != NULL) {
+      const uint8_t profile = dual_radio && secondary_page ? 1 : 0;
       const auto& params = profiles->params(profile);
       freq = params.freq;
       bw = params.bw;
       sf = params.sf;
       cr = params.cr;
-      profile_tag = mesh::ui::radioProfileDisplayTag(profile,
+      if (dual_radio) profile_tag = mesh::ui::radioProfileDisplayTag(profile,
           profile == 1 ? profiles->secondary_temporary : profiles->primary_temporary);
     }
 

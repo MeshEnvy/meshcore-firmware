@@ -103,7 +103,7 @@ over the normal binary USB, BLE, or TCP connection:
 | [`get bootloader.ver`](cli_commands.md#view-the-bootloader-version-nrf52-only) | nRF52 Companion terminal and command `0x42`; unidentifiable metadata returns `unknown` |
 | [`get/set sdcard`](test-results/companion_cli_parity_2026-10-23.md#shared-sd-commands) | nRF52 builds with SD OTA storage; maintenance retains OTA and Ethernet ownership guards |
 | `erase` | Local terminal and binary command `0x42`; reboot after erasing stored settings |
-| `set freq <MHz>` | Local terminal, binary command `0x42`, and authorized LoRa CLI; reboot to apply |
+| `set freq <MHz>` | Local terminal, binary command `0x42`, and authorized LoRa CLI; applies automatically (infrastructure waits two seconds and for the reply to drain) |
 | [`get public.key`](cli_commands.md#view-this-nodes-public-key) | Companion text terminal and binary command `0x42`; read-only, no private-key export feature required |
 | `get prv.key` | Local terminal and binary command `0x42`; requires private key export enabled |
 | `get password` | ESP32 WiFi Companion reports management-password status without revealing it; other Companions report no admin password; infrastructure returns its password locally |

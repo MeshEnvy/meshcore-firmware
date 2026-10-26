@@ -193,6 +193,7 @@ int main(int argc,char** argv){
 
 PRIMARY_EXTRA = r'''
 struct PrimaryFixture {
+ @PRIMARY_ACCEPT@
  fs::FS disk;Mesh mesh;PhysicalRadio physical;RadioProfileCLI profiles;MyMesh node;
  FleetChannel fleet{&disk,&node};LocalIdentity publisher;unsigned dispatched=0;char reply[160]={};
  PrimaryFixture(){fake_ms=1000;node.rtc.now=mesh.clock.now;profiles.begin(&disk,&physical,&mesh.clock,true);
@@ -400,6 +401,7 @@ uint16_t rxPowerSavingPreambleForParams(uint8_t,float){return 32;}
   start=cli.index('  } else if (memcmp(config, "radioat ", 8) == 0)')
   end=cli.index('  } else if (memcmp(config, "lat ", 4) == 0)',start)
   primary_extra=PRIMARY_EXTRA.replace('@PRIMARY_SET@',cli[start:end])
+  primary_extra=primary_extra.replace('@PRIMARY_ACCEPT@',body(cli,'bool CommonCLI::acceptsPrimaryRadioParams(').replace('CommonCLI::','').replace('_radio_profiles','profiles'))
   physical,secondary=HARNESS.split('struct Fixture {',1)
   secondary=('struct Fixture {'+secondary).replace(' assert(argc==2);const std::string scenario=argv[1];Fixture f;',
    ' assert(argc==2);if(!strncmp(argv[1],"primary_",8))return primary(argc,argv);const std::string scenario=argv[1];Fixture f;')

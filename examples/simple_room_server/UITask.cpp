@@ -317,14 +317,14 @@ void UITask::renderCurrScreen() {
     uint8_t sf = _node_prefs->sf;
     uint8_t cr = _node_prefs->cr;
     const char* profile_tag = "";
-    if (dual_radio) {
-      const uint8_t profile = secondary_page ? 1 : 0;
+    if (profiles != NULL) {
+      const uint8_t profile = dual_radio && secondary_page ? 1 : 0;
       const auto& params = profiles->params(profile);
       freq = params.freq;
       bw = params.bw;
       sf = params.sf;
       cr = params.cr;
-      profile_tag = mesh::ui::radioProfileDisplayTag(profile,
+      if (dual_radio) profile_tag = mesh::ui::radioProfileDisplayTag(profile,
           profile == 1 ? profiles->secondary_temporary : profiles->primary_temporary);
     }
 
@@ -405,8 +405,8 @@ uint32_t UITask::getFrameSignature() {
   float bw = _node_prefs->bw;
   uint8_t sf = _node_prefs->sf;
   uint8_t cr = _node_prefs->cr;
-  if (dual_radio) {
-    const uint8_t profile = secondary_page ? 1 : 0;
+  if (profiles != NULL) {
+    const uint8_t profile = dual_radio && secondary_page ? 1 : 0;
     const auto& params = profiles->params(profile);
     freq = params.freq;
     bw = params.bw;
@@ -447,13 +447,13 @@ bool UITask::buildDashboardContext(ObserverDashboard::Context* ctx) {
   ctx->bw = _node_prefs->bw;
   ctx->radio_label = "";
   const mesh::RadioProfiles* profiles = configuredRadioProfiles();
-  if (profiles != NULL && profiles->enabled()) {
-    const uint8_t profile = showingSecondaryRadioProfilePage() ? 1 : 0;
+  if (profiles != NULL) {
+    const uint8_t profile = profiles->enabled() && showingSecondaryRadioProfilePage() ? 1 : 0;
     const auto& params = profiles->params(profile);
     ctx->freq = params.freq;
     ctx->sf = params.sf;
     ctx->bw = params.bw;
-    ctx->radio_label = mesh::ui::radioProfileDisplayTag(profile,
+    if (profiles->enabled()) ctx->radio_label = mesh::ui::radioProfileDisplayTag(profile,
         profile == 1 ? profiles->secondary_temporary : profiles->primary_temporary);
   }
   ctx->dual_radio = the_mesh.isDualRadioActive();

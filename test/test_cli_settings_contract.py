@@ -325,6 +325,8 @@ namespace mesh { struct Utils {
                     fixture = template.replace('@SET@', ' else '.join(set_blocks))
                     fixture = fixture.replace('@GET@', ' else '.join(get_blocks))
                     fixture = fixture.replace('@DISPATCH@', dispatch)
+                    fixture = fixture.replace('@PRIMARY_VALIDATE@', extract_braced(
+                        source, 'bool CommonCLI::acceptsPrimaryRadioParams(').replace('CommonCLI::', ''))
                     fixture = fixture.replace('@KEY_EQUALS@', extract_braced(source, 'static bool configKeyEquals('))
                     fixture = fixture.replace('@TX_METHODS@', '\n'.join(
                         extract_braced(source, signature).replace('CommonCLI::', 'CLI::')

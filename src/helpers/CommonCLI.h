@@ -973,6 +973,12 @@ class CommonCLI {
   bool _common_save_succeeded = false;
   bool _tx_power_pending = false;
   uint32_t _tx_power_retry_at = 0;
+  uint32_t _primary_radio_apply_at = 0;
+  // Keep shared validation/save paths out of the large CLI dispatch on small MCUs.
+  bool acceptsPrimaryRadioParams(float freq, float bw, uint8_t sf, uint8_t cr,
+                                uint16_t preamble) __attribute__((noinline));
+  bool applyAndSavePrimaryRadioParams(float freq, float bw, uint8_t sf, uint8_t cr,
+                                    uint16_t preamble, char* reply) __attribute__((noinline));
   enum RxSetting : uint8_t {
     RxGain = 1, RxPowerSaving = 2, RxSideDetectors = 4, RxRfRx = 8,
     RxPendingMask = 15, RxRfRxDisabled = 128
@@ -1097,9 +1103,10 @@ public:
   bool hasPendingTxPower() const { return _tx_power_pending; }
   void servicePendingTxPower();
   bool hasPendingRadioSettings() const {
-    return _tx_power_pending || (_rx_settings_pending & RxPendingMask) != 0
+    return _primary_radio_apply_at || _tx_power_pending || (_rx_settings_pending & RxPendingMask) != 0
         || _radio_profiles.hasPendingTuning();
   }
+  bool primaryRadioApplyReady(bool reply_idle = true);
   void servicePendingRxSettings();
   void handleCommand(uint32_t sender_timestamp, char* command, char* reply);
   mesh::MainBoard* getBoard() { return _board; }

@@ -55,6 +55,7 @@ struct Prefs {
   uint8_t sf=7, cr=5, interference_threshold=0, agc_reset_interval=0;
   uint8_t path_hash_mode=0, multi_acks=0, rx_ps_level=0, rx_ps_preamble=0;
   int8_t tx_power_dbm=10;
+  uint16_t primary_radio_preamble=0;
   uint32_t rx_ps_rx_us=1000, rx_ps_sleep_us=1000;
   bool cad_enabled=false, rx_boosted_gain=false, rx_powersaving_enabled=false;
   uint8_t extra_sf[4]={};
@@ -111,6 +112,11 @@ public:
   uint8_t _rx_settings_pending=0;
   uint32_t _rx_settings_retry_at=0;
   void savePrefs() { callbacks.savePrefs(); }
+  bool applyAndSavePrimaryRadioParams(float f,float bw,uint8_t sf,uint8_t cr,uint16_t preamble,char* reply) {
+    if (!savePrimaryRadioParams(f,bw,sf,cr,preamble)) return false;
+    strcpy(reply,"OK - applying in 2s"); return true;
+  }
+  @PRIMARY_VALIDATE@
   bool trySavePrefs() { savePrefs(); return true; }
   void applyAndSaveTxPower(int8_t power, char* reply);
   void servicePendingTxPower();

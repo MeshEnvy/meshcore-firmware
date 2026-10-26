@@ -2430,6 +2430,7 @@ void MyMesh::onGroupPacketRecv(mesh::Packet* packet) {
 }
 
 void MyMesh::servicePendingPrimaryRadioSettings(bool tx_gap) {
+  if (!_cli.primaryRadioApplyReady(!hasOutbound() && _mgr->getOutboundTotal() == 0)) return;
   const bool revert_radio_due = revert_radio_at && millisHasNowPassed(revert_radio_at);
   const bool radio_apply_ready = !radio_apply_retry_at || millisHasNowPassed(radio_apply_retry_at);
   bool radio_apply_failed = false;
@@ -3044,6 +3045,7 @@ bool MyMesh::scheduleNormalRadio() {
   // one as soon as the command reply has drained from the outbound queue.
   set_radio_at = 0;
   revert_radio_at = futureMillis(1);
+  saved_radio_apply_pending = true;
   radio_apply_retry_at = 0;
   radio_apply_failures = 0;
   return true;

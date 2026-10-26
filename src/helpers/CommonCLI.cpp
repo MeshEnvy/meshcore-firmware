@@ -191,6 +191,34 @@ void CommonCLI::loop() {
 #endif
 }
 
+bool CommonCLI::applyAndSavePrimaryRadioParams(float freq, float bw, uint8_t sf,
+                                              uint8_t cr, uint16_t preamble, char* reply) {
+  const int8_t previous_power = _prefs->tx_power_dbm;
+  if (!savePrimaryRadioParams(freq, bw, sf, cr, preamble)) {
+    mesh::cli::formatError(reply, 160, "radio settings could not be saved");
+    return false;
+  }
+  // Arm the role's reply handoff now, while the originating CLI command is
+  // still in scope. The separate deadline must also hold at TX-complete gaps.
+  _primary_radio_apply_at = millis() + 2000;
+  if (!_primary_radio_apply_at) _primary_radio_apply_at = 1;
+  _callbacks->scheduleNormalRadio();
+  if (_prefs->tx_power_dbm != previous_power) {
+    sprintf(reply, "OK - applying in 2s; TX power limited to %d dBm",
+            (int)_prefs->tx_power_dbm);
+  } else {
+    strcpy(reply, "OK - applying in 2s");
+  }
+  return true;
+}
+
+bool CommonCLI::primaryRadioApplyReady(bool reply_idle) {
+  if (_primary_radio_apply_at
+      && (!reply_idle || static_cast<int32_t>(millis() - _primary_radio_apply_at) < 0)) return false;
+  _primary_radio_apply_at = 0;
+  return true;
+}
+
 bool CommonCLI::hasActiveUserGpioTimer() const {
 #if defined(ESP32_PLATFORM) || defined(USER_GPIO_CONTROL)
   return _user_gpio.hasActiveTimer();
@@ -3200,11 +3228,17 @@ bool CommonCLI::applyAndSaveAdcMultiplier(float multiplier, char* reply,
   return true;
 }
 
+bool CommonCLI::acceptsPrimaryRadioParams(float freq, float bw, uint8_t sf,
+                                          uint8_t cr, uint16_t preamble) {
+  // The positive range and bandwidth whitelist also reject NaN and infinities.
+  return freq >= 150.0f && freq <= 2500.0f
+      && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && isValidLoRaBandwidth(bw)
+      && _radio_profiles.acceptsPrimary(freq, bw, sf, cr, preamble);
+}
+
 bool CommonCLI::savePrimaryRadioParams(float freq, float bw, uint8_t sf,
                                        uint8_t cr, uint16_t preamble) {
-  if (!isfinite(freq) || !isfinite(bw) || freq < 150.0f || freq > 2500.0f
-      || sf < 5 || sf > 12 || cr < 5 || cr > 8 || !isValidLoRaBandwidth(bw)
-      || !_radio_profiles.acceptsPrimary(freq, bw, sf, cr, preamble)) return false;
+  if (!acceptsPrimaryRadioParams(freq, bw, sf, cr, preamble)) return false;
   const float old_freq = _prefs->freq, old_bw = _prefs->bw;
   const uint8_t old_sf = _prefs->sf, old_cr = _prefs->cr;
   const int8_t old_power = _prefs->tx_power_dbm;
@@ -5061,20 +5095,8 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     char legacy[96];
     if (mesh::RadioProfileCLI::parseSuffix(&config[6], 4, legacy, sizeof(legacy), preamble)
         && mesh::cli::parseRadioTupleStrict(legacy, freq, bw, sf, cr)
-        && freq >= 150.0f && freq <= 2500.0f
-        && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8
-        && isValidLoRaBandwidth(bw)
-        && _radio_profiles.acceptsPrimary(freq, bw, sf, cr, preamble)) {
-      const int8_t previous_power = _prefs->tx_power_dbm;
-      if (!savePrimaryRadioParams(freq, bw, sf, cr, preamble)) {
-        mesh::cli::formatError(reply, 160, "radio settings could not be saved"); return;
-      }
-      if (_prefs->tx_power_dbm != previous_power) {
-        sprintf(reply, "OK - reboot to apply; TX power limited to %d dBm",
-                (int)_prefs->tx_power_dbm);
-      } else {
-        strcpy(reply, "OK - reboot to apply");
-      }
+        && acceptsPrimaryRadioParams(freq, bw, sf, cr, preamble)) {
+      if (!applyAndSavePrimaryRadioParams(freq, bw, sf, cr, preamble, reply)) return;
       appendRxPowerSavingAdjustmentNote(reply, _prefs, sf, bw);
       _radio_profiles.appendPrimaryChirpWarning(reply, 160, sf, bw, preamble);
     } else {
@@ -5089,8 +5111,7 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     if (!mesh::RadioProfileCLI::parseSuffix(&config[8], 5, legacy, sizeof(legacy), preamble)
         || !parseScheduledRadioArgs(legacy, false, freq, bw, sf, cr, start_time, end_time, _rtc->getCurrentTime())) {
       strcpy(reply, "Error, use: set radioat f,bw,sf,cr,start (UTC or +minutes)");
-    } else if (freq < 150.0f || freq > 2500.0f || sf < 5 || sf > 12 || cr < 5 || cr > 8 || !isValidLoRaBandwidth(bw)
-        || !_radio_profiles.acceptsPrimary(freq, bw, sf, cr, preamble)) {
+    } else if (!acceptsPrimaryRadioParams(freq, bw, sf, cr, preamble)) {
       strcpy(reply, "Error, invalid radio params");
     } else {
       _callbacks->addScheduledRadioParams(false, freq, bw, sf, cr, start_time, end_time, reply, preamble);
@@ -5108,8 +5129,7 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     if (!mesh::RadioProfileCLI::parseSuffix(&config[12], 6, legacy, sizeof(legacy), preamble)
         || !parseScheduledRadioArgs(legacy, true, freq, bw, sf, cr, start_time, end_time, _rtc->getCurrentTime())) {
       strcpy(reply, "Error, use: set tempradioat f,bw,sf,cr,start,end (UTC or +minutes)");
-    } else if (freq < 150.0f || freq > 2500.0f || sf < 5 || sf > 12 || cr < 5 || cr > 8 || !isValidLoRaBandwidth(bw)
-        || !_radio_profiles.acceptsPrimary(freq, bw, sf, cr, preamble)) {
+    } else if (!acceptsPrimaryRadioParams(freq, bw, sf, cr, preamble)) {
       strcpy(reply, "Error, invalid radio params");
     } else {
       _callbacks->addScheduledRadioParams(true, freq, bw, sf, cr, start_time, end_time, reply, preamble);
@@ -5513,17 +5533,8 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     float freq = 0.0f;
     if (mesh::cli::parseDecimalStrict(&config[5], freq)
         && freq >= 150.0f && freq <= 2500.0f) {
-      const int8_t previous_power = _prefs->tx_power_dbm;
-      _prefs->freq = freq;
-      _prefs->tx_power_dbm = mesh::clampLoRaTxPower(
-          _prefs->tx_power_dbm, _prefs->freq);
-      savePrefs();
-      if (_prefs->tx_power_dbm != previous_power) {
-        sprintf(reply, "OK - reboot to apply; TX power limited to %d dBm",
-                (int)_prefs->tx_power_dbm);
-      } else {
-        strcpy(reply, "OK - reboot to apply");
-      }
+      applyAndSavePrimaryRadioParams(freq, _prefs->bw, _prefs->sf, _prefs->cr,
+                                    _prefs->primary_radio_preamble, reply);
     } else {
       strcpy(reply, "Error, invalid frequency");
     }

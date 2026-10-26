@@ -139,6 +139,7 @@ public:
   Callbacks* _callbacks = &callbacks;
   uint8_t _rx_settings_pending = 0;
   uint32_t _rx_settings_retry_at = 0;
+  uint32_t _primary_radio_apply_at = 0;
   bool _tx_power_pending = false, _common_save_result_known = false, _common_save_succeeded = false;
   struct Profiles {
     bool pending = false;

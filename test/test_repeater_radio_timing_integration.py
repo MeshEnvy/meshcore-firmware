@@ -90,6 +90,8 @@ struct CLI {
   CLI& radioProfiles() { return *this; }
   RadioPrefs* prefs = nullptr;
   int* saves = nullptr;
+  uint32_t _primary_radio_apply_at = 0;
+  @PRIMARY_READY@
   bool save_success = true;
   unsigned save_attempts = 0;
   unsigned fail_on_save = 0;
@@ -204,6 +206,26 @@ static void startTemp(MyMesh& m, int minutes) {
   assert(m.temp_radio_applied);
 }
 int main() {
+  for (uint32_t start : {100U, 0xFFFFFC18U, 0xFFFFF830U}) {
+    MyMesh m;
+    now_ms = start;
+    m._cli._primary_radio_apply_at = now_ms + 2000;
+    if (!m._cli._primary_radio_apply_at) m._cli._primary_radio_apply_at = 1;
+    m.scheduleNormalRadio();
+    m.processScheduledRadioSettings(true);
+    assert(m.restores == 0 && m.saved_radio_apply_pending);
+    now_ms = start + 1999;
+    m.processScheduledRadioSettings(true); // A TX gap cannot bypass the delay.
+    assert(m.restores == 0);
+    now_ms = start + 2001;
+    m.temp_radio_reply_barrier.held = true;
+    m.processScheduledRadioSettings(true);
+    assert(m.restores == 0); // Even after 2s, let the exact reply finish.
+    m.temp_radio_reply_barrier.held = false;
+    m.processScheduledRadioSettings(true);
+    assert(m.restores == 1 && !m.saved_radio_apply_pending);
+  }
+
   for (unsigned failure = 0; failure <
 #ifdef USE_LR2021
       4
@@ -529,6 +551,11 @@ int main() {
 }
 '''
 
+
+HARNESS = HARNESS.replace("@PRIMARY_READY@", method(
+    (ROOT / "src/helpers/CommonCLI.cpp").read_text(),
+    "bool CommonCLI::primaryRadioApplyReady(").replace("CommonCLI::", "")
+    .replace("bool reply_idle)", "bool reply_idle=true)"))
 
 class RepeaterRadioTimingIntegrationTest(unittest.TestCase):
     def compile_and_run(self, source):

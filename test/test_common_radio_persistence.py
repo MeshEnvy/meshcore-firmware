@@ -84,6 +84,7 @@ struct CommonCLI {
   void savePrefs(FILESYSTEM*,PrefsSaveRouting::Scope);
   bool saveCommonPrefs();
   bool savePrimaryRadioParams(float,float,uint8_t,uint8_t,uint16_t);
+  bool acceptsPrimaryRadioParams(float,float,uint8_t,uint8_t,uint16_t);
   static void recalculateRxPowerSavingFromLevel(NodePrefs* p) {
     p->rx_ps_rx_us=p->sf*100; p->rx_ps_sleep_us=p->cr*200;
   }
@@ -176,6 +177,8 @@ int main() {
   assert(cli.loadTail({0,64,0,1,0xff})==64 && cli.prefs.gps_sync_interval_hours==48);
   for(float bad : {NAN,INFINITY,149.0f,2501.0f})
     assert(!cli.savePrimaryRadioParams(bad,125,9,6,0));
+  for(float bad : {NAN,INFINITY,-INFINITY,-125.0f})
+    assert(!cli.savePrimaryRadioParams(920,bad,9,6,0));
   assert(cli.fs.files["/com_prefs"]==committed);
 }
 '''
@@ -263,7 +266,8 @@ int main() {
             fields = re.sub(r'\b'+macro+r'\b', value, fields)
         methods = '\n'.join(extract_braced(source, signature) for signature in (
             'void CommonCLI::savePrefs(FILESYSTEM*', 'bool CommonCLI::saveCommonPrefs(',
-            'bool CommonCLI::savePrimaryRadioParams('))
+            'bool CommonCLI::savePrimaryRadioParams(',
+            'bool CommonCLI::acceptsPrimaryRadioParams('))
         serializer = 'template<typename Writer>\n' + extract_braced(source, 'static bool writeCommonPrefsImage(')
         tail = extract_braced(source, 'if (file.available() >= (int)sizeof(_prefs->bridge_format))')
         code = HARNESS.replace('@FIELDS@',fields).replace('@METHODS@',("\n#include <stddef.h>\ntemplate<typename Writer>\n" + extract_braced(source, "static void writeCommonRetryPrefs(") + "\n" + methods))

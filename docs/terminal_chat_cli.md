@@ -120,8 +120,10 @@ BLE and TCP use their existing Companion transport framing.
 
 `set freq <MHz>` is available on these local connections and through authorized
 LoRa administration, just like `set radio`. It saves the frequency without
-changing bandwidth, spreading factor, or coding rate and requires a reboot to
-apply. Infrastructure roles also apply the board's transmit-power limit.
+changing bandwidth, spreading factor, or coding rate. Infrastructure waits two
+seconds and for the radio reply to drain before applying; Companion applies
+automatically when the radio is free. No reboot is needed. Infrastructure roles
+also apply the board's transmit-power limit.
 
 Commands relayed to another node using `cmd` travel over LoRa and retain the
 remote restrictions on local-only maintenance and secret reads. These local
@@ -280,7 +282,9 @@ source, supported build profiles and memory costs.
 set freq {frequency}
 ```
 Set the saved LoRa frequency. Example: `set freq 915.8`. Available over local
-connections and authorized LoRa CLI; reboot to apply.
+connections and authorized LoRa CLI. Infrastructure switches after two seconds
+and the reply has drained; Companion applies automatically when the radio is
+free. No reboot is needed.
 
 ```
 set tx {tx-power-dbm}
