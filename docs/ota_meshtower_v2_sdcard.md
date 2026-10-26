@@ -206,6 +206,14 @@ Copy the MID and first 16 image-hash hex digits from `ota bootloader`. Ordinary
 application package. Keep the SD card inserted through the reboot. A later
 `ota status` value of `blup:C8` reports a successful bootloader replacement.
 
+The SD-backed OTAFIX **2.4.3** profile already supports this path. A
+[hardware test](test-results/tower_bootloader_243_to_2412_2026-10-26.md)
+upgraded its CRC `D48D45A9` directly to official 2.4.12, CRC `59326292`,
+while running application `4d5ccbdd`. All 40 blocks arrived over LoRa in
+159 seconds, and the application hash stayed unchanged. That exact older
+application does not need updating first; the trusted signer and matching
+SD bootloader package are still required.
+
 After reboot, `ota bootloader` displays the installed board identity, CRC and
 capabilities. Its `mid` and `hash` fields describe a **currently staged download**,
 not the installed bootloader, so `staged:none mid=- hash=-` is not an install
