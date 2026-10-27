@@ -11,6 +11,11 @@ FAMILIES=('CustomSX1262','CustomSX1268','CustomLLCC68','CustomSTM32WLx','CustomL
 
 def build_source(family='CustomSX1262',remove_reset=False,include_duty=False):
  source=irq.RadioInterruptRecoveryTests().source(sx126x=family)
+ # The shared IRQ fixture includes an LR2021-only measurement Module. These
+ # activity tests install the selected chip's real RF/IRQ Module below.
+ measurement_binding=' MeasurementModule* mod=&measurement_mod;\n'
+ assert source.count(measurement_binding)==1
+ source=source.replace(measurement_binding,'')
  src=(ROOT/'src/helpers/radiolib/RadioLibWrappers.cpp').read_text()
  chip=(ROOT/f'src/helpers/radiolib/{family}.h').read_text()
  entry=method(chip,'int16_t startReceive()')

@@ -32,9 +32,9 @@
 #include <helpers/MorseReplyHandoff.h>
 #include <helpers/TempRadioReplyBarrier.h>
 #include <helpers/MeshtextConfig.h>
+#include <helpers/HostKiss.h>
 #if MESH_ENABLE_ETHERNET_TUNNEL
 #include <helpers/EthernetTunnelSettings.h>
-#include <helpers/HostKiss.h>
 #include <helpers/esp32/EthernetKissServer.h>
 #endif
 namespace mesh { class BeaconManager; }
