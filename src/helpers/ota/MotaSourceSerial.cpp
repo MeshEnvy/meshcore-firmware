@@ -1,6 +1,10 @@
 #include "MotaSourceSerial.h"
 #include "MotaSeederProto.h"
 #include "OtaByteIO.h"
+#include "../HostKissConfig.h"
+#if MESH_ENABLE_HOST_KISS
+#include "../UsbLogging.h"
+#endif
 #include <limits.h>
 #include <string.h>
 
@@ -129,6 +133,11 @@ bool SerialMotaSource::readExact(uint8_t* b, uint32_t n, uint32_t started) {
 // checksum, then scans for the response magic and validates op+status+checksum before delivering payload.
 bool SerialMotaSource::txn(uint8_t op, const uint8_t* args, uint8_t arglen,
                            uint8_t* payload, uint32_t payload_len) {
+#if MESH_ENABLE_HOST_KISS
+  // An attached USB folder may outlive a temporary KISS session. Keep its
+  // catalog intact, but never drain or write the other owner's byte stream.
+  if (_shared_text_control && mesh::isUsbBinaryStreamOwned()) return false;
+#endif
   // Drop the currently queued stale/partial input only. A continuously writing
   // host cannot keep the primary mesh loop trapped before the request.
   int pending = _io.available();
