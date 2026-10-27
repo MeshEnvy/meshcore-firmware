@@ -347,6 +347,11 @@ bool Dispatcher::queueDirectOtaRadioFrame(const uint8_t* message, uint16_t lengt
 }
 #endif
 
+#if defined(NRF52_PLATFORM) && MESH_ENABLE_HOST_KISS
+// Keep the cold shared queue as one executable entry on Nordic Full builds.
+// This avoids LTO copies and lets package checks verify the real TX scheduler.
+__attribute__((noinline))
+#endif
 bool Dispatcher::queueForeignRadioFrame(const uint8_t* bytes, size_t length,
                                         uint8_t profile, uint32_t generation,
                                         RadioProfileProtocol protocol) {
