@@ -94,6 +94,13 @@ normally use no more than two TLS/WSS brokers; some classic ESP32 targets are
 reliable with only one. Excess configured slots remain saved but show as
 inactive in `get mqtt.status`.
 
+Five active brokers on a PSRAM board is an upper limit, not a qualified load
+for every board. Adding a connection while another broker is connected must
+leave contiguous memory for packet publishing as well as SDK startup
+allocations. A saved slot can wait for memory while existing connections
+continue forwarding. Recovery of the first broker uses a separate bootstrap
+bound so this extra reservation cannot strand every disconnected slot.
+
 The bridge has a bounded packet queue for broker or WiFi outages and reconnects
 automatically. A non-PSRAM build holds 6 packets and a PSRAM build holds 50.
 When the queue is full, the oldest item is replaced; after five minutes with no
@@ -111,7 +118,8 @@ settings remain enabled. Failed requests, a WiFi association, and NTP replies
 alone do not restart the outage timer or keep a failed MQTT uplink awake.
 
 After 30 minutes, the firmware opens a recovery window lasting up to two
-minutes. A broker acknowledgment or a connection that stays up for 30 seconds
+minutes. A new broker acknowledgment, including one immediately followed by a
+disconnect, or a connection that stays up for 30 seconds
 returns the node to normal operation. Otherwise WiFi is suspended for another
 30 minutes. An explicit management request can ask for an earlier probe.
 Automatic NTP requests have a 15-second timeout; failed requests wait 30 minutes
@@ -841,6 +849,7 @@ For an MQTT observer:
 get wifi.status
 get mqtt.enabled
 get mqtt.status
+get mqtt.stats
 get mqtt1.diag
 get mqtt2.diag
 ```
@@ -849,6 +858,17 @@ For a connection that works initially but later stops reporting, inspect each
 configured slot's `pub_ack` count in `get mqttN.diag`. Accepted publishes are
 not proof of delivery: a QoS 1 publish is confirmed only when the broker
 acknowledges it. A quiet radio channel alone is not a failed MQTT connection.
+
+Capture these outputs before rebooting, then repeat `mqtt.stats` and the slot
+diagnostics after 60 seconds. `(ok)` reports connection state, not delivery.
+In `mqtt.stats`, `drops=A/B` separates outbox-cap drops from packet publication
+attempts skipped for memory pressure; a growing `B` can explain missing packet
+reports while broker connections still look healthy. `DNS failed (0x8001)`
+records a hostname lookup failure, which can follow an earlier disconnect; it
+does not identify the reason for that first disconnect. `wifi.status` showing
+`suspended` means the shared outage cooldown is active, not that WiFi settings
+were erased. These diagnostics do not reveal passwords or tokens, but WiFi
+status can include the SSID or local IP address. Redact them before posting.
 
 The shared MQTT bridge recovers failed transports on its owning task, including
 errors without a subsequent disconnect callback and connection attempts that

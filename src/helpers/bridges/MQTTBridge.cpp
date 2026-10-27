@@ -1671,10 +1671,10 @@ bool MQTTBridge::serviceNetworkPower(uint32_t now) {
         && acknowledgments != _network_publish_acks[i];
     _network_publish_acks[i] = acknowledgments;
     // A flapping CONNACK must not buy another full outage window forever.
-    // A PUBACK proves delivery immediately; a quiet connection must stay up
-    // for 30 seconds, leaving time to prove recovery within the probe window.
-    if (_slots[i].enabled && _slots[i].connected
-        && (broker_replied || (now - static_cast<uint32_t>(_slots[i].connected_at_ms)
+    // A PUBACK proves delivery even if DISCONNECTED arrives before this pass.
+    // Consume it once; a quiet connection must still stay up for 30 seconds.
+    if (_slots[i].enabled && (broker_replied || (_slots[i].connected
+        && now - static_cast<uint32_t>(_slots[i].connected_at_ms)
                 >= mesh::wifi::kNetworkHealthyMs))) {
       useful_network = true;
     }
@@ -2381,9 +2381,16 @@ bool MQTTBridge::canStartSlotConnection(int index) const {
       ? ClientMemoryState::Uninitialized
       : (slot.client->isStarted() ? ClientMemoryState::Started : ClientMemoryState::Stopped);
   const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA;
+  bool protect_publish = false;
+  for (int i = 0; i < RUNTIME_MQTT_SLOTS; ++i) {
+    if (i != index && _slots[i].enabled && _slots[i].connected) {
+      protect_publish = true;
+      break;
+    }
+  }
   return MQTTConnectionAdmission::canStart(
       ESP.getPsramSize() > 0, tls, memory_state, heap_caps_get_free_size(caps),
-      heap_caps_get_largest_free_block(caps));
+      heap_caps_get_largest_free_block(caps), protect_publish);
 #else
   return true;
 #endif
@@ -4503,11 +4510,6 @@ bool MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
   // at PUBLISH_JSON_BUFFER_SIZE (2 KB); the threshold includes frame overhead
   // and transient TCP buffers.
   #ifdef ESP32
-  #if defined(BOARD_HAS_PSRAM)
-  static const size_t PUBLISH_SKIP_MAX_ALLOC_THRESHOLD = 16000;
-  #else
-  static const size_t PUBLISH_SKIP_MAX_ALLOC_THRESHOLD = 8000;
-  #endif
   unsigned long now = millis();
   // Re-sample max-alloc at most once per interval and cache the verdict.
   // getMaxAllocHeap() walks the heap free-list, so it must not run per packet.
@@ -4519,10 +4521,13 @@ bool MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
   if (now - _last_memory_check > 5000) {
     _last_memory_check = now;
     size_t max_alloc = ESP.getMaxAllocHeap();
-    _memory_pressure = (max_alloc < PUBLISH_SKIP_MAX_ALLOC_THRESHOLD);
+    // Match connection admission's detected-PSRAM decision, including a board
+    // whose optional PSRAM failed initialization.
+    const bool psram = ESP.getPsramSize() > 0;
+    _memory_pressure = !MQTTConnectionAdmission::hasPublishHeadroom(psram, max_alloc);
     if (_memory_pressure) {
       MQTT_DEBUG_PRINTLN("MQTT: memory pressure, skipping publishes (Max alloc: %d, threshold: %d, skipped: %d)",
-                         (int)max_alloc, (int)PUBLISH_SKIP_MAX_ALLOC_THRESHOLD, _skipped_publishes);
+                         (int)max_alloc, (int)MQTTConnectionAdmission::publishLargestBytes(psram), _skipped_publishes);
     }
   }
   if (_memory_pressure) {

@@ -104,7 +104,7 @@ RECONFIGURE_PREAMBLE = r'''
 #define pdMS_TO_TICKS(value) (value)
 constexpr int RUNTIME_MQTT_SLOTS = 2, MQTT_AUTH_JWT = 1;
 constexpr uint32_t MALLOC_CAP_INTERNAL = 1, MALLOC_CAP_DMA = 2;
-static size_t dma_free = 100000, dma_largest = 20000;
+static size_t dma_free = 100000, dma_largest = 100000;
 size_t heap_caps_get_free_size(uint32_t caps) {
   assert(caps == (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA)); return dma_free;
 }
@@ -228,7 +228,7 @@ int main() {
   bridge.applySlotPreset(0, "plain");
   assert(slot.client && !slot.client->isStarted() && !slot.initial_connect_done);
   assert(init_calls == 1 && destroy_calls == 0);
-  dma_free = 24576;
+  dma_free = 24576; dma_largest = 24192;
   assert(bridge.setupSlot(0));
   assert(slot.client->_buffer_capacity == 896 && init_calls == 1);
   const int destructions_before_guard = destroy_calls;

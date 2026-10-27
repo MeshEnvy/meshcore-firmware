@@ -612,6 +612,41 @@ static void publishAcknowledgmentProvesRecoveryImmediately() {
           "an old PUBACK repeatedly renewed a disconnected broker");
 }
 
+static void disconnectedPublishAcknowledgmentRenewsGraceOnce() {
+  for (uint32_t start : {100U, UINT32_MAX - 10000U}) {
+    resetEnvironment();
+    MQTTBridge bridge;
+    require(bridge.serviceNetworkPower(start), "initial outage did not run");
+    require(!bridge.serviceNetworkPower(start + grace), "outage did not suspend");
+    const uint32_t resumed = start + grace + interval;
+    require(bridge.serviceNetworkPower(resumed), "probe did not resume");
+    const uint32_t replied = resumed + probe - 1U;
+    // The SDK delivered PUBACK and then DISCONNECTED between owner passes.
+    // A real broker reply still proves service; a CONNACK by itself does not.
+    bridge.clients[0].publish_acks = 1U;
+    require(!bridge._slots[0].connected, "fixture unexpectedly connected");
+    require(bridge.serviceNetworkPower(replied), "new PUBACK was discarded");
+    require(bridge.serviceNetworkPower(resumed + probe),
+            "disconnect hid PUBACK and retained the expired probe deadline");
+    require(bridge.serviceNetworkPower(replied + grace - 1U),
+            "disconnected PUBACK did not renew normal grace");
+    require(!bridge.serviceNetworkPower(replied + grace),
+            "unchanged PUBACK kept a failed service awake forever");
+  }
+  resetEnvironment();
+  {
+    MQTTBridge bridge;
+    bridge.serviceNetworkPower(100U);
+    bridge._slots[0].enabled = false;
+    bridge.clients[0].publish_acks = 1U;
+    require(!bridge.serviceNetworkPower(100U + grace),
+            "a disabled broker renewed the outage budget");
+    bridge._slots[0].enabled = true;
+    require(!bridge.serviceNetworkPower(101U + grace),
+            "enabling a broker replayed its already consumed PUBACK");
+  }
+}
+
 static void quietConnectionHasExactThirtySecondHealthBoundary() {
   resetEnvironment();
   {
@@ -743,6 +778,7 @@ int main(int argc, char** argv) {
     else if (name == "channel-repair") deferredEspNowChannelRepair();
     else if (name == "healthy") stableBrokerCountsButFlappingDoesNot();
     else if (name == "puback") publishAcknowledgmentProvesRecoveryImmediately();
+    else if (name == "disconnected-puback") disconnectedPublishAcknowledgmentRenewsGraceOnce();
     else if (name == "quiet-boundary") quietConnectionHasExactThirtySecondHealthBoundary();
     else if (name == "ntp-retry") sntpFailureAndBusyLeaseRetries();
     else if (name == "ntp-rotation") everyNtpServerGetsTheLeadingTimeoutSlot();
@@ -890,6 +926,9 @@ class MqttWiFiNetworkPowerTests(unittest.TestCase):
 
     def test_publish_ack_proves_recovery_immediately_and_is_consumed_once(self):
         self.run_case("puback")
+
+    def test_puback_followed_by_disconnect_renews_grace_once_across_wrap(self):
+        self.run_case("disconnected-puback")
 
     def test_quiet_broker_health_requires_exactly_thirty_seconds(self):
         self.run_case("quiet-boundary")

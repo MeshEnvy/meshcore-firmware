@@ -607,10 +607,12 @@ int main() {
                 self.assertEqual(profile["maximum_slot_stack_buffer_allowance_bytes"], potential)
                 self.assertEqual(profile["cold_start_allocation_allowance_bytes"], 16384)
                 self.assertEqual(profile["cold_start_dma_admission_free_bytes"], 32768)
-                self.assertEqual(profile["cold_start_dma_admission_contiguous_bytes"], 8192)
+                self.assertEqual(profile["cold_start_dma_admission_contiguous_bytes"],
+                                 16000 if active == 5 else 8192)
                 self.assertEqual(profile["restart_allocation_allowance_bytes"], 8192)
                 self.assertEqual(profile["restart_dma_admission_free_bytes"], 24576)
-                self.assertEqual(profile["restart_dma_admission_contiguous_bytes"], 8192)
+                self.assertEqual(profile["restart_dma_admission_contiguous_bytes"],
+                                 16000 if active == 5 else 8192)
                 self.assertFalse(profile["maximum_runtime_load_qualified"])
                 self.assertFalse(profile["physical_validation_performed"])
         ordinary = ram.requirements("ESP32_PLATFORM", {"BOARD_HAS_PSRAM": 1}, "v4_companion")
@@ -707,16 +709,31 @@ int main() {
             ("client_task_stack_bytes", "kClientTaskStackBytes"),
             ("client_task_priority", "kClientTaskPriority"),
             ("cold_start_allocation_allowance_bytes", "kColdStartAllowanceBytes"),
-            ("cold_start_dma_admission_contiguous_bytes", "kColdStartLargestBytes"),
             ("restart_allocation_allowance_bytes", "kRestartAllowanceBytes"),
-            ("restart_dma_admission_contiguous_bytes", "kRestartLargestBytes"),
             ("dma_admission_free_bytes", "kDmaReserveBytes"),
-            ("dma_admission_contiguous_bytes", "kDmaLargestBytes"),
+            ("publish_contiguous_without_psram_bytes", "kInternalPublishLargestBytes"),
+            ("publish_contiguous_with_psram_bytes", "kPsramPublishLargestBytes"),
             ("tls_internal_admission_free_bytes", "kTlsInternalFreeBytes"),
-            ("tls_internal_admission_contiguous_bytes", "kTlsRecordAllocationBytes"),
+            ("tls_record_allocation_bytes", "kTlsRecordAllocationBytes"),
         ):
             with self.subTest(key=key):
                 self.assertIn(f"{name} = {profile[key]};", source)
+        for psram in (False, True):
+            flags = {"WITH_MQTT_BRIDGE": 1}
+            if psram:
+                flags["BOARD_HAS_PSRAM"] = 1
+            actual = ram.requirements("ESP32_PLATFORM", flags, "v4_companion")["mqtt"]
+            floor = 16000 if psram else 8000
+            self.assertEqual(actual["publish_contiguous_bytes"], floor)
+            self.assertEqual(actual["dma_admission_contiguous_bytes"], floor)
+            self.assertEqual(actual["cold_start_dma_admission_contiguous_bytes"], max(floor, 8192))
+            self.assertEqual(actual["additional_broker_cold_start_dma_admission_contiguous_bytes"], floor + 16384)
+            self.assertEqual(actual["restart_dma_admission_contiguous_bytes"], max(floor, 8192))
+            self.assertEqual(actual["additional_broker_restart_dma_admission_contiguous_bytes"], floor + 8192)
+            self.assertEqual(actual["additional_broker_cold_start_tls_internal_admission_contiguous_bytes"], 41792)
+            self.assertEqual(actual["additional_broker_restart_tls_internal_admission_contiguous_bytes"], 33600)
+            self.assertEqual(actual["tls_internal_admission_contiguous_bytes"], 17408)
+            self.assertEqual(actual["additional_broker_tls_internal_admission_contiguous_bytes"], 25408)
         self.assertEqual(profile["cold_start_dma_admission_free_bytes"],
                          profile["dma_admission_free_bytes"] + profile["cold_start_allocation_allowance_bytes"])
         self.assertEqual(profile["restart_dma_admission_free_bytes"],
