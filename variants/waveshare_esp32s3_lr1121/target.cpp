@@ -56,6 +56,8 @@ bool radio_init() {
   radio.setRxBoostedGainMode(RX_BOOSTED_GAIN);
 #endif
 
+  // Full RX recovery must restore this board's TCXO and DIO RF-switch table.
+  radio_driver.setDeepInitCallback(radio_init);
   return true;
 }
 

@@ -226,17 +226,25 @@ inline bool rxPowerSavingUsesContinuousFallback(uint32_t rx_us, uint32_t sleep_u
 }
 
 inline uint32_t rxPowerSavingDefaultTransitionUs() {
-#if defined(SX126X_DIO3_TCXO_VOLTAGE)
-  return SX126X_DIO3_TCXO_VOLTAGE > 0.0f ? MC_TCXO_DELAY_US + 1000UL : 1000UL;
-#elif defined(LR11X0_DIO3_TCXO_VOLTAGE)
-  return LR11X0_DIO3_TCXO_VOLTAGE > 0.0f ? MC_TCXO_DELAY_US + 1000UL : 1000UL;
+#if defined(USE_LR1121)
+  // Retain RadioLib's existing 5 ms LR1121 TCXO startup time. The shorter
+  // LR1110 setting has not been qualified for these boards. Driver arming
+  // uses its actual cached delay; CLI/default calculations must agree.
+  const uint32_t tcxo_delay_us = 5000UL;
 #else
-  return MC_TCXO_DELAY_US + 1000UL;
+  const uint32_t tcxo_delay_us = MC_TCXO_DELAY_US;
+#endif
+#if defined(SX126X_DIO3_TCXO_VOLTAGE)
+  return SX126X_DIO3_TCXO_VOLTAGE > 0.0f ? tcxo_delay_us + 1000UL : 1000UL;
+#elif defined(LR11X0_DIO3_TCXO_VOLTAGE)
+  return LR11X0_DIO3_TCXO_VOLTAGE > 0.0f ? tcxo_delay_us + 1000UL : 1000UL;
+#else
+  return tcxo_delay_us + 1000UL;
 #endif
 }
 
 inline float rxPowerSavingDefaultCaptureCost() {
-#ifdef USE_LR1110
+#if defined(USE_LR1110) || defined(USE_LR1121)
   return RX_POWERSAVING_CAPTURE_COST_SYMBOLS_LR11X0;
 #else
   return RX_POWERSAVING_CAPTURE_COST_SYMBOLS;

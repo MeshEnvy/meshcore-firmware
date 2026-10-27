@@ -220,8 +220,8 @@ int main(){
  ++now_ms;assert(!chip.isReceiving()&&!chip._headerSeen);
  chip.irq=ACTIVITY_HEADER|ACTIVITY_HEADER_ERROR;
  assert(!chip.isReceiving()&&!chip._headerSeen&&chip._activityAt==0);
-#if MESH_RADIO_PROFILE_CHIP == 1110
- // LR1110 deliberately leaves its error IRQ for wrapper-owned recovery.
+#if MESH_RADIO_PROFILE_CHIP == 1110 || MESH_RADIO_PROFILE_CHIP == 1121
+ // LR11x0 deliberately leaves its error IRQ for wrapper-owned recovery.
  assert(chip.irq&ACTIVITY_HEADER_ERROR);
 #else
  assert(!(chip.irq&ACTIVITY_HEADER_ERROR));
@@ -261,7 +261,7 @@ int main(){
  assert(chip._headerSeen&&chip._activityAt==37);
  chip.duty_failure=0;
  assert(chip.startReceiveDutyCycle(100000,100000)==0&&!chip._headerSeen&&chip._activityAt==0);
-#if MESH_RADIO_PROFILE_CHIP == 1110
+#if MESH_RADIO_PROFILE_CHIP == 1110 || MESH_RADIO_PROFILE_CHIP == 1121
  // Bounds and every preparatory command can reject duty-cycle entry. None
  // acknowledged a new RX epoch, so none may retire the old local activity.
  chip._headerSeen=true;chip._activityAt=37;
@@ -357,7 +357,7 @@ class RadioRxActivityEpochTests(unittest.TestCase):
     compile_run(build_source(family)+FAST_CHECKS,['-DESP32_PLATFORM=1','-DRADIO_CLASS='+family])
 
  def test_actual_duty_cycle_entry_resets_only_after_acknowledged_entry(self):
-  for family in ('CustomSX1262','CustomLR1110'):
+  for family in ('CustomSX1262','CustomLR1110','CustomLR1121'):
    for remove in (False,True):
     with self.subTest(family=family,removed_reset=remove):
      source=build_source(family,remove_reset=remove,include_duty=True)

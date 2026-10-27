@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef USE_LR1121
+#define USE_LR1121
+#endif
+
 #include "CustomLR1121.h"
 #include "RadioLibWrappers.h"
 #include "LR11x0Reset.h"
@@ -8,6 +12,10 @@ class CustomLR1121Wrapper : public RadioLibWrapper {
   using DeepInitCallback = bool (*)();
   DeepInitCallback _deep_init = nullptr;
 public:
+  static constexpr bool SupportsRxPowerSaving = true;
+  uint32_t rxPowerSavingTransitionUs() const override {
+    return static_cast<CustomLR1121*>(_radio)->getTcxoDelay() + 1000UL;
+  }
   uint8_t regulatorModes() const override { return static_cast<CustomLR1121*>(_radio)->regulatorModes(); }
   mesh::power::RegulatorMode defaultRegulatorMode() const override {
     return static_cast<CustomLR1121*>(_radio)->defaultRegulatorMode();
@@ -116,6 +124,9 @@ public:
   bool isReceivingPacket() override {
     return ((CustomLR1121 *)_radio)->isReceiving();
   }
+  bool isChipBusy() override {
+    return static_cast<CustomLR1121*>(_radio)->isChipBusy();
+  }
   float getCurrentRSSI() override {
     float rssi = NAN;
     return ((CustomLR1121 *)_radio)->getRssiInst(&rssi) == RADIOLIB_ERR_NONE ? rssi : NAN;
@@ -128,12 +139,47 @@ public:
 
   uint32_t getEstAirtimeFor(int len_bytes) override {
     auto airtime = RadioLibWrapper::getEstAirtimeFor(len_bytes);
+    if (airtime == 0) return 0;
     return airtime < 200 ? 200 : airtime;   // at least 200 millis
   }
 
   uint8_t getSpreadingFactor() const override { return ((CustomLR1121 *)_radio)->getSpreadingFactor(); }
+  bool supportsRxPowerSaving() const override { return SupportsRxPowerSaving; }
+  void onReceiveProcessed() override { finishReceiveProcessing(); }
 
 protected:
+  int startReceiveMode() override { return startReceivePowerSaving(); }
+  bool isPacketReady() override {
+    if (_radio->checkIrq(RADIOLIB_IRQ_HEADER_ERR) > 0) {
+      const int16_t error = static_cast<CustomLR1121*>(_radio)->recoverReceivePath();
+      if (error != RADIOLIB_ERR_NONE) {
+        MESH_DEBUG_PRINTLN("CustomLR1121Wrapper: RX recovery error (%d)", error);
+      }
+      _rx_ps_armed = false;
+      _rx_hold_continuous = false;
+      n_recv_errors++;
+      return false;
+    }
+    return RadioLibWrapper::isPacketReady();
+  }
+  int16_t armDutyCycle(RadioLibIrqFlags_t irq_flags, RadioLibIrqFlags_t irq_mask,
+      uint32_t* effective_rx_us, uint32_t* effective_sleep_us) override {
+    *effective_sleep_us = _rx_ps_sleep_us;
+    return static_cast<CustomLR1121*>(_radio)->startReceiveDutyCycle(
+        _rx_ps_rx_us, _rx_ps_sleep_us, irq_flags, irq_mask, effective_rx_us);
+  }
+  int16_t stopDutyCycleHardware() override {
+    const int16_t standby_error = _radio->standby();
+    const int16_t clock_error = static_cast<CustomLR1121*>(_radio)->restoreLfClock();
+    return standby_error != RADIOLIB_ERR_NONE ? standby_error : clock_error;
+  }
+  int16_t startContinuousReceive() override {
+    auto* radio = static_cast<CustomLR1121*>(_radio);
+    if (!radio->needsLfClockRestore()) return _radio->startReceive();
+    int16_t error = _radio->standby();
+    if (error == RADIOLIB_ERR_NONE) error = radio->restoreLfClock();
+    return error == RADIOLIB_ERR_NONE ? _radio->startReceive() : error;
+  }
   bool radioDeepInit() override {
     return _deep_init && prepareRadioHardReset() && _deep_init()
         && _board->finishRadioHardReset();

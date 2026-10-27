@@ -431,6 +431,7 @@ jobs:
           python3 -B test/test_upstream_20261015_wifi_boot.py -v
           python3 -B test/test_wio_tracker_l2_gps_power.py -v
           python3 -B test/test_lr1121_power_merge.py -v
+          python3 -B test/test_lr1121_rxps.py -v
           python3 -B test/test_lr2021_power.py -v
           python3 -B test/test_lr2021_tx_prearm.py -v
           python3 -B test/test_lr2021_primary_apply_wait.py -v

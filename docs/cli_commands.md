@@ -2106,7 +2106,7 @@ intervals and the 24-hour watchdog policy. An explicitly saved normal-mode
   available. Returning to slower settings recalculates from the saved RXPS
   minimum.
 
-With the measured RXPS model and the default 1600 us TCXO startup delay
+With the measured SX126x/LR1110 RXPS model and the default 1600 us TCXO startup delay
 (2600 us total transition), a requested minimum level 1 gives:
 
 | SF | BW (kHz) | Wire preamble | Effective timing preamble | Effective RXPS level | RX / sleep |
@@ -2279,6 +2279,13 @@ Station G2/G3 targets default to `off`.
 - `state`: `on` or `off`.
 
 **Notes:**
+- LR1121 RXPS is supported on Waveshare ESP32-S3 LR1121 and Muzi Base Duo
+  builds, using the same commands. Their existing 5000 us TCXO startup delay
+  is preserved, giving a 6000 us sleep/wake transition. Fast SF/BW tuples may
+  use continuous receive; `get radio.rxps.status` reports the actual mode.
+- While radio2 profile scanning is enabled, RXPS is suspended so neither
+  profile sleeps through its listening window. The requested RXPS setting
+  is retained and restored after returning to single-profile receive.
 - `get rxps.wd` reports the radio watchdogs' soft and hard recovery counts.
   See [receive calibration and recovery](test-results/radio_receive_calibration.md) for
   noise sampling, CAD handling, and the continuous-RX mode check.
@@ -2310,7 +2317,9 @@ Station G2/G3 targets default to `off`.
 - Named experimental profiles accept `preamble 32`; numeric levels keep the
   existing automatic-preamble selection. Manual timings bypass the level model.
 - `MC_TCXO_DELAY_US` defaults to 1600 us. Initialization applies it and checks
-  TCXO/calibration errors. A board can override it for its oscillator.
+  TCXO/calibration errors on the qualified SX126x/LR1110 paths. A board can
+  override it for its oscillator. LR1121 retains RadioLib's 5000 us setting;
+  it does not inherit the LR1110 hardware timing qualification.
 - Fresh Cascade-profile builds start with RXPS on at level `8` and a 16-symbol preamble. Saved operator settings still take precedence after an upgrade.
 - Level-based settings automatically recalculate their timings when the spreading factor or bandwidth changes. Custom `<rx_us> <sleep_us>` timings remain fixed.
 - `get radio.rxps` keeps the legacy on/off, RX, and sleep reply. The new

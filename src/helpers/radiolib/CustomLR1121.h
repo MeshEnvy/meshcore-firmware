@@ -3,6 +3,7 @@
 #include <RadioLib.h>
 #include "RadioRegulatorState.h"
 #include "MeshCore.h"
+#include "RXPowerSaving.h"
 #include "LR11x0MorseRfSwitch.h"
 #include "../MorseRx.h"
 
@@ -15,6 +16,7 @@ class CustomLR1121 : public LR1121 {
   uint32_t _activityAt = 0;
   bool _headerSeen = false;
   bool _rx_boosted = false;
+  bool _lfClockRestoreNeeded = false;
   LR11x0MorseRfSwitch _morse_rf_switch;
   int8_t _txPower = 0;
   bool _txPowerSet = false;
@@ -72,17 +74,32 @@ class CustomLR1121 : public LR1121 {
       return _regulator.finishInitialization(state);
     }
 
+    // Airtime is a cached LoRa calculation. GetPacketType would wake a
+    // sleeping duty-cycle receiver merely to estimate an outgoing packet.
+    RadioLibTime_t getTimeOnAir(size_t len) override {
+      return getToA(len, ModemType_t::RADIOLIB_MODEM_LORA);
+    }
+
+    int16_t recoverReceivePath() {
+      _activityAt = 0;
+      _headerSeen = false;
+      int16_t state = standby();
+      int16_t next = clearRxBuffer();
+      if (state == RADIOLIB_ERR_NONE) state = next;
+      next = clearIrqState(RADIOLIB_LR11X0_IRQ_ALL);
+      if (state == RADIOLIB_ERR_NONE) state = next;
+      return state;
+    }
+
     size_t getPacketLength(bool update) override {
-      size_t len = LR1121::getPacketLength(update);
-      if (len == 0 && getIrqStatus() & RADIOLIB_LR11X0_IRQ_HEADER_ERR) {
-        // we've just received a corrupted packet
-        // this may have triggered a bug causing subsequent packets to be shifted
-        // call standby() to return radio to known-good state
-        // recvRaw will call startReceive() to restart rx
-        MESH_DEBUG_PRINTLN("LR1121: got header err, calling standby()");
-        standby();
+      // A header-error event can retain the previous packet's nonzero length.
+      // Recover from the IRQ itself rather than delivering those stale bytes.
+      if (getIrqStatus() & RADIOLIB_LR11X0_IRQ_HEADER_ERR) {
+        MESH_DEBUG_PRINTLN("LR1121: header error, resetting RX path");
+        recoverReceivePath();
+        return 0;
       }
-      return len;
+      return LR1121::getPacketLength(update);
     }
 
     using LR1121::setOutputPower;
@@ -113,6 +130,74 @@ class CustomLR1121 : public LR1121 {
     }
 
     float getFreqMHz() const { return freqMHz; }
+    uint32_t getTcxoDelay() const { return tcxoDelay; }
+
+    bool needsLfClockRestore() const { return _lfClockRestoreNeeded; }
+    int16_t restoreLfClock() {
+      if (!_lfClockRestoreNeeded) return RADIOLIB_ERR_NONE;
+      // Retain the LF RC clock: DIO11 can also be an IRQ/RF-switch signal.
+      const int16_t state = configLfClock(
+          RADIOLIB_LR11X0_LF_BUSY_RELEASE_DISABLED | RADIOLIB_LR11X0_LF_CLK_RC);
+      if (state == RADIOLIB_ERR_NONE) _lfClockRestoreNeeded = false;
+      return state;
+    }
+
+    int16_t startReceiveDutyCycle(uint32_t rxPeriod, uint32_t sleepPeriod,
+                                  RadioLibIrqFlags_t irqFlags = RADIOLIB_IRQ_RX_DEFAULT_FLAGS,
+                                  RadioLibIrqFlags_t irqMask = RADIOLIB_IRQ_RX_DEFAULT_MASK,
+                                  uint32_t* effectiveRxPeriod = nullptr) {
+      // Reject zero/sub-tick inputs before the preamble guard can enlarge
+      // them: one 32.768 kHz RTC tick requires at least 31 microseconds.
+      if (rxPeriod < 31UL) return RADIOLIB_ERR_INVALID_RX_PERIOD;
+      const uint32_t symbolPeriod = (uint32_t)(((1000.0f * (float)(1UL << spreadingFactor)) /
+                                               bandwidthKhz) + 0.999f);
+      const uint32_t transitionTime = tcxoDelay + 1000UL;
+      if (sleepPeriod <= transitionTime) return RADIOLIB_ERR_INVALID_SLEEP_PERIOD;
+      const uint32_t programmedSleepPeriod = sleepPeriod - transitionTime;
+
+      // Use the existing LR11x0 extended-preamble guard. Preamble detection
+      // extends the receive timeout to 2*rx + programmed sleep.
+      const uint64_t requiredExtendedPeriod =
+          ((uint64_t)preambleLengthLoRa + 11ULL) * symbolPeriod + 1000ULL;
+      if (2ULL * rxPeriod + programmedSleepPeriod < requiredExtendedPeriod) {
+        rxPeriod = (uint32_t)((requiredExtendedPeriod - programmedSleepPeriod + 1ULL) / 2ULL);
+      }
+      if (effectiveRxPeriod) *effectiveRxPeriod = rxPeriod;
+
+      // LR11xx uses 32.768 kHz RTC ticks. Native RadioLib 7.7.1 overflows
+      // its 32-bit multiplication for periods above roughly 131 ms.
+      const uint32_t rxPeriodRaw = (uint32_t)(((uint64_t)rxPeriod * 32768UL) / 1000000UL);
+      const uint32_t sleepPeriodRaw =
+          (uint32_t)(((uint64_t)programmedSleepPeriod * 32768UL) / 1000000UL);
+      if ((rxPeriodRaw & 0xFF000000) || rxPeriodRaw == 0) return RADIOLIB_ERR_INVALID_RX_PERIOD;
+      if ((sleepPeriodRaw & 0xFF000000) || sleepPeriodRaw == 0) return RADIOLIB_ERR_INVALID_SLEEP_PERIOD;
+
+      // SetRxDutyCycle requires Standby RC and a configured RTC source.
+      int16_t state = standby(RADIOLIB_LR11X0_STANDBY_RC);
+      RADIOLIB_ASSERT(state);
+      _lfClockRestoreNeeded = true;
+      state = configLfClock(
+          RADIOLIB_LR11X0_LF_CLK_RC | RADIOLIB_LR11X0_LF_BUSY_RELEASE_ENABLED);
+      RADIOLIB_ASSERT(state);
+      RadioModeConfig_t cfg = {
+        .receive = {
+          .timeout = RADIOLIB_LR11X0_RX_TIMEOUT_INF,
+          .irqFlags = irqFlags,
+          .irqMask = irqMask,
+          .len = 0,
+        }
+      };
+      state = stageMode(RADIOLIB_RADIO_MODE_RX, &cfg);
+      RADIOLIB_ASSERT(state);
+      // stageMode prepares packet/IRQ state; launch the RX RF path too.
+      mod->setRfSwitchState(Module::MODE_RX);
+      state = setRxDutyCycle(rxPeriodRaw, sleepPeriodRaw, RADIOLIB_LR11X0_RX_DUTY_CYCLE_MODE_RX);
+      if (state == RADIOLIB_ERR_NONE) {
+        _activityAt = 0;
+        _headerSeen = false;
+      }
+      return state;
+    }
 
     int16_t setRxBoostedGainMode(bool en) {
       _rx_boosted = en;
@@ -123,7 +208,9 @@ class CustomLR1121 : public LR1121 {
 
     int16_t startReceive() override {
       // include the PREAMBLE_DETECTED irq bit in reported flags.
-      const int16_t status = LR1121::startReceive(RADIOLIB_LR11X0_RX_TIMEOUT_INF, RADIOLIB_IRQ_RX_DEFAULT_FLAGS | (1UL << RADIOLIB_IRQ_PREAMBLE_DETECTED), RADIOLIB_IRQ_RX_DEFAULT_MASK, 0);
+      const int16_t status = LR1121::startReceive(RADIOLIB_LR11X0_RX_TIMEOUT_INF,
+          RADIOLIB_IRQ_RX_DEFAULT_FLAGS | (1UL << RADIOLIB_IRQ_PREAMBLE_DETECTED),
+          RADIOLIB_IRQ_RX_DEFAULT_MASK | (1UL << RADIOLIB_IRQ_HEADER_ERR), 0);
       if (status == RADIOLIB_ERR_NONE) {
         _activityAt = 0;
         _headerSeen = false;
@@ -131,14 +218,21 @@ class CustomLR1121 : public LR1121 {
       return status;
     }
 
+    bool isChipBusy() {
+      const uint32_t busy = mod->getGpio();
+      return busy != RADIOLIB_NC && mod->hal->digitalRead(busy);
+    }
+
     bool isReceiving() {
+      if (isChipBusy()) return false;
       uint32_t irq = getIrqStatus();
       bool preamble = irq & RADIOLIB_LR11X0_IRQ_PREAMBLE_DETECTED;      // bit 4
       bool header   = irq & RADIOLIB_LR11X0_IRQ_SYNC_WORD_HEADER_VALID; // bit 5
       bool hdrErr   = irq & RADIOLIB_LR11X0_IRQ_HEADER_ERR;             // bit 6
       uint32_t now  = millis();
       if (hdrErr) {
-        clearIrqState(RADIOLIB_LR11X0_IRQ_PREAMBLE_DETECTED | RADIOLIB_LR11X0_IRQ_SYNC_WORD_HEADER_VALID | RADIOLIB_LR11X0_IRQ_HEADER_ERR);
+        // The receive wrapper owns recovery. Clearing this during polling
+        // would hide the error before stale RX-buffer length is rejected.
         _activityAt = 0;
         _headerSeen = false;
         return false;
