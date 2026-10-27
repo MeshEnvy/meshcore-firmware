@@ -26,6 +26,7 @@ struct CommonCLI {
   unsigned management_loops = 0, tx_services = 0;
   CommonCLI(ACL& acl, Callbacks& callbacks) : _acl(&acl), _callbacks(&callbacks) {}
   void loopBatteryForwarding(bool = false) {}
+  void recoverMediaMeshRegions() {}
   void loopManagement() { ++management_loops; }
   void servicePendingTxPower() { ++tx_services; }
   void servicePendingRxSettings() {}

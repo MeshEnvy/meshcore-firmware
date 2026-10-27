@@ -151,6 +151,7 @@ public:
   void loopManagement() {}
   void servicePendingTxPower() {}
   void loop();
+  void recoverMediaMeshRegions() {}
   Result applyRxSetting(uint8_t);
   void servicePendingRxSettings();
   bool saveRxSetting(uint8_t, Result, char*);

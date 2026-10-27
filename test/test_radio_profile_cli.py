@@ -27,7 +27,7 @@ class RadioProfileCLITest(unittest.TestCase):
                     '-o', str(exe)], check=True, capture_output=True, text=True)
                 for scenario in (None, 'permanent_order', 'temporary_boundary', 'lease_creation',
                                  'save_failure', 'schedule_permutations', 'storage_isolation',
-                                 'relative_schedule', 'spectrum_overlap', 'mediamesh'):
+                                 'relative_schedule', 'spectrum_overlap', 'mediamesh', 'media_scope'):
                     with self.subTest(fleet=fleet_enabled, carrier=carrier_enabled,
                                       scenario=scenario or 'commands_persistence_and_timers'):
                         subprocess.run([str(exe)] + ([scenario] if scenario else []), check=True)

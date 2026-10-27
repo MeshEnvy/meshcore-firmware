@@ -188,6 +188,7 @@ bool RegionMap::load(FILESYSTEM* _fs, const char* path) {
       if (loaded_next == 0xFFFF && loaded_count < MAX_REGION_ENTRIES) success = false;
 
       if (success) {
+        _store->invalidateCache();
         memcpy(regions, loaded, loaded_count * sizeof(RegionEntry));
         if (loaded_count < MAX_REGION_ENTRIES) {
           memset(&regions[loaded_count], 0, (MAX_REGION_ENTRIES - loaded_count) * sizeof(RegionEntry));

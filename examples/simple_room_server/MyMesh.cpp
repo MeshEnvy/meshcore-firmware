@@ -2795,7 +2795,8 @@ void MyMesh::begin(FILESYSTEM *fs) {
   getRNG()->random((uint8_t*)&room_web_boot_id, sizeof(room_web_boot_id));
   if (room_web_boot_id == 0) room_web_boot_id = 1;
 #endif
-  region_map.load(_fs);
+  const bool regions_loaded = region_map.load(_fs);
+  _cli.onRegionsLoaded(_fs, regions_loaded);
   _clock_sync.begin(_fs);
   if (mesh::loadRoomTopic(_fs, room_topic)) {
     if (room_topic[0] != 0) activateRoomTopic();

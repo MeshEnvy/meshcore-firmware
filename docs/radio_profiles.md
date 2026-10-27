@@ -64,6 +64,19 @@ The RF settings match the presets documented by
 and [Wadamesh TAK](https://github.com/jade-on-mesh/wadamesh-tak/blob/main/MEDIAMESH.md).
 Nodes exchanging media need matching radio settings.
 
+On repeaters, room servers and sensors, either preset also creates and enables
+the public `#mediamesh` region for scoped flood forwarding, saving the permission
+automatically. Later RF tuple changes keep that permission. `set radio2 off` or
+`set radio2 auto` disables it but retains the region entry; selecting either
+MediaMesh preset enables it again. A full region table rejects the preset
+before changing the radio settings. Remote changes apply after the command's
+acknowledgement, alongside the profile change.
+
+This permission allows matching incoming scoped floods; it does not select the
+default scope for outgoing traffic or enable crossing between profiles.
+Default/home regions, the wildcard policy and app-selected scopes stay
+unchanged. Companions need no additional forwarding-region permission.
+
 Both leave the primary profile and `radio2.cross` unchanged. The center is
 625 kHz above a 910.525 MHz primary. Automatic preamble remains scan-aware;
 neither preset fixes it at 32 symbols. See [preamble](#preamble) for the

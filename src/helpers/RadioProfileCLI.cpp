@@ -92,6 +92,42 @@ bool secondaryOverlaps(uint32_t primary_hz, float secondary_mhz, uint32_t cleara
   return (primary_hz > secondary_hz ? primary_hz - secondary_hz : secondary_hz - primary_hz)
          <= clearance_hz;
 }
+bool isMediaMeshProfile(const RadioProfileConfig& config) {
+  return config.mode != RadioProfileMode::Off
+      && config.params.freq >= 911.1495f && config.params.freq <= 911.1505f
+      && (config.params.bw == 250.0f || config.params.bw == 125.0f)
+      && config.params.sf == 7 && config.params.cr == 5;
+}
+}
+
+void RadioProfileCLI::setMediaMeshScopeHandler(MediaMeshScopeHandler handler, void* context) {
+  media_scope_handler_ = handler;
+  media_scope_context_ = context;
+  media_scope_pending_ = false;
+  updateMediaMeshScope();
+}
+
+bool RadioProfileCLI::mediaMeshScopeReady(const RadioProfileConfig& config) const {
+  return !media_scope_handler_ || !isMediaMeshProfile(config)
+      || media_scope_handler_(media_scope_context_, true, false);
+}
+
+void RadioProfileCLI::updateMediaMeshScope() {
+  // A held/unreadable radio store is unknown intent, not a saved Off choice.
+  if (!media_scope_handler_ || hold_) return;
+  if (isMediaMeshProfile(saved_)) media_scope_enabled_ = true;
+  else if (saved_.mode == RadioProfileMode::Off) media_scope_enabled_ = false;
+  else return;  // Custom MediaMesh tuning retains the saved region permission.
+  media_scope_pending_ = true;
+  media_scope_retry_ms_ = 0;
+  retryMediaMeshScope();
+}
+
+void RadioProfileCLI::retryMediaMeshScope() {
+  if (!media_scope_pending_ || !media_scope_handler_ || hold_
+      || (media_scope_retry_ms_ && (int32_t)(millis() - media_scope_retry_ms_) < 0)) return;
+  media_scope_pending_ = !media_scope_handler_(media_scope_context_, media_scope_enabled_, true);
+  media_scope_retry_ms_ = media_scope_pending_ ? millis() + 1000 : 0;
 }
 
 RadioProfileCLI::ImageReadResult RadioProfileCLI::readImage(
@@ -722,6 +758,7 @@ bool RadioProfileCLI::stageRemoteSchedule(unsigned slot, const Schedule& schedul
 
 bool RadioProfileCLI::applyReplyMutation() {
   const auto kind = remote_mutation_;
+  if (kind == RemoteMutation::Saved && !mediaMeshScopeReady(remote_config_)) return false;
   if ((kind == RemoteMutation::Saved || kind == RemoteMutation::Off)
       && !commitSavedImage(ReplyPath)) return false;
   remote_mutation_ = RemoteMutation::None;
@@ -775,6 +812,7 @@ bool RadioProfileCLI::applyReplyMutation() {
   }
   // loop() owns publishing, after all completion/failure callbacks have
   // returned and Dispatcher no longer owns either response packet.
+  if (kind == RemoteMutation::Saved || kind == RemoteMutation::Off) updateMediaMeshScope();
   return true;
 }
 
@@ -801,6 +839,7 @@ void RadioProfileCLI::servicePendingTuning() {
 void RadioProfileCLI::loop() {
   const uint32_t now = millis();
   servicePendingTuning();
+  retryMediaMeshScope();
   if (!radio_ || !radio_->profiles()) return;
   const uint32_t elapsed = now - last_ms_;
   last_ms_ = now;
@@ -836,13 +875,15 @@ void RadioProfileCLI::loop() {
       if (s.active && !s.temporary && epoch >= s.start && (!next || s.start < next->start)) next = &s;
     }
     if (!next) break;
-    if (!save(next->config, primary_preamble_, cross_, true)) {
+    if (!mediaMeshScopeReady(next->config)
+        || !save(next->config, primary_preamble_, cross_, true)) {
       // Keep the requested time and order intact. A failed earlier entry must
       // not be retried after a later one and overwrite the newer settings.
       schedule_retry_ms_ = 60000;
       break;
     }
     saved_ = next->config; manual_secondary_ = true; noteSecondaryManualChange(); *next = {};
+    updateMediaMeshScope();
   }
   for (auto& s : schedules_) {
     if (!s.active || !s.temporary || s.started || epoch < s.start || temp_active_ || temp_pending_ || hasReplyMutation()) continue;
@@ -893,6 +934,7 @@ void RadioProfileCLI::appendPrimaryChirpWarning(char* reply, size_t capacity, ui
 void RadioProfileCLI::appendSecondaryWarnings(char* reply, size_t capacity,
                                               const RadioProfiles& preview) const {
   if (!capacity) return;
+  if (media_scope_pending_) appendReply(reply, capacity, "; MediaMesh scope save pending");
   if (preview.enabled() && RadioProfiles::valid(preview.primary)
       && RadioProfiles::valid(preview.secondary.params)) {
     const uint32_t primary_hz = frequencyHz(preview.primary.freq);
@@ -1146,6 +1188,7 @@ bool RadioProfileCLI::handle(const char* command, char* reply, size_t capacity, 
           p.recommendationReady() ? " ready" : " pending", (unsigned long)p.switchBudgetUs());
       appendChirpWarning(reply, capacity, p);
     }
+    if (media_scope_pending_) appendReply(reply, capacity, "; MediaMesh scope save pending");
     return true;
   }
   if ((base || temporary) && verb == Get && !*args) {
@@ -1156,6 +1199,7 @@ bool RadioProfileCLI::handle(const char* command, char* reply, size_t capacity, 
     }
     if (base && saved_.mode == RadioProfileMode::Off) {
       snprintf(reply, capacity, "> off (%s)", manual_secondary_ ? "manual" : "automatic allowed");
+      if (media_scope_pending_) appendReply(reply, capacity, "; MediaMesh scope save pending");
       return true;
     }
 #endif
@@ -1179,9 +1223,11 @@ bool RadioProfileCLI::handle(const char* command, char* reply, size_t capacity, 
     }
     noteSecondaryManualChange();
     saved_ = {}; manual_secondary_ = false;
+    updateMediaMeshScope();
     publish_pending_ = true; publish_after_ms_ = millis() + 2000;
     publish();
     snprintf(reply, capacity, "OK - automatic radio2 permitted in 2s");
+    if (media_scope_pending_) appendReply(reply, capacity, "; MediaMesh scope save pending");
     return true;
   }
 #endif
@@ -1197,11 +1243,15 @@ bool RadioProfileCLI::handle(const char* command, char* reply, size_t capacity, 
       return true;
     }
     noteSecondaryManualChange();
-    if (base) { saved_ = {}; manual_secondary_ = true; schedule_retry_ms_ = 0; }
+    if (base) {
+      saved_ = {}; manual_secondary_ = true; schedule_retry_ms_ = 0;
+      updateMediaMeshScope();
+    }
     temp_pending_ = temp_active_ = false; temp_remaining_ms_ = 0;
     for (auto& s : schedules_) if (base || s.temporary) s = {};
     publish_pending_ = true; publish_after_ms_ = millis() + 2000;
     publish(); snprintf(reply, capacity, "OK - %s in 2s", saved_.mode != RadioProfileMode::Off ? "saved radio2 restored" : "single radio");
+    if (media_scope_pending_) appendReply(reply, capacity, "; MediaMesh scope save pending");
     return true;
   }
   if (scheduled && (verb == Get || verb == Delete)) {
@@ -1276,6 +1326,9 @@ bool RadioProfileCLI::handle(const char* command, char* reply, size_t capacity, 
   if (valid) valid = preview.automaticPreambleFits();
   if (!valid) { snprintf(reply, capacity, "Error: use %s f,bw,sf,cr,rx|rxtx%s[,preamble|auto]", key,
       scheduled_temp ? ",start,end (UTC or +minutes)" : scheduled ? ",start (UTC or +minutes)" : temporary ? ",minutes" : ""); return true; }
+  if (base && !mediaMeshScopeReady(config)) {
+    cli::formatError(reply, capacity, "MediaMesh region unavailable or full"); return true;
+  }
   if (scheduled) {
     if (!epoch || start <= epoch || (uint64_t)(start-epoch) * 1000 > 0x7fffffffULL
         || (scheduled_temp && (end <= start || (uint64_t)(end-epoch) * 1000 > 0x7fffffffULL))) {
@@ -1340,6 +1393,7 @@ bool RadioProfileCLI::handle(const char* command, char* reply, size_t capacity, 
       noteSecondaryManualChange();
       saved_ = config;
       manual_secondary_ = true;
+      updateMediaMeshScope();
       publish_pending_ = true; publish_after_ms_ = millis() + 2000;
       publish();
     }

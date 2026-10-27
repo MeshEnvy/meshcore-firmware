@@ -1357,7 +1357,8 @@ void SensorMesh::begin(FILESYSTEM* fs) {
   _cli.beginManagement(*this, _fs);
 
   acl.load(_fs, self_id);
-  region_map.load(_fs);
+  const bool regions_loaded = region_map.load(_fs);
+  _cli.onRegionsLoaded(_fs, regions_loaded);
   _clock_sync.begin(_fs);
   updateGpsTelemetryPolicy();
 

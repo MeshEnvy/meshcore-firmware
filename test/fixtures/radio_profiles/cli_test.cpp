@@ -548,6 +548,143 @@ static void mediaMeshPresets() {
   assert(!invalid.radio.p.enabled() && invalid.fs.files.empty());
 }
 
+struct MediaScope {
+  bool available = true, fail_save = false, enabled = false, durable = false;
+  unsigned checks = 0, commits = 0;
+  static bool update(void* context, bool enable, bool commit) {
+    auto& self = *static_cast<MediaScope*>(context);
+    if (!commit) { ++self.checks; return !enable || self.available; }
+    ++self.commits;
+    if (enable && !self.available) return false;
+    self.enabled = enable;
+    if (self.fail_save) return false;
+    self.durable = enable;
+    return true;
+  }
+};
+
+static void mediaMeshScopeLifecycle() {
+  for (const char* command : {"set radio2 mediamesh", "set radio2 mediamesh-range"}) {
+    Fixture f(true);
+    MediaScope scope;
+    f.cli.setMediaMeshScopeHandler(MediaScope::update, &scope);
+    assert(!scope.enabled && !scope.durable);
+    const auto before = f.fs.files;
+    const unsigned commits = scope.commits;
+    scope.available = false;
+    assert(strstr(f.cmd(command, false), "region unavailable or full"));
+    assert(f.fs.files == before && scope.commits == commits);
+    scope.available = true;
+    f.fs.fail_write = true;
+    f.cmd(command, false);
+    assert(!scope.enabled && scope.commits == commits);
+    f.fs.fail_write = false;
+    scope.fail_save = true;
+    assert(strstr(f.cmd(command), "scope save pending"));
+    assert(scope.enabled && !scope.durable);
+    assert(strstr(f.cmd("get radio2.status"), "scope save pending"));
+    const unsigned pending_commits = scope.commits;
+    f.advance(999);
+    assert(scope.commits == pending_commits);
+    scope.fail_save = false;
+    f.advance(1);
+    assert(scope.durable && scope.commits == pending_commits+1);
+    assert(!strstr(f.cmd("get radio2.status"), "scope save pending"));
+
+    // An interrupted region save is repaired from the committed radio2 preset
+    // only after its saved region map has been supplied by infrastructure.
+    Radio reboot;
+    mesh::RadioProfileCLI restored;
+    restored.begin(&f.fs, &reboot, &f.clock, true);
+    MediaScope loaded;
+    restored.setMediaMeshScopeHandler(MediaScope::update, &loaded);
+    assert(loaded.enabled && loaded.durable);
+
+    // Explicit RF tuning after a preset keeps the region's saved permission.
+    const unsigned enabled_commits = scope.commits;
+    f.cmd("set radio2 912.5,250,8,5,rxtx");
+    assert(scope.enabled && scope.durable && scope.commits == enabled_commits);
+    Radio custom_radio;
+    mesh::RadioProfileCLI custom;
+    custom.begin(&f.fs, &custom_radio, &f.clock, true);
+    const unsigned loaded_commits = loaded.commits;
+    custom.setMediaMeshScopeHandler(MediaScope::update, &loaded);
+    assert(loaded.enabled && loaded.durable && loaded.commits == loaded_commits);
+    f.cmd("set radio2 off");
+    assert(!scope.enabled && !scope.durable);
+    f.cmd(command);
+    assert(scope.enabled && scope.durable);
+
+    // Off wins after a reboot even if the old region save was interrupted.
+    scope.fail_save = true;
+    assert(strstr(f.cmd("set radio2 off"), "scope save pending"));
+    assert(!scope.enabled && scope.durable);
+    Radio off_radio;
+    mesh::RadioProfileCLI off;
+    off.begin(&f.fs, &off_radio, &f.clock, true);
+    loaded.enabled = loaded.durable = true;
+    off.setMediaMeshScopeHandler(MediaScope::update, &loaded);
+    assert(!loaded.enabled && !loaded.durable);
+  }
+  for (bool delivered : {false, true}) {
+    Fixture f(true);
+    MediaScope scope;
+    f.cli.setMediaMeshScopeHandler(MediaScope::update, &scope);
+    const auto before = f.fs.files;
+    const unsigned commits = scope.commits;
+    f.cli.beginReplyCommand();
+    f.cmd("set radio2 mediamesh");
+    f.cli.endReplyCommand();
+    assert(!scope.enabled && scope.commits == commits);
+    f.advance(2000);
+    assert(!scope.enabled && scope.commits == commits);
+    f.cli.finishReplyMutation(delivered);
+    f.advance(1);
+    assert(scope.enabled == delivered && scope.durable == delivered);
+    if (!delivered) assert(f.fs.files == before);
+    if (delivered) {
+      f.cli.beginReplyCommand(); f.cmd("set radio2 off"); f.cli.endReplyCommand();
+      assert(scope.enabled);
+      f.cli.finishReplyMutation(false); f.advance(1);
+      assert(scope.enabled && scope.durable);
+      f.cli.beginReplyCommand(); f.cmd("set radio2 off"); f.cli.endReplyCommand();
+      f.cli.finishReplyMutation(true); f.advance(1);
+      assert(!scope.enabled && !scope.durable);
+    }
+  }
+  // Capacity can change while the old profile is retained for a remote reply.
+  Fixture f(true);
+  MediaScope scope;
+  f.cli.setMediaMeshScopeHandler(MediaScope::update, &scope);
+  const auto before = f.fs.files;
+  f.cli.beginReplyCommand(); f.cmd("set radio2 mediamesh"); f.cli.endReplyCommand();
+  scope.available = false;
+  f.cli.finishReplyMutation(true); f.advance(1);
+  assert(f.cli.hasReplyMutation() && !scope.enabled);
+  assert(f.fs.files.find("/radio_profiles") == f.fs.files.end());
+  scope.available = true;
+  f.advance(1000);
+  assert(!f.cli.hasReplyMutation() && scope.enabled && scope.durable);
+
+  // Unknown radio intent must not disable an existing scope during recovery.
+  const auto valid_image = f.fs.files["/radio_profiles"];
+  for (bool unreadable : {false, true}) {
+    f.fs.files["/radio_profiles"] = valid_image;
+    if (unreadable) f.fs.fail_read_open = true;
+    else f.fs.files["/radio_profiles"].resize(1);
+    Radio held_radio;
+    mesh::RadioProfileCLI held;
+    held.begin(&f.fs, &held_radio, &f.clock, true);
+    MediaScope held_scope;
+    held_scope.enabled = held_scope.durable = true;
+    held.setMediaMeshScopeHandler(MediaScope::update, &held_scope);
+    assert(held_scope.enabled && held_scope.durable && !held_scope.commits);
+    held.loop();
+    assert(held_scope.enabled && !held_scope.commits);
+    f.fs.fail_read_open = false;
+  }
+}
+
 int main(int argc, char** argv) {
   static_assert(uint8_t(mesh::RadioCrossMode::Auto)==0 && uint8_t(mesh::RadioCrossMode::On)==1
       && uint8_t(mesh::RadioCrossMode::Off)==2, "saved crossover encoding must remain compatible");
@@ -594,6 +731,7 @@ int main(int argc, char** argv) {
     else if (!strcmp(argv[1], "relative_schedule")) relativeSchedules();
     else if (!strcmp(argv[1], "spectrum_overlap")) spectrumOverlap();
     else if (!strcmp(argv[1], "mediamesh")) mediaMeshPresets();
+    else if (!strcmp(argv[1], "media_scope")) mediaMeshScopeLifecycle();
     else return 2;
     return 0;
   }

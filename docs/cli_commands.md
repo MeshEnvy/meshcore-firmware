@@ -15,6 +15,10 @@ For a saved MediaMesh second profile, use `set radio2 mediamesh`
 (911.150 MHz, 250 kHz, SF7, CR 4/5, `rxtx`, automatic preamble), or
 `set radio2 mediamesh-range` for 125 kHz. These leave the primary profile
 and crossing policy unchanged. Both radio2 and `radio2.cross` default to `off`.
+On repeaters, room servers and sensors, either preset also saves an allowed
+`#mediamesh` forwarding region. `set radio2 off` or `set radio2 auto` disables
+that permission while retaining the region entry. Default/home regions,
+wildcard permissions and outgoing app scopes stay unchanged.
 See [MediaMesh presets](radio_profiles.md#mediamesh-presets).
 
 For supported Full Companions, see [Meshtext channel chat](radio_profiles.md#meshtext-channel-chat)

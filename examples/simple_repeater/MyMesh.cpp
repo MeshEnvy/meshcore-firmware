@@ -4039,7 +4039,8 @@ void MyMesh::begin(FILESYSTEM *fs) {
   if (!guest_login.enabled()) acl.removeGuestClients();
   mesh::hilStartupTrace("mesh_acl_ready");
   // TODO: key_store.begin();
-  region_map.load(_fs);
+  const bool regions_loaded = region_map.load(_fs);
+  _cli.onRegionsLoaded(_fs, regions_loaded);
   mesh::hilStartupTrace("mesh_regions_ready");
 #if !defined(PORTABLE_MQTT_OBSERVER)
 #if MESH_ENABLE_FLOOD_RULE_ENGINE

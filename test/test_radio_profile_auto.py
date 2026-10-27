@@ -207,6 +207,12 @@ static void automaticPermission() {
   f.cmd("del radioat2 all");
   f.cmd("set radio2 auto"); f.advance(2000);
   assert(f.cli.canAutoSecondary());
+  MediaScope scope;
+  f.cli.setMediaMeshScopeHandler(MediaScope::update, &scope);
+  f.cmd("set radio2 mediamesh"); f.advance(2000);
+  assert(scope.enabled && scope.durable);
+  f.cmd("set radio2 auto");
+  assert(!scope.enabled && !scope.durable);
 }
 
 static void unmanagedTakeover() {
