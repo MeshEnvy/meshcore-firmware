@@ -243,6 +243,11 @@ def install(build_env):
         return
     build_env["MESH_NRF52_FLASH_TRIM_ACTIVE"] = True
     build_env.AppendUnique(CPPDEFINES=list(definitions.items()))
+    hook_path = build_env.subst("$PROJECT_DIR/scripts/nrf52_vl53l0x_const.py")
+    hook_spec = importlib.util.spec_from_file_location("mesh_nrf52_vl53_const", hook_path)
+    hook = importlib.util.module_from_spec(hook_spec)
+    hook_spec.loader.exec_module(hook)
+    hook.install(build_env)
     if infrastructure:
         print("nRF52 infrastructure flash trim: compact crypto, unused USB device classes/GPS cache/vendor splash, compact OTA target names")
     else:

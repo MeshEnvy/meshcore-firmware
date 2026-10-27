@@ -21,25 +21,55 @@ class OtaMemoryLayoutTest(unittest.TestCase):
 #include <assert.h>
 #include <stddef.h>
 using namespace mesh::ota;
-static_assert(sizeof(OtaManager::ServeEntry) == (sizeof(void*) == 4 ? 60u : 64u),
-              "source entries must retain every field without old padding");
+static_assert(sizeof(OtaManager::ServeEntry) == (sizeof(void*) == 4 ? 32u : 40u),
+              "source entries must retain all independent descriptor fields once");
 static_assert(alignof(OtaManager::ServeEntry) >= alignof(MotaSource*), "unaligned source pointer");
-static_assert(offsetof(OtaManager::ServeEntry, desc) % alignof(MotaDesc) == 0, "unaligned descriptor");
 static_assert(offsetof(OtaManager::ServeEntry, target_id) % alignof(uint32_t) == 0, "unaligned word");
 static_assert(sizeof(OtaStoreQspiNrf52) > 8192u, "both staging page buffers must remain");
 int main() {
   OtaManager::ServeEntry row;
-  assert(row.desc.target_id == 0 && row.desc.fw_version == 0 && row.desc.source_caps == 0);
-  assert(row.desc.mid[0] == 0 && row.desc.mid[3] == 0 && row.desc.total_size == 0);
+  const auto empty = row.descriptor();
+  assert(empty.target_id == 0 && empty.fw_version == 0 && empty.source_caps == 0);
+  assert(empty.mid[0] == 0 && empty.mid[3] == 0 && empty.total_size == 0);
   row.mid[0] = 17; row.target_id = 123; row.fw_version = 456;
   row.have_count = 789; row.src = nullptr; row.src_idx = 255;
   row.codec_id = 2; row.flags = 3; row.is_self = true;
-  row.desc.target_id = 987; row.desc.payload_size = 654;
+  row.payload_size = 654; row.block_size_log2 = 11; row.source_caps = 3;
   const OtaManager::ServeEntry copy = row;
   assert(copy.mid[0] == 17 && copy.target_id == 123 && copy.fw_version == 456);
   assert(copy.have_count == 789 && copy.src == nullptr && copy.src_idx == 255);
   assert(copy.codec_id == 2 && copy.flags == 3 && copy.is_self);
-  assert(copy.desc.target_id == 987 && copy.desc.payload_size == 654);
+  const auto descriptor = copy.descriptor();
+  assert(descriptor.target_id == 123 && descriptor.payload_size == 654);
+  assert(descriptor.block_count == 789 && descriptor.block_size_log2 == 11 && descriptor.source_caps == 3);
+  assert(descriptor.leaves_off == 8 + MOTA_MFL);
+  assert(descriptor.payload_off == descriptor.leaves_off + 789 * 4);
+  assert(descriptor.total_size == descriptor.payload_off + 654 + 5);
+  // Every descriptor admitted by refresh_sources() has this canonical layout.
+  // Keep arbitrary metadata/caps/large payload values, not just current images.
+  uint32_t random = 0x6d76a345;
+  for (unsigned trial = 0; trial != 10000; ++trial) {
+    auto next = [&]() { random ^= random << 13; random ^= random >> 17; random ^= random << 5; return random; };
+    MotaDesc original;
+    for (auto& byte : original.mid) byte = uint8_t(next());
+    original.target_id = next(); original.fw_version = next();
+    original.codec_id = uint8_t(next()); original.flags = uint8_t(next());
+    original.block_size_log2 = uint8_t(next()); original.source_caps = uint8_t(next());
+    original.block_count = 1 + next() % (UINT32_MAX / 8);
+    original.leaves_off = 8 + MOTA_MFL;
+    original.payload_off = original.leaves_off + original.block_count * 4;
+    original.payload_size = next() % (UINT32_MAX - original.payload_off - 5);
+    original.total_size = original.payload_off + original.payload_size + 5;
+    row.cacheDescriptor(original);
+    const auto roundtrip = row.descriptor();
+    assert(memcmp(original.mid, roundtrip.mid, 4) == 0);
+    assert(original.target_id == roundtrip.target_id && original.fw_version == roundtrip.fw_version);
+    assert(original.codec_id == roundtrip.codec_id && original.flags == roundtrip.flags);
+    assert(original.block_size_log2 == roundtrip.block_size_log2 && original.source_caps == roundtrip.source_caps);
+    assert(original.block_count == roundtrip.block_count && original.payload_size == roundtrip.payload_size);
+    assert(original.leaves_off == roundtrip.leaves_off && original.payload_off == roundtrip.payload_off);
+    assert(original.total_size == roundtrip.total_size);
+  }
 }
 '''
         with tempfile.TemporaryDirectory(prefix="ota-layout-") as directory:

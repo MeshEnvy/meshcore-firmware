@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 #include "OtaFormat.h"
 #include "OtaMemoryPolicy.h"
 #include "OtaTiming.h"
@@ -327,19 +328,44 @@ public:
   };
   // A lightweight catalog entry: what we advertise per mota + how to load its ServeView on demand.
   struct ServeEntry {
-    // Named fields only: this is not a wire/persistent layout. Group aligned
-    // values ahead of byte flags instead of paying three padding gaps per row.
-    MotaSource* src;                       // load from this external source ...
-    MotaDesc    desc;                      // cached region offsets for the source entry
-    uint32_t    target_id, fw_version;
-    uint32_t    have_count;                // blocks we currently hold (== block_count when complete)
-    uint8_t     mid[4];
-    uint8_t     codec_id, flags;
-    bool        is_self;                   // true => entry is view0 (our own fw / RAM mota)
-    uint8_t     src_idx;                   // ... at this index
+    // This is not a wire/persistent layout. Source admission proves the fixed
+    // header/leaves/payload geometry, so cache each field once and reconstruct
+    // the three derived offsets/sizes instead of retaining another MotaDesc.
+    MotaSource* src = nullptr;             // load from this external source ...
+    uint32_t    target_id = 0, fw_version = 0;
+    uint32_t    have_count = 0;            // complete sources hold every block
+    uint32_t    payload_size = 0;
+    uint8_t     mid[4] = {};
+    uint8_t     codec_id = 0, flags = 0;
+    bool        is_self = false;           // true => entry is view0 (our own fw / RAM mota)
+    uint8_t     src_idx = 0;               // ... at this index
+    uint8_t     block_size_log2 = 0, source_caps = 0;
+
+    void cacheDescriptor(const MotaDesc& d) {
+      memcpy(mid, d.mid, sizeof(mid));
+      target_id = d.target_id; fw_version = d.fw_version;
+      codec_id = d.codec_id; flags = d.flags; have_count = d.block_count;
+      payload_size = d.payload_size;
+      block_size_log2 = d.block_size_log2; source_caps = d.source_caps;
+    }
+    MotaDesc descriptor() const {
+      MotaDesc d;
+      if (!have_count) return d;
+      memcpy(d.mid, mid, sizeof(mid));
+      d.target_id = target_id; d.fw_version = fw_version;
+      d.codec_id = codec_id; d.flags = flags; d.block_count = have_count;
+      d.payload_size = payload_size;
+      d.block_size_log2 = block_size_log2; d.source_caps = source_caps;
+      d.leaves_off = 8u + MOTA_MFL;
+      d.payload_off = d.leaves_off + have_count * 4u;
+      d.total_size = d.payload_off + payload_size + 5u;
+      return d;
+    }
   };
-  static_assert(sizeof(ServeEntry) <= sizeof(MotaDesc) + sizeof(MotaSource*) + 20u,
-                "OTA source catalog must not add per-entry alignment padding");
+  static_assert(sizeof(ServeEntry) ==
+                    ((sizeof(MotaSource*) + 28u + alignof(MotaSource*) - 1u)
+                      / alignof(MotaSource*)) * alignof(MotaSource*),
+                "OTA source catalog must not duplicate validated descriptor fields");
   // Context for the source-payload reader trampoline.
   struct SrcReadCtx { MotaSource* src; uint8_t idx; uint32_t payload_off; };
 
@@ -903,7 +929,9 @@ private:
   uint8_t    _observed_path_transmissions = 0;   // source + relays; 0 falls back to configured max_hops+1
   uint32_t   _packets_sent = 0;                  // OTA packets accepted by the radio adapter (wrap-safe)
   // multi-fragment manifest reassembly (a signed v2 manifest exceeds one packet)
-  uint8_t    _mf_buf[OTA_MF_MAXFRAG * OTA_MF_FRAG];   // sized to the fragment cap so no valid manifest is silently dropped
+  // handleManifest admits only the fixed MOTA_MFL bytes and exact fragment
+  // shapes. The transport's larger fragment-count ceiling adds no valid data.
+  uint8_t    _mf_buf[MOTA_MFL];
   uint16_t   _mf_retries = 0;                          // GET_MANIFEST retries while WANT_MANIFEST (give up after a cap)
   uint8_t    _mf_total = 0;                    // frag_total of the manifest being reassembled (0 = none)
   uint16_t   _mf_mask = 0;                     // received manifest-fragment bitmap

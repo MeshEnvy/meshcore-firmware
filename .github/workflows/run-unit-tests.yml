@@ -1143,6 +1143,7 @@ jobs:
       - name: Verify nRF52 infrastructure trims and unchanged Companion scope
         run: |
           python3 -B test/test_nrf52_flash_trim.py -v
+          python3 -B test/test_nrf52_vl53l0x_const.py -v
           python3 -B test/test_nrf52_gnss_version_trim.py -v
           python3 -B test/test_nrf52_program_lifetime.py -v
           python3 -B test/test_nrf52_tft_font_trim.py -v

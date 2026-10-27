@@ -134,6 +134,12 @@ class Nrf52FlashTrimTest(unittest.TestCase):
             def BuildSources(self, *args):
                 self.setdefault("BUILT_SOURCES", []).append(args)
 
+            def subst(self, value):
+                return value.replace("$PROJECT_DIR", str(ROOT))
+
+            def AddBuildMiddleware(self, callback, pattern):
+                self.setdefault("MIDDLEWARE", []).append((callback, pattern))
+
         base = dict(BUILD_FLAGS=["-DUSE_CC310_HW_CRYPTO=1"],
                     SRC_FILTER=["+<../examples/simple_repeater>"], CPPDEFINES=[])
         excluded = BuildEnvironment(**base, PIOENV="RAK_4631_companion_radio_full")
@@ -148,6 +154,7 @@ class Nrf52FlashTrimTest(unittest.TestCase):
         self.assertTrue(active["MESH_NRF52_FLASH_TRIM_ACTIVE"])
         self.assertIn("-Wl,--wrap=CRYS_ECPKI_GetEcDomain", active["LINKFLAGS"])
         self.assertEqual(active["BUILT_SOURCES"][0][-1], "+<Cc310DomainTrim.c>")
+        self.assertEqual(active["MIDDLEWARE"][0][1], "*Adafruit_VL53L0X*/*.cpp")
 
     @unittest.skipUnless(shutil.which("cc"), "a native C compiler is required")
     def test_wrapped_domain_preserves_p256_and_rejects_unused_curves(self):
