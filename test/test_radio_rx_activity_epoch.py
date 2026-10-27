@@ -16,6 +16,7 @@ def build_source(family='CustomSX1262',remove_reset=False,include_duty=False):
  measurement_binding=' MeasurementModule* mod=&measurement_mod;\n'
  assert source.count(measurement_binding)==1
  source=source.replace(measurement_binding,'')
+ source=source.replace('struct RadioLibHal {', 'uint32_t millis();\nstruct RadioLibHal { uint32_t millis(){return ::millis();}')
  src=(ROOT/'src/helpers/radiolib/RadioLibWrappers.cpp').read_text()
  chip=(ROOT/f'src/helpers/radiolib/{family}.h').read_text()
  entry=method(chip,'int16_t startReceive()')
