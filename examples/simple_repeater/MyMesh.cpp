@@ -4542,17 +4542,17 @@ void MyMesh::setTempRadioTiming(uint32_t duration_seconds) {
 }
 
 bool MyMesh::applyRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, uint16_t preamble, bool temporary) {
+  const bool apply_rxps = _prefs.rx_powersaving_enabled && radio_driver.supportsRxPowerSaving();
   uint32_t rx_us = _prefs.rx_ps_rx_us;
   uint32_t sleep_us = _prefs.rx_ps_sleep_us;
-  if (_prefs.rx_powersaving_enabled && _prefs.rx_ps_level != 0) {
+  if (apply_rxps && _prefs.rx_ps_level != 0) {
     uint32_t preamble = _prefs.rx_ps_preamble
         ? _prefs.rx_ps_preamble : rxPowerSavingPreambleForParams(sf, bw);
     if (!CommonCLI::calculateRxPowerSavingLevel(
           _prefs.rx_ps_level, sf, bw, preamble, &rx_us, &sleep_us)) return false;
   }
   uint32_t timings[2] = {rx_us, sleep_us};
-  const uint32_t* applied_timings = _prefs.rx_powersaving_enabled
-      && radio_driver.supportsRxPowerSaving() ? timings : NULL;
+  const uint32_t* applied_timings = apply_rxps ? timings : NULL;
   if (_cli.radioProfiles().applyPrimary(freq, bw, sf, cr, temporary, preamble,
                               applied_timings) != mesh::RadioParamApplyResult::APPLIED) {
     MESH_DEBUG_PRINTLN("Radio schedule: radio busy or parameter apply failed");

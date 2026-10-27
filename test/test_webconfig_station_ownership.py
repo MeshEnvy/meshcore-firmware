@@ -5,6 +5,7 @@ import unittest
 
 from test_replay_reset_integration import extract_braced
 import test_wifi_ota_start as wifi_start
+import test_webconfig_login_throttle as login_tests
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -106,6 +107,129 @@ class WebConfigStationOwnershipTest(unittest.TestCase):
     def test_manual_companion_start_preserves_legacy_join_and_15s_fallback(self):
         self.compile_and_run(self.station_fixture(), "-DWITH_MQTT_BRIDGE=1",
                              "-DTEST_LEGACY_COMPANION=1")
+
+    def delayed_login_fixture(self, without_initialization=False):
+        source = (ROOT / "src/helpers/esp32/WebConfigServer.cpp").read_text()
+        fixture = self.station_fixture().split("int main() {", 1)[0]
+        auth = (ROOT / "test/fixtures/webconfig_login_handler.cpp").read_text()
+        transport = "\n".join(extract_braced(auth, signature) + ";" for signature in (
+            "struct Client", "struct AsyncWebServerResponse", "struct AsyncWebServerRequest"))
+        transport = r'''
+#include <map>
+#include <ArduinoJson.h>
+#include <helpers/WebConfigLoginThrottle.h>
+struct NodeSnapshot { char admin_password[16] = {}; };
+struct AsyncWebServer {
+  bool credential_ready_at_begin = false;
+  explicit AsyncWebServer(int port) { assert(port == 80); }
+  void begin() {
+    mesh::esp32::managementPassword::Snapshot current;
+    credential_ready_at_begin = mesh::esp32::managementPassword::snapshot(current);
+  }
+};
+struct DefaultHeaders {
+  static DefaultHeaders& Instance() { static DefaultHeaders value; return value; }
+  void addHeader(const char*, const char*) {}
+};
+static uint32_t random_word = 123;
+uint32_t esp_random() { return ++random_word; }
+''' + transport
+        fixture = fixture.replace("class WebConfigServer {", transport + "\nclass WebConfigServer {")
+        fixture = fixture.replace("  struct Callbacks { bool supportsRoomService() const { return false; } };", r'''
+  struct Callbacks {
+    NodeSnapshot node = {"saved-secret"}; unsigned snapshots = 0;
+    bool supportsRoomService() const { return false; }
+    void getNodeSnapshot(NodeSnapshot& out) { ++snapshots; out = node; }
+  };
+  static AsyncWebServer* _host;
+  AsyncWebServer* _server = nullptr;
+  char _session_token[33] = {};
+  uint32_t _session_last_seen = 0, _session_generation = 0, _ap_auth_generation = 0;
+  WebConfigLoginThrottle::Tracker _login_throttle;
+  void initializeManagementPassword();
+  void handleLogin(AsyncWebServerRequest*);
+  void noteNetworkActivity() {}
+  void registerRoutes() {}
+''')
+        fixture = fixture.replace("  int status() const { return state; }",
+                                  "  int status() const { return state; }\n  int softAPIP() const { return 4; }")
+        fixture = fixture.replace("  void createServer() { ++server_starts; }", "  void createServer();")
+        create = extract_braced(source, "void WebConfigServer::createServer(")
+        if without_initialization:
+            self.assertIn("  initializeManagementPassword();", create)
+            create = create.replace("  initializeManagementPassword();\n", "", 1)
+        # A counter observes the complete production server-start body without
+        # replacing its credential, route attachment, or HTTP begin ordering.
+        create = create.replace("{\n", "{\n  ++server_starts;\n", 1)
+        fixture += "\nAsyncWebServer* WebConfigServer::_host = nullptr;\n" + create + "\n"
+        fixture += "\n".join(extract_braced(source, signature) for signature in (
+            "void WebConfigServer::initializeManagementPassword(",
+            "static bool fixedTimeEquals(", "void WebConfigServer::handleLogin("))
+        return fixture + r'''
+static int browserLogin(WebConfigServer& portal, const char* password) {
+  AsyncWebServerRequest request;
+  request.socket.remote = 0x0304A8C0;
+  request.body = std::string("{\"password\":\"") + password + "\"}";
+  request._tempObject = request.body.data();
+  portal.handleLogin(&request);
+  if (request.status == 503) assert(request.reply == "{\"error\":\"credentials unavailable\"}");
+  return request.status;
+}
+int main() {
+  namespace password = mesh::esp32::managementPassword;
+  password::Snapshot initial;
+  assert(!password::snapshot(initial));
+  const uint8_t key[32] = {};
+  char reply[160] = {};
+  WebConfigServer::Callbacks repeater;
+  WebConfigServer portal(&repeater, nullptr, true, key, "test", "test", "repeater", "G3", true);
+  portal.updateWiFiOwnership(true);
+  assert(portal.startAutoMode(reply));
+  assert(portal._mode == WebConfigServer::MODE_CONNECTING && portal.server_starts == 0);
+  assert(!password::snapshot(initial)); // No earlier AP/immediate-LAN path initializes it.
+  WiFi.state = WL_CONNECTED;
+  portal.tick(++clock_ms);
+  assert(portal._mode == WebConfigServer::MODE_LAN && portal.server_starts == 1);
+  assert(browserLogin(portal, "wrong-secret") == 401);
+  assert(browserLogin(portal, "saved-secret") == 200);
+  assert(portal._server->credential_ready_at_begin);
+  assert(repeater.snapshots == 1); // HTTP authentication never reads mutable prefs.
+
+  // A Room listener may wait for another station owner. Its start must retain
+  // a newer committed credential rather than publish a candidate RAM snapshot.
+  assert(password::publish("committed-key"));
+  password::Snapshot committed; assert(password::snapshot(committed));
+  WebConfigServer::Callbacks room;
+  strcpy(room.node.admin_password, "temporary-RAM");
+  WiFi.state = WL_DISCONNECTED;
+  WebConfigServer waiting(&room, nullptr, false, key, "test", "test", "room", "G3", true);
+  waiting.updateWiFiOwnership(false);
+  assert(waiting.startAutoMode(reply));
+  assert(waiting._mode == WebConfigServer::MODE_CONNECTING && waiting.server_starts == 0);
+  WiFi.state = WL_CONNECTED;
+  waiting.tick(++clock_ms);
+  assert(waiting._mode == WebConfigServer::MODE_LAN && waiting.server_starts == 1);
+  assert(browserLogin(waiting, "temporary-RAM") == 401);
+  assert(browserLogin(waiting, "committed-key") == 200);
+  assert(waiting._server->credential_ready_at_begin);
+  password::Snapshot after; assert(password::snapshot(after));
+  assert(after.generation == committed.generation && !strcmp(after.password, committed.password));
+  assert(room.snapshots == 0);
+}
+'''
+
+    def test_delayed_station_login_initializes_credentials_before_http_and_keeps_committed_value(self):
+        json_include = login_tests.WebConfigLoginThrottleTest.json_include(self)
+        for mqtt in (False, True):
+            with self.subTest(mqtt=mqtt):
+                prefix = "#define WITH_MQTT_BRIDGE 1\n" if mqtt else ""
+                login_tests.WebConfigLoginThrottleTest.compile_run(
+                    self, prefix + self.delayed_login_fixture(), (json_include,))
+                # Without the real createServer initializer, the delayed LAN
+                # path reproduces the device's 503 credentials-unavailable error.
+                login_tests.WebConfigLoginThrottleTest.compile_run(
+                    self, prefix + self.delayed_login_fixture(True),
+                    (json_include,), expect_rejection=True)
 
 
 if __name__ == "__main__":

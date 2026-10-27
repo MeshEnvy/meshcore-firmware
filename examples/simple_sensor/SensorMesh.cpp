@@ -1142,15 +1142,15 @@ void SensorMesh::servicePendingPrimaryRadioSettings(bool tx_gap) {
     uint32_t rx_us = _prefs.rx_ps_rx_us;
     uint32_t sleep_us = _prefs.rx_ps_sleep_us;
     bool timing_ok = true;
-    if (_prefs.rx_powersaving_enabled && _prefs.rx_ps_level != 0) {
+    const bool apply_rxps = _prefs.rx_powersaving_enabled && radio_driver.supportsRxPowerSaving();
+    if (apply_rxps && _prefs.rx_ps_level != 0) {
       uint32_t preamble = _prefs.rx_ps_preamble ? _prefs.rx_ps_preamble
                                                 : rxPowerSavingPreambleForParams(pending_sf, pending_bw);
       timing_ok = CommonCLI::calculateRxPowerSavingLevel(
           _prefs.rx_ps_level, pending_sf, pending_bw, preamble, &rx_us, &sleep_us);
     }
     uint32_t timings[2] = {rx_us, sleep_us};
-    const uint32_t* applied_timings = _prefs.rx_powersaving_enabled
-        && radio_driver.supportsRxPowerSaving() ? timings : NULL;
+    const uint32_t* applied_timings = apply_rxps ? timings : NULL;
     if (timing_ok && _cli.radioProfiles().applyPrimary(
           pending_freq, pending_bw, pending_sf, pending_cr, true, pending_preamble, applied_timings) == mesh::RadioParamApplyResult::APPLIED) {
       set_radio_at = 0;
