@@ -51,6 +51,30 @@ class ReleaseAsset:
 
 
 @dataclass(frozen=True)
+class ReleaseChoice:
+    """One exact-board application from a published release or split family."""
+    release_tag: str
+    asset: ReleaseAsset
+    prerelease: bool
+    published_at: str
+
+    @property
+    def label(self) -> str:
+        # GitHub tags are source data; do not echo control sequences to a terminal.
+        tag = "".join(character if character.isprintable() else "?"
+                      for character in self.release_tag)
+        return tag + (" (prerelease)" if self.prerelease else "")
+
+
+@dataclass(frozen=True)
+class _CatalogRelease:
+    tag: str
+    prerelease: bool
+    published_at: str
+    assets: tuple[ReleaseAsset, ...]
+
+
+@dataclass(frozen=True)
 class UpdatePlan:
     kind: str
     reason: str
@@ -199,61 +223,72 @@ class GitHubCatalog:
         self.opener = opener
         self._assets: list[ReleaseAsset] | None = None
         self._all_assets: list[ReleaseAsset] = []
+        self._pages: dict[int, tuple[_CatalogRelease, ...]] = {}
+        self._last_page: int | None = None
+
+    @property
+    def has_more_releases(self) -> bool:
+        return self._last_page is None and len(self._pages) < 10
+
+    def _releases(self, max_pages: int) -> list[_CatalogRelease]:
+        if type(max_pages) is not int or not 1 <= max_pages <= 10:
+            raise ota.OtaError("Catalog page limit must be between 1 and 10")
+        releases = []
+        for page in range(1, max_pages + 1):
+            if self._last_page is not None and page > self._last_page:
+                break
+            if page not in self._pages:
+                # A split family contains thousands of assets. Cache only parsed
+                # application metadata, keeping each response bounded on a Pi.
+                url = f"https://api.github.com/repos/{self.repository}/releases?per_page=10&page={page}"
+                with _open(url, api=True, opener=self.opener) as response:
+                    raw = response.read(MAX_CATALOG_BYTES + 1)
+                if len(raw) > MAX_CATALOG_BYTES:
+                    raise ota.OtaError("GitHub release catalog is unexpectedly large")
+                try:
+                    rows = json.loads(raw)
+                except (ValueError, UnicodeError) as exc:
+                    raise ota.OtaError("GitHub returned an invalid release catalog") from exc
+                if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                    raise ota.OtaError("GitHub returned an invalid release catalog")
+                parsed = []
+                for release in rows:
+                    tag = release.get("tag_name")
+                    if release.get("draft") or not isinstance(tag, str) or _version(tag) is None:
+                        continue
+                    assets = release.get("assets", [])
+                    if not isinstance(assets, list):
+                        raise ota.OtaError("GitHub returned an invalid release asset list")
+                    candidates = tuple(candidate for row in assets if isinstance(row, dict)
+                                       if (candidate := parse_release_asset(row, tag, self.repository)) is not None)
+                    published = release.get("published_at") or ""
+                    parsed.append(_CatalogRelease(tag, _is_prerelease(release),
+                                                  published if isinstance(published, str) else "", candidates))
+                self._pages[page] = tuple(parsed)
+                if len(rows) < 10:
+                    self._last_page = page
+            releases.extend(self._pages[page])
+        # Extra pages loaded through the release menu also become candidates for
+        # exact-base discovery. Their downloaded body hashes remain authoritative.
+        self._all_assets = [asset for page in sorted(self._pages)
+                            for release in self._pages[page] for asset in release.assets]
+        return releases
 
     def fetch_assets(self, *, include_prerelease: bool = False, max_pages: int = 3) -> list[ReleaseAsset]:
-        if not 1 <= max_pages <= 10:
-            raise ota.OtaError("Catalog page limit must be between 1 and 10")
-        releases: list[dict] = []
-        for page in range(1, max_pages + 1):
-            # Release families contain thousands of per-board assets. Small
-            # pages keep GitHub's embedded asset metadata bounded on a Pi.
-            url = f"https://api.github.com/repos/{self.repository}/releases?per_page=10&page={page}"
-            with _open(url, api=True, opener=self.opener) as response:
-                raw = response.read(MAX_CATALOG_BYTES + 1)
-            if len(raw) > MAX_CATALOG_BYTES:
-                raise ota.OtaError("GitHub release catalog is unexpectedly large")
-            try:
-                rows = json.loads(raw)
-            except (ValueError, UnicodeError) as exc:
-                raise ota.OtaError("GitHub returned an invalid release catalog") from exc
-            if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-                raise ota.OtaError("GitHub returned an invalid release catalog")
-            releases.extend(row for row in rows if not row.get("draft")
-                            and (include_prerelease or not _is_prerelease(row)))
-            if len(rows) < 10:
-                break
-        mains = [row for row in releases if re.match(r"^v\d", str(row.get("tag_name", "")), re.I)
-                 and _version(row["tag_name"]) is not None]
+        releases = [release for release in self._releases(max_pages)
+                    if include_prerelease or not release.prerelease]
+        mains = [release for release in releases if re.match(r"^v\d", release.tag, re.I)]
         if not mains:
             raise ota.OtaError("No published main firmware release was found")
-        main = max(mains, key=lambda row: (_version(row["tag_name"]), row.get("published_at") or ""))
-        family = main["tag_name"]
-        result: list[ReleaseAsset] = []
-        historical: list[ReleaseAsset] = []
-        for release in releases:
-            tag = str(release.get("tag_name", ""))
-            release_family = _release_family(tag)
-            if release_family is None:
-                continue
-            rows = release.get("assets", [])
-            if not isinstance(rows, list):
-                raise ota.OtaError("GitHub returned an invalid release asset list")
-            for row in rows:
-                if isinstance(row, dict):
-                    candidate = parse_release_asset(row, tag, self.repository)
-                    if candidate is not None:
-                        historical.append(candidate)
-                        if release_family == family:
-                            result.append(candidate)
-        self._all_assets = historical
-        self._assets = result
-        return list(result)
+        main = max(mains, key=lambda release: (_version(release.tag), release.published_at))
+        self._assets = [asset for release in releases if _release_family(release.tag) == main.tag
+                        for asset in release.assets]
+        return list(self._assets)
 
-    def candidates(self, target_env: str | None = None, *, target_id: int | None = None,
-                   profile: str = "full", include_embedded: bool = False) -> list[ReleaseAsset]:
+    @staticmethod
+    def _compatible(assets, target_env, target_id, profile, include_embedded=False):
         if target_env is None and target_id is None:
             raise ota.OtaError("Select an exact firmware target")
-        assets = self.fetch_assets() if self._assets is None else self._assets
         result = [row for row in assets if (target_env is None or row.target_env == target_env)
                   and (target_id is None or row.target_id == target_id)
                   and (include_embedded or not row.embedded_bootloader)]
@@ -261,13 +296,47 @@ class GitHubCatalog:
         exact = [row for row in result if row.profile == profile]
         result = exact or [row for row in result if row.profile == "standard"]
         preference = {"mota": 0, "zip": 1, "bin": 2, "hex": 3}
-        return sorted(result, key=lambda row: (-row.version, preference[row.kind], row.name))
+        return sorted(result, key=lambda row: (-row.version, preference[row.kind], row.name, row.release_tag))
+
+    def candidates(self, target_env: str | None = None, *, target_id: int | None = None,
+                   profile: str = "full", include_embedded: bool = False) -> list[ReleaseAsset]:
+        assets = self.fetch_assets() if self._assets is None else self._assets
+        return self._compatible(assets, target_env, target_id, profile, include_embedded)
 
     def choose_asset(self, target_env: str | None = None, **kwargs) -> ReleaseAsset:
         choices = self.candidates(target_env, **kwargs)
         if not choices:
             raise ota.OtaError("No published application matches this exact board, role, and profile")
         return choices[0]
+
+    def release_choices(self, target_env: str | None = None, *, target_id: int | None = None,
+                        profile: str = "full", include_prerelease: bool = True,
+                        max_pages: int = 3) -> list[ReleaseChoice]:
+        """Browse exact-board releases; loading older pages reuses parsed pages.
+
+        Known split release shards are one family choice. Board-specific preview
+        releases are also selectable here, while choose_asset stays stable-only.
+        No file is downloaded until the caller selects a choice's asset.
+        """
+        if target_env is None and target_id is None:
+            raise ota.OtaError("Select an exact firmware target")
+        families: dict[str, list[_CatalogRelease]] = {}
+        for release in self._releases(max_pages):
+            if not include_prerelease and release.prerelease:
+                continue
+            family = _release_family(release.tag) or release.tag
+            families.setdefault(family, []).append(release)
+        choices = []
+        for family, releases in families.items():
+            assets = self._compatible([asset for release in releases for asset in release.assets],
+                                      target_env, target_id, profile)
+            if assets:
+                choices.append(ReleaseChoice(family, assets[0],
+                    any(release.prerelease for release in releases),
+                    max(release.published_at for release in releases)))
+        choices.sort(key=lambda choice: (choice.asset.version, choice.published_at, choice.release_tag), reverse=True)
+        choices.sort(key=lambda choice: choice.prerelease)
+        return choices
 
     def base_candidates(self, target_env: str | None = None, *, target_id: int | None = None,
                         fw_version: int | None = None, limit: int = 8) -> list[ReleaseAsset]:
@@ -276,8 +345,8 @@ class GitHubCatalog:
             raise ota.OtaError("Select an exact firmware target")
         if not 1 <= limit <= 32:
             raise ota.OtaError("Base candidate limit must be between 1 and 32")
-        if self._assets is None:
-            self.fetch_assets()
+        if not self._pages:
+            self._releases(3)
         preference = {"mota": 0, "zip": 1, "bin": 2, "hex": 3}
         matches = [row for row in self._all_assets
                    if not row.embedded_bootloader

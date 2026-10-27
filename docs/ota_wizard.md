@@ -48,123 +48,118 @@ Close other apps using the USB port before starting.
 
 ## Start
 
-From the MeshCore checkout:
+From the MeshCore checkout, run:
 
 ```bash
 python3 tools/lora_ota/ota_wizard.py
 ```
 
-On Windows, use `py` in place of `python3`. The first run installs USB and
-verification dependencies in a private Python environment. On Raspberry Pi OS,
-install `python3-venv` if Python reports that it is missing.
+On Windows, use `py` in place of `python3`. No command-line options are needed.
+The menu provides these actions:
 
-The wizard selects the USB radio and destination automatically when there is
-only one of each. Otherwise, choose from the displayed list. Enter the
-destination admin password once, choose firmware, then review the plan and
-press Enter to start. Password entry is hidden and passwords are never saved.
+1. **Update a nearby radio** — the default.
+2. **Check radios / save a preparation request** — inspect without installing.
+3. **Prepare an update bundle on this computer** — no radios needed.
+4. **Recover an interrupted update** — restore saved settings.
+5. **Settings** — change transfer, bootloader, connection, or build preferences.
+6. **Exit**.
 
-Firmware choices are:
+The first live connection installs USB and verification dependencies in a
+private Python environment if needed. On Raspberry Pi OS, install
+`python3-venv` if Python reports that it is missing.
+Preparing a signed input file can also install signature-verification support
+on first use, without installing the USB software.
 
-- **Published GitHub firmware:** the default, matched to the exact board and
-  role. A running version that is already current is left in place.
-- **Custom firmware file:** an application DFU ZIP, BIN, HEX, full mOTA, or a
-  prepared update bundle.
-- **Build custom Full firmware from source:** offered on a computer. This
-  needs the firmware build tools and Bash; it is not offered by default on
-  a Pi. The generated version is newer than the detected installed version.
+For an update, the wizard selects the USB radio and destination automatically
+when there is only one of each. Otherwise, choose from the displayed lists.
+Enter the destination admin password once, choose firmware, then review the
+plan and press Enter to start. Password entry is hidden and passwords are
+never saved. After an action, the menu is shown again.
 
-The displayed plan includes package sizes, firmware version, and any
-bootloader or trusted update signer being installed. After a reboot, the
-wizard checks the running firmware hash and version, or the bootloader's
-identity and version, before reporting success.
+## Choose firmware from GitHub releases
+
+The firmware menu offers:
+
+- **Latest compatible GitHub release (recommended):** downloads the published
+  stable file for the detected board and role.
+- **Choose another GitHub release:** lists compatible releases, including
+  clearly labelled previews, so you can choose a version.
+- **Local firmware file or prepared bundle:** accepts an application DFU ZIP,
+  BIN, HEX, full mOTA, or a bundle prepared on another computer.
+- **Build custom Full firmware from source:** offered on a computer with the
+  firmware build tools and Bash. It is not offered by default on a Pi.
+
+You do not need to copy release URLs or manually download published files.
+The wizard checks the board and role, searches release files for an exact
+running base when preparing a differential update, and checks for a compatible
+signed bootloader on supported nRF52 destinations. Firmware that is already
+installed or older is left in place.
+
+The final plan shows the package sizes, firmware version, and any bootloader
+or trusted update signer being installed. After reboot, the wizard checks the
+running firmware hash and version, or the bootloader identity and version,
+before reporting success.
 
 ## Differential or full updates
 
-The wizard looks for the **exact running firmware** in its cache and published
-GitHub assets. It uses a differential package when it has a compatible builder,
-can match that exact base, and the resulting package is smaller. A file with
-the same version label but a different body hash is not a usable base.
+**Automatic** is the default transfer setting. It uses a differential package
+when a compatible builder and the **exact running firmware** are available
+and the package is smaller. A file with the same version label but a different
+body hash is not a usable base. Published bases are found through GitHub
+releases; a local base can be selected when the running image was custom.
 
 On a computer, the differential builder can be prepared automatically with a
-compatible Rust toolchain. On a Pi without a builder, the default is a full
-update made by Python without compiling. This requires destination storage
-that supports full updates, such as the Ikoka Stick's QSPI flash.
+compatible Rust toolchain. On a Pi without a builder, a full update is made by
+Python without compiling. The destination must support full updates, such as
+an Ikoka Stick with working QSPI storage.
+
+To force a full application transfer, open **Settings**, choose **Full** for
+the transfer method, then start the update. Settings also lets you turn the
+bootloader check off for an application-only update, choose a USB port or
+source type, or set a builder path, custom source folder/version, or cache folder.
 
 An internal-flash nRF52 destination that requires differential installation
-cannot use that full fallback. Prepare its bundle on a computer instead:
+cannot use the full fallback. Use the computer-to-Pi workflow below.
 
-1. On the Pi, inspect the connected radios:
+## Prepare on a computer, send from a Pi
 
-   ```bash
-   python3 tools/lora_ota/ota_wizard.py --check
-   ```
+All steps use the same menu; no command-line options are needed.
 
-   Copy the JSON file shown after **Preparation request:** to the computer.
-   It contains public board information and the exact running firmware hash,
-   without the admin password.
+1. On the Pi, choose **Check radios / save a preparation request**. Connect to
+   the source and select the destination as prompted. Copy the JSON file
+   shown after **Preparation request:** to the computer. It contains public
+   board information and the exact running hash, without the password.
+2. On the computer, choose **Prepare an update bundle on this computer**.
+   Select the saved request or enter its file path. Choose firmware from
+   GitHub releases, or select a local custom image. The wizard searches for
+   the exact base and offers a local base file if needed. Accept the proposed
+   output filename or choose another one.
+3. Copy the resulting `.ota.zip` file to the Pi. Choose **Update a nearby
+   radio**, then **Local firmware file or prepared bundle**, and select that
+   ZIP.
 
-2. On the computer, prepare the update using the request, new firmware, and
-   the exact firmware currently running on the destination:
-
-   ```bash
-   python3 tools/lora_ota/ota_wizard.py --prepare-only \
-     --request DEVICE.json --firmware NEW_FIRMWARE.zip \
-     --base RUNNING_FIRMWARE.zip --output update.ota.zip
-   ```
-
-   No radio is opened. If the compatible differential builder and all input
-   files are already present, this also works without network access. Add
-   `--motatool /path/to/motatool` to use an existing builder.
-
-3. Copy `update.ota.zip` back to the Pi and run:
-
-   ```bash
-   python3 tools/lora_ota/ota_wizard.py --firmware update.ota.zip
-   ```
-
-   The live destination is checked again before installation. A changed base
-   hash or a different board stops the differential update.
-
-For an offline full bundle on a destination that supports it, add `--full`
-to the preparation command. This path needs neither the differential builder
+The preparation step does not open a radio. When the builder and input files
+are already present, local preparation also works without network access.
+For a full bundle on a destination that supports it, choose **Full** in
+**Settings** before preparation; this needs neither a differential compiler
 nor USB dependencies.
 
-## Useful options
-
-| Option | Purpose |
-| --- | --- |
-| `--check` | Authenticate and inspect OTA support without downloading or installing firmware |
-| `--port /dev/ttyUSB0` | Choose a USB port; Windows example: `--port COM5` |
-| `--mode repeater` or `--mode companion` | Select the source type if automatic detection is unsuitable |
-| `--target PUBLIC_KEY` | Choose a destination by its full 64-character key; it must still answer direct discovery |
-| `--firmware FILE` | Use a local firmware image or prepared bundle |
-| `--base FILE` | Supply the exact running firmware for differential preparation |
-| `--full` | Choose a full application transfer when the destination supports it |
-| `--build` | Build custom Full firmware from this checkout |
-| `--version 1.18.0.3-custom` | Set the custom build version; it must be newer than the running version |
-| `--no-bootloader` | Update application firmware only |
-| `--cache DIRECTORY` | Choose where packages, public requests, and recovery records are saved |
-| `--yes` | Accept the displayed plan; required choices and credentials must still be supplied |
-
-For unattended use, provide `MESHCORE_ADMIN_PASSWORD` in the process environment
-and pass the port, source type, and target key. The wizard does not write that
-password into its preferences, recovery records, or custom build environment.
+The live destination is checked again before installation. A changed base
+hash or a different board stops a differential update.
 
 ## If the connection is interrupted
 
-Keep the same source radio connected and run the wizard again. It checks the
-saved source and destination public keys before restoring settings from an
-unfinished update. To restore settings and exit:
+Keep the same source radio connected and run the wizard again. Choose
+**Recover an interrupted update**, then select the saved session by its
+public-key prefix and progress state. The wizard checks the complete source
+and destination keys before restoring settings. A normal update also restores an unfinished
+session for the selected destination before proceeding.
 
-```bash
-python3 tools/lora_ota/ota_wizard.py --recover --target PUBLIC_KEY
-```
-
-Keep the recovery record until the wizard reports that restoration is
-complete. A lost install reply is followed by a running-image check; the
-wizard does not blindly repeat an install command. Temporary radio windows
-use the existing main-channel settings, so an interrupted process does not
-leave the destination on a separate update frequency.
+Keep the recovery record until restoration is complete. A lost install reply
+is followed by a running-image check; the wizard does not blindly repeat an
+install command. Temporary radio windows use the existing main-channel
+settings. Existing temporary schedules block an update before settings are
+changed, including on older firmware.
 
 The cache is normally `~/.cache/meshcore/ota` on Linux,
 `~/Library/Caches/MeshCore/ota` on macOS, or `%LOCALAPPDATA%\MeshCore\ota` on
@@ -172,7 +167,33 @@ Windows. It contains firmware, public preparation records, selected board
 keys, and restoration settings. Trusted signer keys added for an update remain
 installed on the destination.
 
-For the individual commands and a manual board-by-board example, see
-[Station G2 to Ikoka Stick](ota_station_g2_to_ikoka_stick.md). For routed
-updates and explicit multi-node setup, use the
-[scripted LoRa OTA guide](lora_ota_automation.md).
+<details markdown="1">
+<summary>Optional command-line use for automation</summary>
+
+Interactive users can use the menus for every step. Existing command-line
+options remain available for scripts:
+
+| Option | Purpose |
+| --- | --- |
+| `--check` | Inspect without downloading or installing firmware |
+| `--port /dev/ttyUSB0` | Choose a port; Windows example: `--port COM5` |
+| `--mode repeater` or `--mode companion` | Select the source type |
+| `--target PUBLIC_KEY` | Choose the full destination key; direct discovery is still required |
+| `--firmware FILE` | Use a local firmware image or prepared bundle |
+| `--base FILE` | Supply the exact running image for differential preparation |
+| `--full` | Force a full transfer where supported |
+| `--build` | Build custom Full firmware from source |
+| `--no-bootloader` | Update application firmware only |
+| `--prepare-only --request DEVICE.json --firmware FILE --output update.ota.zip` | Prepare without radios |
+| `--recover --target PUBLIC_KEY` | Restore settings and exit |
+| `--yes` | Accept the displayed plan; credentials and required choices must still be supplied |
+
+For unattended use, provide `MESHCORE_ADMIN_PASSWORD` in the process environment
+and pass the port, source type, and target key. The password is excluded from
+preferences, recovery records, and the custom build environment.
+
+</details>
+
+For individual commands and a manual board example, see
+[Station G2 to Ikoka Stick](ota_station_g2_to_ikoka_stick.md). For routed updates
+and explicit multi-node setup, use the [scripted LoRa OTA guide](lora_ota_automation.md).

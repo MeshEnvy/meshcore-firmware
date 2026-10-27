@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from copy import copy
 import getpass
 import importlib.util
 import importlib.metadata
@@ -73,11 +74,138 @@ def arguments(argv=None):
     parser.add_argument("--recover", action="store_true", help="restore settings from an interrupted update, then exit")
     parser.add_argument("--yes", action="store_true", help="accept the displayed update plan; does not guess missing credentials")
     parser.add_argument("--runtime-ready", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--menu-action", choices=("update", "check", "prepare", "recover"),
+                        help=argparse.SUPPRESS)
     parser.add_argument("--check", action="store_true", help="inspect source and destination without preparing or installing an update")
     parser.add_argument("--prepare-only", action="store_true", help="prepare a portable update bundle on a computer without opening radios")
     parser.add_argument("--request", type=Path, help="destination preparation request saved by a previous live inspection")
     parser.add_argument("--output", type=Path, help="output .zip for --prepare-only")
     return parser.parse_args(argv)
+
+
+class MenuCancelled(Exception):
+    """Return to the main menu without changing a radio."""
+
+
+def file_prompt(prompt: str, default: str | None = None) -> Path:
+    if default and Path(default).expanduser().is_file():
+        selected = select(prompt, ["Use " + default, "Choose another file", "Back"])
+        if selected == 0:
+            return Path(default).expanduser()
+        if selected == 2:
+            raise MenuCancelled
+    while True:
+        value = ask(prompt + " (blank to go back)")
+        if not value:
+            raise MenuCancelled
+        path = Path(value.strip().strip('"').strip("'")).expanduser()
+        if path.is_file():
+            return path
+        print("That file was not found. Enter its path, or leave it blank to go back.")
+
+
+def menu_settings_path() -> Path:
+    return cache_directory() / "menu-settings.json"
+
+
+def load_menu_settings(args) -> None:
+    try:
+        values = json.loads(ota.read_bounded_file(menu_settings_path(), 8192, "menu settings"))
+    except (OSError, ValueError, ota.OtaError):
+        return
+    if not isinstance(values, dict):
+        return
+    for field in ("full", "no_bootloader"):
+        if type(values.get(field)) is bool:
+            setattr(args, field, values[field])
+    if values.get("mode") in ("auto", "repeater", "companion"):
+        args.mode = values["mode"]
+    for field in ("motatool", "version", "port"):
+        value = values.get(field)
+        if value is None or isinstance(value, str) and len(value) <= 4096:
+            setattr(args, field, value)
+    for field in ("source_tree", "cache"):
+        value = values.get(field)
+        if isinstance(value, str) and value and len(value) <= 4096:
+            setattr(args, field, Path(value).expanduser())
+
+
+def settings_menu(args) -> None:
+    while True:
+        print("\nSettings")
+        options = [
+            "Transfer: " + ("Full" if args.full else "Automatic (prefer differential)"),
+            "Check bootloader: " + ("Off" if args.no_bootloader else "On"),
+            "USB source type: " + args.mode.capitalize(),
+            "USB port: " + (args.port or "Automatic"),
+            "Differential builder: " + (args.motatool or "Automatic"),
+            "Custom source folder: " + str(args.source_tree),
+            "Custom version: " + (args.version or "Automatic"),
+            "Download/cache folder: " + str(args.cache),
+            "Back",
+        ]
+        choice = select("Setting", options, len(options)-1)
+        if choice == 8:
+            break
+        if choice == 0:
+            args.full = bool(select("Transfer", ["Automatic (prefer differential)", "Full"], int(args.full)))
+        elif choice == 1:
+            args.no_bootloader = bool(select("Check bootloader", ["On", "Off"], int(args.no_bootloader)))
+        elif choice == 2:
+            modes = ("auto", "repeater", "companion")
+            args.mode = modes[select("USB source type", ["Automatic", "Repeater", "Companion"], modes.index(args.mode))]
+        elif choice == 3:
+            args.port = ask("USB port (blank for automatic)") or None
+        elif choice == 4:
+            args.motatool = ask("Differential builder path (blank for automatic)") or None
+        elif choice == 5:
+            args.source_tree = Path(ask("MeshCore source folder", str(args.source_tree))).expanduser()
+        elif choice == 6:
+            args.version = ask("Custom version (blank for automatic)") or None
+        elif choice == 7:
+            args.cache = Path(ask("Download/cache folder", str(args.cache))).expanduser()
+    save_preferences(menu_settings_path(), **{
+        field: str(getattr(args, field)) if field in ("cache", "source_tree") else getattr(args, field)
+        for field in ("full", "no_bootloader", "mode", "port", "motatool", "source_tree", "version", "cache")})
+
+
+def choose_request(args):
+    records = []
+    for path in sorted((args.cache / "requests").glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)[:50]:
+        try:
+            records.append((path, load_request(path)))
+        except (ota.OtaError, OSError):
+            continue
+    if not records:
+        return load_request(file_prompt("Preparation request JSON"))
+    choices = [f"{record.hw_id} — {record.public_key[:12].upper()} ({record.version_text})"
+               for _, record in records] + ["Open another preparation request file", "Back"]
+    chosen = select("Preparation request", choices)
+    if chosen == len(records) + 1:
+        raise MenuCancelled
+    return (records[chosen][1] if chosen < len(records)
+            else load_request(file_prompt("Preparation request JSON")))
+
+
+def choose_recovery(args) -> str:
+    records = []
+    for path in sorted((args.cache / "sessions").glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)[:50]:
+        try:
+            record = json.loads(ota.read_bounded_file(path, 64 * 1024, "recovery record"))
+            key = record.get("target_key") if isinstance(record, dict) else None
+            if (record.get("format") == 1 and isinstance(key, str)
+                    and re.fullmatch(r"[0-9A-Fa-f]{64}", key)
+                    and record.get("phase") not in ("finished", "prepared", "inspecting")):
+                records.append((key, record.get("phase", "unfinished")))
+        except (ota.OtaError, OSError, ValueError, AttributeError):
+            continue
+    if not records:
+        print("No interrupted updates were found in this cache.")
+        raise MenuCancelled
+    chosen = select("Interrupted update", [f"{key[:12].upper()} — {phase}" for key, phase in records] + ["Back"])
+    if chosen == len(records):
+        raise MenuCancelled
+    return records[chosen][0]
 
 
 def ensure_dependencies(args, argv) -> None:
@@ -231,6 +359,218 @@ def custom_build(args, destination, target_env: str) -> Path:
     raise ota.OtaError("The custom build did not produce a matching application image.")
 
 
+async def latest_asset(catalog, destination):
+    print("Checking GitHub releases for this exact board and role…")
+    try:
+        return await asyncio.to_thread(catalog.choose_asset, target_id=destination.target_id)
+    except ota.OtaError as exc:
+        print(str(exc))
+        return None
+
+
+async def choose_release(catalog, destination):
+    pages = 3
+    while True:
+        choices = await asyncio.to_thread(catalog.release_choices, target_id=destination.target_id,
+                                          include_prerelease=True, max_pages=pages)
+        if not choices:
+            print("No compatible firmware was found on these release pages.")
+        labels = [choice.label for choice in choices]
+        more = pages < 10 and catalog.has_more_releases
+        if more:
+            labels.append("Load older GitHub releases")
+        labels.append("Back")
+        selected = select("GitHub release", labels)
+        if selected < len(choices):
+            return choices[selected].asset
+        if more and selected == len(choices):
+            pages = min(10, pages + 3)
+            continue
+        raise MenuCancelled
+
+
+async def choose_firmware(args, destination, catalog, asset, remembered):
+    if remembered.get("target") != destination.public_key.lower():
+        remembered = {}
+    if args.firmware:
+        return args.firmware, "local"
+    preferred = remembered.get("firmware_source", "latest")
+    while True:
+        source = "build" if args.build else "latest"
+        if not args.build and not args.yes:
+            sources = ["latest", "release", "local"]
+            labels = ["Latest compatible GitHub release (recommended)",
+                      "Choose another GitHub release", "Local firmware file or prepared bundle"]
+            if not small_host():
+                sources.append("build")
+                labels.append("Build custom Full firmware from source")
+            default = sources.index(preferred) if preferred in sources else 0
+            selected = select("Firmware", labels + ["Back"], default)
+            if selected == len(sources):
+                raise MenuCancelled
+            source = sources[selected]
+        if source == "local":
+            try:
+                return file_prompt("Firmware ZIP, BIN, HEX, full mOTA, or prepared bundle",
+                                   remembered.get("firmware_file")), source
+            except MenuCancelled:
+                continue
+        if source == "release":
+            try:
+                selected_asset = await choose_release(catalog, destination)
+            except MenuCancelled:
+                continue
+        else:
+            if asset is None:
+                asset = await latest_asset(catalog, destination)
+            if asset is None:
+                if args.yes or args.build:
+                    raise ota.OtaError("No GitHub application matched this board. Choose another release or a local firmware file.")
+                preferred = "local"
+                continue
+            selected_asset = asset
+        if source in ("latest", "release"):
+            print(f"GitHub release: {selected_asset.release_tag}\n  {selected_asset.name}")
+            return await asyncio.to_thread(download_asset, selected_asset, args.cache / "downloads"), source
+        if not args.version:
+            args.version = ota.format_version(max(destination.version, selected_asset.version) + 1) + "-custom"
+        return await asyncio.to_thread(custom_build, args, destination, selected_asset.target_env), source
+
+
+async def choose_missing_base(args, destination, catalog):
+    """Offer the useful fallbacks only after the automatic exact-base search."""
+    pages = 3
+    while True:
+        choices, actions = [], []
+        if pages < 10:
+            choices.append("Search older GitHub releases for the running firmware")
+            actions.append("github")
+        choices.append("Choose a local copy of the exact running firmware")
+        actions.append("local")
+        if destination.platform == "esp32" or destination.external_storage:
+            choices.append("Use a full update instead")
+            actions.append("full")
+        choices.append("Back")
+        actions.append("back")
+        action = actions[select("The exact running image was not found", choices)]
+        if action == "back":
+            raise MenuCancelled
+        if action == "full":
+            return None
+        if action == "local":
+            supplied = file_prompt("Exact running firmware ZIP, BIN, HEX, or full mOTA")
+            try:
+                return await asyncio.to_thread(find_running_image, destination, args.cache, catalog, supplied=supplied)
+            except ota.OtaError as exc:
+                print(str(exc))
+                continue
+        pages = min(10, pages + 3)
+        try:
+            await asyncio.to_thread(catalog.release_choices, target_id=destination.target_id,
+                                    include_prerelease=True, max_pages=pages)
+            base = await asyncio.to_thread(find_running_image, destination, args.cache, catalog,
+                                           candidate_limit=16 if pages < 10 else 32)
+            if base:
+                return base
+            if not catalog.has_more_releases:
+                pages = 10
+            print("No downloaded GitHub candidate matched the exact running image hash.")
+        except ota.OtaError as exc:
+            print(str(exc))
+
+
+async def prepare_selected_firmware(args, destination, firmware, catalog):
+    prepared = await asyncio.to_thread(load_bundle, firmware, destination)
+    if prepared:
+        image, application = prepared
+        if args.full and not application.info.is_full:
+            application = await asyncio.to_thread(prepare_application, image, destination, args.cache, full=True)
+    else:
+        image = await asyncio.to_thread(load_application, firmware,
+                                        target_id=destination.target_id, hw_id=destination.hw_id)
+        application = await asyncio.to_thread(load_ready_application, firmware, image, destination)
+    ImageCache(args.cache).remember(image)
+    if image.fw_version <= destination.version:
+        print("The selected firmware is already installed or older; keeping the running firmware.")
+        return image, None
+    if application:
+        return image, application
+    builder = None if args.full else find_builder(args.cache, args.motatool)
+    if not args.full and not builder and not small_host():
+        builder = await asyncio.to_thread(install_builder, args.cache)
+    base = None
+    if builder:
+        base = await asyncio.to_thread(find_running_image, destination, args.cache, catalog, supplied=args.base)
+        if base is None and getattr(args, "interactive_menu", False):
+            base = await choose_missing_base(args, destination, catalog)
+    if not builder and not args.full:
+        print("Using a full update: no differential compiler setup is needed on this host.")
+    if destination.platform == "nrf52" and not destination.external_storage and not (base and builder):
+        raise ota.OtaError(
+            "This radio needs an exact-base differential update. On a computer, choose "
+            "Prepare an update bundle and select its saved preparation request. "
+            "A compatible differential builder must be available; its path can be set under Settings.")
+    application = await asyncio.to_thread(prepare_application, image, destination, args.cache,
+                                          base=base, builder=builder, full=args.full)
+    return image, application
+
+
+async def prepare_interactively(args) -> int:
+    destination = choose_request(args)
+    print(f"Preparing for {destination.hw_id} — {destination.public_key[:12].upper()} ({destination.version_text})")
+    catalog = GitHubCatalog()
+    args.interactive_menu = True
+    firmware, _ = await choose_firmware(args, destination, catalog, None, {})
+    verification_cache = ota.cryptography_repair_root()
+    if (verification_cache / "cryptography").is_dir():
+        try:
+            ota.activate_cached_cryptography(verification_cache)
+        except ota.OtaError:
+            pass  # A working system verifier may already be loaded.
+    try:
+        image, package = await prepare_selected_firmware(args, destination, firmware, catalog)
+    except ImportError:
+        # Unsigned full packaging stays dependency-free. Signed inputs request
+        # their verifier only when it is actually needed; no USB SDK is loaded.
+        await asyncio.to_thread(ensure_signature_support)
+        image, package = await prepare_selected_firmware(args, destination, firmware, catalog)
+    if package is None:
+        print("Choose a newer firmware release to prepare an update.")
+        return 0
+    folder = args.cache / "bundles"
+    default = folder / f"{destination.hw_id}-{ota.format_version(image.fw_version)}.ota.zip"
+    index = 1
+    while default.exists():
+        default = folder / f"{destination.hw_id}-{ota.format_version(image.fw_version)}-{index}.ota.zip"
+        index += 1
+    output = Path(ask("Save update bundle", str(default)).strip().strip('"').strip("'")).expanduser()
+    await asyncio.to_thread(save_bundle, output, image, package)
+    print(f"Prepared {package.info.kind}: {output} ({len(package.blob):,} transfer bytes)")
+    print("Copy this ZIP to the Pi. Choose Update a nearby radio, then Local firmware file or prepared bundle.")
+    return 0
+
+
+def ensure_signature_support() -> None:
+    root = ota.cryptography_repair_root()
+    if root.is_dir():
+        try:
+            ota.activate_cached_cryptography(root)
+            return
+        except ota.OtaError:
+            pass
+    print("Preparing signature verification support. This is a one-time download.")
+    root.mkdir(parents=True, exist_ok=True)
+    log = root / "setup.log"
+    environment = {key: value for key, value in os.environ.items()
+                   if key not in ("MESHCORE_ADMIN_PASSWORD", "MESHCORE_OTA_PASSWORD")}
+    with log.open("w", encoding="utf-8") as output:
+        completed = subprocess.run(ota.cryptography_repair_command(root), env=environment,
+                                   stdout=output, stderr=subprocess.STDOUT, timeout=600)
+    if completed.returncode:
+        raise ota.OtaError(f"Signature verification support could not be installed. Details: {log}")
+    ota.activate_cached_cryptography(root)
+
+
 async def run(args) -> int:
     args.cache.mkdir(parents=True, exist_ok=True, mode=0o700)
     if args.target and not re.fullmatch(r"[0-9A-Fa-f]{64}", args.target):
@@ -314,65 +654,8 @@ async def run(args) -> int:
             return 0
         await session.snapshot()
         catalog = GitHubCatalog()
-        print("Checking published firmware for this exact board and role…")
-        try:
-            asset = await asyncio.to_thread(catalog.choose_asset, target_id=destination.target_id)
-        except ota.OtaError as exc:
-            asset = None
-            if not args.firmware and not args.build:
-                print(str(exc))
-        choice = 2 if args.build else 1 if args.firmware else 0
-        if not args.yes and not args.firmware and not args.build:
-            options = ["Published GitHub firmware (recommended)", "Custom firmware file"]
-            if not small_host():
-                options.append("Build custom Full firmware from source")
-            default_choice = remembered.get("firmware_choice", 0 if asset else 1)
-            if remembered.get("target") != key.lower() or default_choice not in range(len(options)):
-                default_choice = 0 if asset else 1
-            choice = select("Firmware", options, default_choice)
-        if choice == 0:
-            if not asset:
-                raise ota.OtaError("No published firmware matched this board; supply --firmware or choose a custom build.")
-            firmware = await asyncio.to_thread(download_asset, asset, args.cache / "downloads")
-        elif choice == 1:
-            default_file = remembered.get("firmware_file") if remembered.get("target") == key.lower() else None
-            firmware = args.firmware or Path(ask("Custom application ZIP, BIN, HEX, full mOTA, or prepared bundle", default_file))
-        else:
-            if not asset:
-                raise ota.OtaError("A custom build needs the exact target environment; use a local firmware file for this board.")
-            if not args.version:
-                args.version = ota.format_version(max(destination.version, asset.version) + 1) + "-custom"
-            firmware = await asyncio.to_thread(custom_build, args, destination, asset.target_env)
-        prepared = await asyncio.to_thread(load_bundle, firmware, destination)
-        if prepared:
-            image, application = prepared
-            if args.full and not application.info.is_full:
-                application = await asyncio.to_thread(prepare_application, image, destination, args.cache, full=True)
-        else:
-            image = await asyncio.to_thread(load_application, firmware,
-                                            target_id=destination.target_id, hw_id=destination.hw_id)
-            application = await asyncio.to_thread(load_ready_application, firmware, image, destination)
-        ImageCache(args.cache).remember(image)
-        if image.fw_version > destination.version and application is None:
-            builder = find_builder(args.cache, args.motatool)
-            if not args.full and not builder and not small_host():
-                builder = await asyncio.to_thread(install_builder, args.cache)
-            base = None
-            if not args.full and builder:
-                base = await asyncio.to_thread(find_running_image, destination, args.cache, catalog,
-                                               supplied=args.base)
-            if not builder:
-                print("Using a full update: no differential compiler setup is needed on this host.")
-            if not builder and destination.platform == "nrf52" and not destination.external_storage:
-                raise ota.OtaError(
-                    "This internal-flash radio requires a differential package. Prepare it on a computer with "
-                    f"--prepare-only --request {request_file} --firmware NEW_FIRMWARE --base RUNNING_FIRMWARE "
-                    "--output update.ota.zip, then select that ZIP on the Pi.")
-            application = await asyncio.to_thread(prepare_application, image, destination, args.cache,
-                                                  base=base, builder=builder, full=args.full)
-        elif image.fw_version <= destination.version:
-            application = None
-            print("The selected published/application version is already installed or older; keeping the running firmware.")
+        firmware, choice = await choose_firmware(args, destination, catalog, None, remembered)
+        image, application = await prepare_selected_firmware(args, destination, firmware, catalog)
         bootloader = None
         if not args.no_bootloader and destination.platform == "nrf52":
             print("Checking the exact-board bootloader update…")
@@ -398,8 +681,8 @@ async def run(args) -> int:
                 destination = await session.install(package, destination)
                 print(f"Verified {package.info.kind} installation.")
         save_preferences(args.cache / "choices.json", port=port, mode=mode,
-                         target=key.lower(), hw=destination.hw_id, firmware_choice=choice,
-                         firmware_file=str(firmware) if choice == 1 else None)
+                         target=key.lower(), hw=destination.hw_id, firmware_source=choice,
+                         firmware_file=str(firmware) if choice == "local" else None)
         print("Update verified successfully.")
         return 0
     finally:
@@ -437,18 +720,59 @@ def prepare_without_radios(args) -> int:
     return 0
 
 
+def menu_main(args) -> int:
+    load_menu_settings(args)
+    action = args.menu_action
+    while True:
+        if action is None:
+            print("\nMeshCore LoRa updater")
+            actions = ("update", "check", "prepare", "recover", "settings", "exit")
+            action = actions[select("Choose", [
+                "Update a nearby radio", "Check radios / save a preparation request",
+                "Prepare an update bundle on this computer", "Recover an interrupted update",
+                "Settings", "Exit"])]
+        current = copy(args)
+        current.interactive_menu = True
+        current.check, current.recover = action == "check", action == "recover"
+        try:
+            if action == "exit":
+                return 0
+            if action == "settings":
+                settings_menu(args)
+            elif action == "prepare":
+                asyncio.run(prepare_interactively(current))
+            else:
+                # Preserve the chosen menu action if first-run dependency
+                # setup reexecutes inside the private Python environment.
+                ensure_dependencies(current, ["--menu-action", action, "--cache", str(args.cache)])
+                if action == "recover":
+                    current.target = choose_recovery(current)
+                asyncio.run(run(current))
+        except MenuCancelled:
+            pass
+        except (ota.OtaError, RuntimeError, OSError, ValueError, ImportError, subprocess.TimeoutExpired) as exc:
+            print(f"Update stopped: {exc}", file=sys.stderr)
+        action = None
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     args = arguments(argv)
     try:
+        if args.menu_action or not any(value != "--runtime-ready" for value in argv):
+            return menu_main(args)
         if args.prepare_only:
             return prepare_without_radios(args)
         ensure_dependencies(args, argv)
         return asyncio.run(run(args))
+    except MenuCancelled:
+        return 0
+    except EOFError:
+        return 0
     except KeyboardInterrupt:
         print("\nStopped. Check the recovery record if the destination was unreachable during cleanup.", file=sys.stderr)
         return 130
-    except (ota.OtaError, RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+    except (ota.OtaError, RuntimeError, OSError, ValueError, ImportError, subprocess.TimeoutExpired) as exc:
         print(f"Update stopped: {exc}", file=sys.stderr)
         return 1
 

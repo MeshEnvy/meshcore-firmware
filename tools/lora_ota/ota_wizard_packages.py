@@ -88,7 +88,8 @@ def install_builder(cache: Path, progress=print) -> str | None:
 
 
 def find_running_image(destination: Destination, cache: Path, catalog: GitHubCatalog | None,
-                       *, supplied: Path | None = None, progress=print) -> Path | None:
+                       *, supplied: Path | None = None, progress=print,
+                       candidate_limit: int = 4) -> Path | None:
     images = ImageCache(cache)
     if supplied:
         identity = load_application(supplied, target_id=destination.target_id, hw_id=destination.hw_id)
@@ -102,7 +103,7 @@ def find_running_image(destination: Destination, cache: Path, catalog: GitHubCat
         return found
     if catalog:
         for asset in catalog.base_candidates(target_id=destination.target_id,
-                                             fw_version=destination.version, limit=4):
+                                             fw_version=destination.version, limit=candidate_limit):
             try:
                 candidate = download_asset(asset, cache / "downloads")
                 identity = load_application(candidate, target_id=destination.target_id,

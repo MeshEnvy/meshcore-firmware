@@ -92,6 +92,110 @@ class CatalogTest(unittest.TestCase):
         with self.assertRaises(ota.OtaError):
             source.choose_asset("another_repeater")
 
+    def test_release_menu_groups_shards_and_offers_exact_board_previews(self):
+        shard = f"lora-ota-10-{FAMILY}"
+        preview = "ikoka-v1.18.0.2-alpha2"
+        shard_asset = asset_row(tag=shard)
+        preview_asset = asset_row(f"{ENV}-full-ota-v1.18.0.2-alpha2.zip", preview)
+        old_asset = asset_row(f"{ENV}-full-ota-{OLD_FAMILY}.zip", OLD_FAMILY)
+        rows = [release(preview, [preview_asset], prerelease=True),
+                release(FAMILY, [asset_row(f"{ENV}-full-ota-{FAMILY}.bin")]),
+                release(shard, [shard_asset]),
+                release(f"full-profiles-{FAMILY}", [asset_row(
+                    f"{ENV}-reduced-ota-{FAMILY}.zip", f"full-profiles-{FAMILY}")]),
+                release(OLD_FAMILY, [old_asset]),
+                release("v9.0.0-draft", [asset_row()], draft=True),
+                release("another-v8.0.0", [asset_row(f"another_repeater-full-ota-v8.0.0.zip",
+                                                     "another-v8.0.0")])]
+        source = catalog.GitHubCatalog(opener=lambda req, timeout: Response(json.dumps(rows).encode(), req.full_url))
+        choices = source.release_choices(target_id=TARGET)
+        self.assertEqual([choice.release_tag for choice in choices], [FAMILY, OLD_FAMILY, preview])
+        self.assertEqual(choices[0].asset.name, shard_asset["name"])
+        self.assertEqual(choices[0].asset.release_tag, shard)
+        self.assertFalse(choices[0].prerelease)
+        self.assertTrue(choices[-1].prerelease)
+        self.assertIn("prerelease", choices[-1].label)
+        self.assertEqual(source.choose_asset(target_id=TARGET), choices[0].asset)
+        self.assertEqual([choice.release_tag for choice in source.release_choices(
+            target_id=TARGET, include_prerelease=False)], [FAMILY, OLD_FAMILY])
+        self.assertFalse(source.has_more_releases)
+
+    def test_menu_prefers_full_and_does_not_offer_embedded_or_wrong_role(self):
+        rows = [release(FAMILY, [
+            asset_row(f"{ENV}-with-bootloader-2.4.12-full-ota-{FAMILY}.zip"),
+            asset_row(f"ikoka_stick_nrf_33dbm_room_server_lora_ota-full-ota-{FAMILY}.zip"),
+            asset_row(f"{ENV}-reduced-ota-{FAMILY}.zip"),
+            asset_row(f"{ENV}-ota-{FAMILY}.bin"), asset_row()])]
+        source = catalog.GitHubCatalog(opener=lambda req, timeout: Response(json.dumps(rows).encode(), req.full_url))
+        choices = source.release_choices(ENV)
+        self.assertEqual(len(choices), 1)
+        self.assertEqual(choices[0].asset.profile, "full")
+        self.assertEqual(source.release_choices(ENV, profile="reduced")[0].asset.profile, "reduced")
+        self.assertEqual(source.release_choices("no_matching_repeater"), [])
+
+    def test_menu_loads_older_pages_once_and_adds_exact_base_candidates(self):
+        def page_rows(number):
+            if number == 1:
+                head = release(FAMILY, [asset_row()])
+            elif number == 2:
+                head = release(OLD_FAMILY, [asset_row(f"{ENV}-full-ota-{OLD_FAMILY}.zip", OLD_FAMILY)])
+            else:
+                return []
+            return [head] + [release(f"v0.0.0-empty-{number}-{index}") for index in range(9)]
+        calls = []
+        def opener(request, timeout):
+            number = int(request.full_url.rsplit("=", 1)[1])
+            calls.append(number)
+            return Response(json.dumps(page_rows(number)).encode(), request.full_url)
+        source = catalog.GitHubCatalog(opener=opener)
+        self.assertEqual(len(source.release_choices(target_id=TARGET, max_pages=1)), 1)
+        self.assertTrue(source.has_more_releases)
+        self.assertEqual(len(source.release_choices(target_id=TARGET, max_pages=3)), 2)
+        self.assertEqual(len(source.release_choices(target_id=TARGET, max_pages=6)), 2)
+        self.assertEqual(calls, [1, 2, 3])
+        self.assertFalse(source.has_more_releases)
+        self.assertEqual(source.base_candidates(target_id=TARGET, fw_version=0x01110109)[0].release_tag, OLD_FAMILY)
+        self.assertEqual(source.choose_asset(target_id=TARGET).release_tag, FAMILY)
+        self.assertEqual(calls, [1, 2, 3])
+
+    def test_preview_only_menu_still_supplies_an_exact_base_candidate(self):
+        tag = "ikoka-v1.18.0.2-alpha1"
+        rows = [release(tag, [asset_row(f"{ENV}-full-ota-v1.18.0.2-alpha1.zip", tag)], prerelease=True)]
+        source = catalog.GitHubCatalog(opener=lambda req, timeout: Response(json.dumps(rows).encode(), req.full_url))
+        choices = source.release_choices(target_id=TARGET)
+        self.assertEqual(len(choices), 1)
+        self.assertTrue(choices[0].prerelease)
+        self.assertEqual(source.base_candidates(target_id=TARGET, fw_version=0x01120002), [choices[0].asset])
+        with self.assertRaisesRegex(ota.OtaError, "main firmware release"):
+            source.choose_asset(target_id=TARGET)
+
+    def test_menu_page_errors_are_reported_without_caching_partial_results(self):
+        calls = []
+        def opener(request, timeout):
+            page = int(request.full_url.rsplit("=", 1)[1])
+            calls.append(page)
+            if page == 1:
+                rows = [release(FAMILY, [asset_row()])] + [release(f"v0.0.0-empty-{index}") for index in range(9)]
+                return Response(json.dumps(rows).encode(), request.full_url)
+            return Response(b"not a release catalog" if calls.count(2) == 1 else b"[]", request.full_url)
+        source = catalog.GitHubCatalog(opener=opener)
+        self.assertEqual(len(source.release_choices(target_id=TARGET, max_pages=1)), 1)
+        with self.assertRaisesRegex(ota.OtaError, "invalid release catalog"):
+            source.release_choices(target_id=TARGET, max_pages=3)
+        self.assertEqual(len(source.release_choices(target_id=TARGET, max_pages=3)), 1)
+        self.assertEqual(calls, [1, 2, 2])
+
+    def test_menu_validates_target_page_limits_and_terminal_labels(self):
+        source = catalog.GitHubCatalog(opener=lambda req, timeout: Response(b"[]", req.full_url))
+        with self.assertRaisesRegex(ota.OtaError, "exact firmware target"):
+            source.release_choices()
+        for limit in (0, 11, True, "3"):
+            with self.subTest(limit=limit), self.assertRaisesRegex(ota.OtaError, "page limit"):
+                source.release_choices(target_id=TARGET, max_pages=limit)
+        item = catalog.ReleaseChoice("v1.18.0.2\x1b[1m\n", catalog.parse_release_asset(asset_row(), FAMILY), True, "")
+        self.assertNotIn("\x1b", item.label)
+        self.assertNotIn("\n", item.label)
+
     def test_untrusted_asset_metadata_is_not_selectable(self):
         for mutation in ({"browser_download_url": "http://github.com/file.zip"},
                          {"browser_download_url": "https://example.com/file.zip"},
