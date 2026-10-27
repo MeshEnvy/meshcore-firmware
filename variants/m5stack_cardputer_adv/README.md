@@ -1,0 +1,79 @@
+# M5Stack Cardputer-Adv + Cap LoRa-1262
+
+Variant for the [M5Stack Cardputer-Adv](https://docs.m5stack.com/en/core/Cardputer-Adv)
+(ESP32-S3, 8 MB flash) with the
+[Cap LoRa-1262](https://docs.m5stack.com/en/cap/Cap_LoRa-1262) (SX1262 + ATGM336H GNSS).
+
+| Environment | Role |
+|---|---|
+| `M5Stack_Cardputer_Adv_companion_radio_ble` | Companion with keyboard/display UI, BLE and USB terminal |
+| `M5Stack_Cardputer_Adv_companion_radio_usb` | Same UI, USB only (no BLE) |
+| `M5Stack_Cardputer_Adv_repeater` | Headless repeater |
+| `M5Stack_Cardputer_Adv_room_server` | Headless room server |
+
+The companion UI is adapted from
+[MultiMote/meshcore-cardputer-adv](https://github.com/MultiMote/meshcore-cardputer-adv)
+(MIT, see `LICENSE.MultiMote`) and runs on top of the standard companion, so
+the USB terminal CLI (`help`, `set ...`, `powersaving ...`) stays available.
+
+## Hardware notes
+
+- LoRa: NSS 5, SCK 40, MISO 39, MOSI 14, RST 3, BUSY 6, DIO1 4. DIO2 drives the
+  RF switch; TCXO 1.8 V.
+- The Cap's antenna path is enabled through P0 of a PI4IOE5V6408 at 0x43 on the
+  internal I2C bus (G8/G9, `Wire1`), shared with the TCA8418 keyboard and ES8311
+  codec. `Wire` is the Grove port (G2/G1).
+- The microSD slot (CS 12) shares the LoRa SPI bus, which runs on FSPI because
+  the display owns SPI3.
+- Battery on G10 (x2 divider). GNSS on UART 15/13 at 115200.
+- Top button (G0) sends a flood advert.
+
+## Storage
+
+Contacts, channels, identity and settings live in the internal `spiffs`
+partition (`default_8MB.csv`). The microSD card is optional and holds chat
+history and keyboard layouts.
+
+When the device is managed by bmorcelli's Launcher, install updates by writing
+the app image to the MeshCore app slot over USB rather than reinstalling from
+the SD card: Launcher can repartition the flash to fit the image and drop the
+`spiffs` partition, which wipes the node's identity.
+
+## Keyboard
+
+- `del` deletes, `esc` (top-left key) goes back, `Enter` selects or sends.
+- Arrows are `;` `.` `,` `/`. While typing a chat message, prefix them with `Fn`.
+- `Aa` (Shift) is sticky: press once for caps, again to release.
+- `Fn` is one-shot: press `Fn`, then a key; it releases after that key.
+  A `CAPS`/`FN` badge shows while either is active.
+
+| Fn + | Action |
+|---|---|
+| A | Flood advert (same as the top button) |
+| G | GPS on/off |
+| B | Bluetooth on/off (same checks as `set bluetooth`) |
+| M | Sound on/off |
+| P | Power save on/off (same setting as `powersaving`) |
+| L | Screen brightness |
+| D | Discover repeaters |
+| H / C / N / I | Home / Contacts / Channels / Info |
+| S / T | Settings / Tools |
+| K | Switch keyboard layout (layouts loaded from SD) |
+
+## Display
+
+Settings -> Text size cycles Normal (12 px), Large (16 px, default) and
+Extra large (19 px). The larger fonts are generated from DejaVu Sans with
+`tools/gen_vlw_font.py`.
+
+## Power
+
+- Power save uses the companion's own light-sleep loop. It only sleeps while the
+  screen is off and no USB or BLE client is connected.
+- Below 3.4 V the UI shows "Battery low" and powers off (no LoRa wake).
+
+## Building on Windows
+
+`win_long_cmdline.py` shortens the compiler include list with `-iprefix`, since
+these environments otherwise exceed Windows' 32,767-character command limit.
+It does nothing on other platforms.
