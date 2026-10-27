@@ -4,6 +4,7 @@
 #include <string.h>
 #include "FloodAdvertRtcPolicy.h"
 #include "FloodAdvertIramPolicy.h"
+#include "RepeaterPsramStorage.h"
 
 #ifndef FLOOD_ADVERT_SOURCE_SLOTS
   #if defined(STM32_PLATFORM)
@@ -89,6 +90,14 @@ protected:
   }
 #else
   FloodAdvertLimiter(Entry* entries, size_t capacity) : _entries(entries), _capacity(capacity) {}
+#if MESH_REPEATER_PSRAM_TABLES
+  // The derived storage owner is initialized after this base. Bind its full
+  // table before reset() or any limiter operation can inspect the entries.
+  void bindStorage(Entry* entries) {
+    if (!entries || reinterpret_cast<uintptr_t>(entries) % alignof(Entry)) abort();
+    _entries = entries;
+  }
+#endif
 #endif
   FloodAdvertLimiter(const FloodAdvertLimiter&) = delete;
   FloodAdvertLimiter& operator=(const FloodAdvertLimiter&) = delete;
@@ -196,6 +205,19 @@ public:
 public:
   StaticFloodAdvertLimiter(Entry* fast, Entry* slow)
       : FloodAdvertLimiter(_storage, Capacity, fast, slow) { reset(); }
+#elif MESH_REPEATER_PSRAM_TABLES
+  static_assert(sizeof(Entry) == 140,
+                "Update the advert PSRAM fallback budget in check_firmware_ram.py");
+  struct Storage { Entry entries[Capacity]; };
+  RepeaterPsramStorage<Storage> _storage;
+public:
+  StaticFloodAdvertLimiter() : FloodAdvertLimiter(nullptr, Capacity) {
+    // Exhaustion must stop startup rather than disabling advert protection
+    // or reducing its source/hash history. No full internal array is retained.
+    if (!_storage.begin("advert source history")) abort();
+    bindStorage(_storage.data()->entries);
+    reset();
+  }
 #else
   Entry _storage[Capacity];
 public:

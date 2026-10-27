@@ -40,7 +40,7 @@
 // the fork moves to Arduino core 3.x.
 //
 // Scope: this stops the heap corruption and NOTHING else. It does not make an
-// oversized response fail the handshake — v4.4's read loop also exits on
+// oversized response fail the handshake; v4.4's read loop also exits on
 // `header_len < WS_BUFFER_SIZE` going false, and then still accepts the
 // connection if "Sec-WebSocket-Accept:" was inside those first bytes (it comes
 // early, so it usually is). ws_connect() therefore returns success on a partial
@@ -66,6 +66,11 @@
 #include "sdkconfig.h"
 #include "esp_transport.h"
 #include "esp_transport_ws.h"
+
+#if defined(STATION_G3_ESP32) && defined(BOARD_HAS_PSRAM)
+#include "esp_heap_caps.h"
+#include "MQTTConnectionAdmission.h"
+#endif
 
 #ifndef CONFIG_WS_BUFFER_SIZE
 #define CONFIG_WS_BUFFER_SIZE 1024
@@ -103,13 +108,30 @@ esp_transport_handle_t __wrap_esp_transport_ws_init(esp_transport_handle_t paren
     if (ws != nullptr && ws->buffer != nullptr) {
       // The buffer is untouched at this point (allocated moments ago inside
       // __real_esp_transport_ws_init), so a swap is safe.
-      char* padded = (char*)malloc(CONFIG_WS_BUFFER_SIZE + 1);
-      if (padded != nullptr) {
-        free(ws->buffer);
-        ws->buffer = padded;
+      const size_t bytes = CONFIG_WS_BUFFER_SIZE + 1;
+#if defined(STATION_G3_ESP32) && defined(BOARD_HAS_PSRAM)
+      // Upgrade request/response text is CPU-only. Retain this padded buffer
+      // until the SDK destroys the transport; its ordinary free accepts PSRAM.
+      char* padded = (char*)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      if (padded == nullptr) {
+        const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA;
+        if (MQTTConnectionAdmission::canFallback(bytes,
+                heap_caps_get_free_size(caps), heap_caps_get_largest_free_block(caps))) {
+          padded = (char*)heap_caps_malloc(bytes, caps | MALLOC_CAP_8BIT);
+        }
       }
-      // On alloc failure keep the original buffer: same behavior as before
-      // this fix, which is still strictly better than failing init here.
+#else
+      char* padded = (char*)malloc(bytes);
+#endif
+      if (padded == nullptr) {
+        // Returning the original 1024-byte buffer would reintroduce the
+        // overflow. This transport has not entered the client's list yet;
+        // destroy releases its context/buffer without destroying its parent.
+        esp_transport_destroy(t);
+        return nullptr;
+      }
+      free(ws->buffer);
+      ws->buffer = padded;
     }
   }
   return t;

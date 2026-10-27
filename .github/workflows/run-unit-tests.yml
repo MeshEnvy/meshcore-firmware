@@ -391,6 +391,9 @@ jobs:
           python3 -B test/test_flood_retry_bucket_cli.py -v
           python3 -B test/test_flood_advert_rtc.py -v
           python3 -B test/test_flood_advert_iram.py -v
+          python3 -B test/test_flood_advert_psram.py -v
+          python3 -B test/test_repeater_scope_psram.py -v
+          python3 -B test/test_ws_transport_psram.py -v
           python3 -B test/test_ota_security.py -v
           python3 -B test/test_companion_offline_delivery.py -v
           python3 -B test/test_room_receive_admission.py -v
