@@ -94,6 +94,8 @@ unsigned long millis() { return now_ms; }
 void vTaskDelay(unsigned) { assert(false && "stub disconnect must deliver its event"); }
 const char* esp_err_to_name(int) { return "mock"; }
 static int publish_result = 0, enqueue_result = 41, outbox_size = 0;
+static int outbox_queries = 0, enqueue_added_size = 0, stop_result = ESP_OK;
+static bool sdk_mutex_blocked = false, sdk_callback_owner = false;
 static int publish_calls = 0, enqueue_calls = 0, config_calls = 0;
 static int start_calls = 0, reconnect_calls = 0, receive_events = 0, error_events = 0;
 static int init_calls = 0, destroy_calls = 0, stop_calls = 0;
@@ -124,7 +126,7 @@ int esp_mqtt_set_config(void*, esp_mqtt_client_config_t*) {
 }
 int esp_mqtt_client_start(void*) { ++start_calls; return start_result; }
 int esp_mqtt_client_reconnect(void*) { ++reconnect_calls; return ESP_OK; }
-int esp_mqtt_client_stop(void*) { ++stop_calls; return ESP_OK; }
+int esp_mqtt_client_stop(void*) { ++stop_calls; if(stop_result==ESP_OK)outbox_size=0;return stop_result; }
 int esp_mqtt_client_disconnect(void*) {
   assert(sdk_event_handler != nullptr);
   esp_mqtt_event_t event{MQTT_EVENT_DISCONNECTED, 0, false};
@@ -132,7 +134,10 @@ int esp_mqtt_client_disconnect(void*) {
   return ESP_OK;
 }
 int esp_mqtt_client_subscribe(void*, const char*, int) { return 7; }
-int esp_mqtt_client_get_outbox_size(void*) { return outbox_size; }
+int esp_mqtt_client_get_outbox_size(void*) {
+  assert(!sdk_mutex_blocked || sdk_callback_owner);
+  ++outbox_queries;return outbox_size;
+}
 int esp_mqtt_client_publish(void*, const char*, const char*, int, int, bool) {
   ++publish_calls;
   return publish_result;
@@ -140,6 +145,7 @@ int esp_mqtt_client_publish(void*, const char*, const char*, int, int, bool) {
 int esp_mqtt_client_enqueue(void*, const char*, const char*, int, int, bool, bool store) {
   assert(store);
   ++enqueue_calls;
+  if(enqueue_result>=0)outbox_size+=enqueue_added_size;
   return enqueue_result;
 }
 void PsychicMqttClient::_onMessage(esp_mqtt_event_handle_t&) { ++receive_events; }
@@ -360,6 +366,9 @@ class MqttPublishAckTests(unittest.TestCase):
             "int PsychicMqttClient::subscribe(",
             "int PsychicMqttClient::publish(",
             "PsychicMqttClient &PsychicMqttClient::setOutboxLimit(",
+            "size_t PsychicMqttClient::getOutboxSize()",
+            "size_t PsychicMqttClient::refreshOutboxSize()",
+            "void PsychicMqttClient::serviceOutboxDiagnostics()",
             "unsigned long PsychicMqttClient::getOutboxDrops()",
             "unsigned long PsychicMqttClient::getPublishOk()",
             "unsigned long PsychicMqttClient::getPublishErr()",
@@ -400,6 +409,71 @@ class MqttPublishAckTests(unittest.TestCase):
 
     def test_production_publish_events_and_slot_diagnostics(self):
         self.compile_run(MAIN)
+
+    def test_outbox_snapshot_never_takes_cli_lock_and_tracks_enqueue_ack_and_expiry(self):
+        self.compile_run(r'''
+static void dispatch(PsychicMqttClient& client,int id){
+  esp_mqtt_event_t event{id,41,false};
+  PsychicMqttClient::_onMqttEventStatic(&client,"MQTT",id,&event);
+}
+int main(){
+  PsychicMqttClient client;
+  assert(client.getOutboxSize()==0&&outbox_queries==0);
+  client._mqtt_cfg.uri="mqtt://broker";client._mqtt_cfg.broker.address.uri="mqtt://broker";
+  assert(client.connect()==ESP_OK);
+  dispatch(client,MQTT_EVENT_CONNECTED);
+  now_ms=1000;enqueue_added_size=120;
+  assert(client.publish("status",1,false,"body",4,true)==41);
+  assert(client.getOutboxSize()==120);
+  int queries=outbox_queries;
+  sdk_mutex_blocked=true;
+  for(int i=0;i<1000;++i)assert(client.getOutboxSize()==120);
+  assert(outbox_queries==queries); // A radio/CLI reader never waits for the SDK.
+  sdk_callback_owner=true;outbox_size=0;
+  dispatch(client,MQTT_EVENT_PUBLISHED); // recursive SDK-owned callback after removal
+  assert(client.getPublishAck()==1&&client.getOutboxSize()==0&&outbox_queries==queries+1);
+  sdk_callback_owner=false;sdk_mutex_blocked=false;
+  queries=outbox_queries;
+  for(int i=0;i<20;++i){now_ms+=1000;client.serviceOutboxDiagnostics();}
+  assert(outbox_queries==queries); // Quiet/empty outboxes never enter the SDK.
+
+  // Admission must use the SDK's fresh value, even when the CLI cache is old.
+  client.setOutboxLimit(200);outbox_size=200;
+  const int enqueued=enqueue_calls;
+  assert(client.getOutboxSize()==0);
+  assert(client.publish("status",1,false,"body",4,true)==-2&&enqueue_calls==enqueued);
+  assert(client.getOutboxSize()==200&&client.getOutboxDrops()==1);
+  outbox_size=0;
+  assert(client.publish("status",1,false,"body",4,true)==41);
+  assert(client.getOutboxSize()==120);
+  const unsigned long accepted=client.getPublishOk(),acks=client.getPublishAck();
+  queries=outbox_queries;
+  outbox_size=0;now_ms+=999;client.serviceOutboxDiagnostics();
+  assert(client.getOutboxSize()==120&&outbox_queries==queries);
+  ++now_ms;client.serviceOutboxDiagnostics();
+  assert(client.getOutboxSize()==0&&outbox_queries==queries+1);
+  assert(client.getPublishOk()==accepted&&client.getPublishAck()==acks); // expiry is no ACK
+
+  now_ms=UINT32_MAX-500;
+  assert(client.publish("status",1,false,"body",4,true)==41);
+  queries=outbox_queries;outbox_size=0;
+  now_ms=498;client.serviceOutboxDiagnostics();assert(outbox_queries==queries);
+  now_ms=499;client.serviceOutboxDiagnostics();assert(outbox_queries==queries+1);
+  assert(client.getOutboxSize()==0);
+
+  assert(client.publish("status",1,false,"body",4,true)==41);
+  client.softDisconnect();
+  assert(client.isStarted()&&!client.connected()&&client.getOutboxSize()==120);
+  stop_result=ESP_ERR_INVALID_STATE;
+  client.forceStop();
+  assert(client.isStarted()&&client.getOutboxSize()==120); // failed stop retains ownership/cache
+  stop_result=ESP_OK;client.forceStop();
+  assert(!client.isStarted()&&!client.connected()&&client.getOutboxSize()==0);
+  assert(client.connect()==ESP_OK);dispatch(client,MQTT_EVENT_CONNECTED);
+  assert(client.publish("status",1,false,"body",4,true)==41);
+  client.disconnect();assert(!client.isStarted()&&client.getOutboxSize()==0);
+}
+''')
 
     def test_production_initialized_getter_tracks_sdk_creation_and_retained_stops(self):
         self.compile_run(r'''

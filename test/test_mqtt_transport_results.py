@@ -224,7 +224,10 @@ struct MQTTBridge {
   std::atomic<bool> _network_suspended{false};
   bool _network_espnow_restore_pending = false;
   struct Slot {
-    struct Client { bool isStarted() const { return false; } };
+    struct Client {
+      bool isStarted() const { return false; }
+      void serviceOutboxDiagnostics() {}
+    };
     Client* client = nullptr;
     bool enabled = true, initial_connect_done = false, connected = false;
     unsigned long last_reconnect_attempt = 0;
@@ -282,9 +285,13 @@ struct MQTTBridge {
     work(); ++reconfigures;
     if (scenario == 8) _stop_requested = true;
   }
-  void publishStatusToSlot(int) {
-    work(); ++publishes;
-    if (scenario == 9) _stop_requested = true;
+  void maintainStatus(uint32_t) {
+    for (int i = 0; i < RUNTIME_MQTT_SLOTS && !_stop_requested; ++i) {
+      if (!_status_publish_pending[i]) continue;
+      _status_publish_pending[i] = false;
+      work(); ++publishes;
+      if (scenario == 9) _stop_requested = true;
+    }
   }
   void maintainSlotConnections() {
     work();
@@ -616,7 +623,8 @@ class MqttTransportResultsTests(unittest.TestCase):
         source = (ROOT / "src/helpers/bridges/MQTTBridge.cpp").read_text(encoding="utf-8")
         self.assertEqual(source.count("result = slot.client->connect();"), 1)
         self.assertEqual(source.count("result = slot.client->reconnect();"), 1)
-        self.assertEqual(source.count("repeatStatus(), collectConnHealth()"), 2)
+        # On-connect and periodic status share one snapshot builder.
+        self.assertEqual(source.count("repeatStatus(), collectConnHealth()"), 1)
         for signature in ("void MQTTBridge::teardownSlot(", "void MQTTBridge::destroySlotClients("):
             body = method("src/helpers/bridges/MQTTBridge.cpp", signature)
             self.assertIn("_slot_attempt_pending[", body)

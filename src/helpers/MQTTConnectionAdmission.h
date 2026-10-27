@@ -18,6 +18,7 @@ static const size_t kDmaLargestBytes = 4096;
 // SDK default or confusing this per-client task with the MQTTBridge worker.
 static const size_t kClientTaskStackBytes = 6144;
 static const int kClientTaskPriority = 5;
+static const int kClientBufferBytes = 896;
 static const size_t kColdStartAllowanceBytes = 16384;
 static const size_t kColdStartLargestBytes = 8192;
 // SDK stop retains buffers/configuration but releases its task. Restart only

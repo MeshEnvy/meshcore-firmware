@@ -3,6 +3,10 @@
 #include "PsychicMqttClient.h"
 
 #include <string.h>
+#if defined(BOARD_HAS_PSRAM)
+#include <esp_heap_caps.h>
+#include <helpers/MQTTConnectionAdmission.h>
+#endif
 
 static const char *TAG = "[OCTOPUS]";
 
@@ -27,11 +31,16 @@ PsychicMqttClient::~PsychicMqttClient()
     {
         esp_mqtt_client_destroy(_client);
         _client = nullptr;
+        _outbox_size.store(0, std::memory_order_relaxed);
     }
 
     if (_buffer != nullptr)
     {
+#if defined(BOARD_HAS_PSRAM)
+        heap_caps_free(_buffer);
+#else
         free(_buffer);
+#endif
         _buffer = nullptr;
         _buffer_capacity = 0;
     }
@@ -428,7 +437,23 @@ esp_err_t PsychicMqttClient::connect()
     if (_buffer == nullptr)
     {
         _buffer_capacity = (size_t)desired_buffer;
+#if defined(BOARD_HAS_PSRAM)
+        // This character buffer is CPU-only; no atomics, DMA or ISR access.
+        // Retain it through reconnects just like the ordinary heap allocation.
+        const size_t bytes = _buffer_capacity + 1;
+        _buffer = static_cast<char*>(heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (_buffer == nullptr)
+        {
+            const uint32_t dma_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA;
+            if (MQTTConnectionAdmission::canFallback(bytes,
+                    heap_caps_get_free_size(dma_caps), heap_caps_get_largest_free_block(dma_caps)))
+            {
+                _buffer = static_cast<char*>(heap_caps_malloc(bytes, dma_caps | MALLOC_CAP_8BIT));
+            }
+        }
+#else
         _buffer = (char *)malloc(_buffer_capacity + 1);
+#endif
         if (_buffer == nullptr)
         {
             ESP_LOGE(TAG, "Failed to allocate reassembly buffer (%u bytes)", (unsigned)_buffer_capacity);
@@ -517,6 +542,7 @@ void PsychicMqttClient::disconnect()
     }
     _connected = false;
     _started = false;
+    _outbox_size.store(0, std::memory_order_relaxed);
     ESP_LOGI(TAG, "MQTT client stopped.");
 }
 
@@ -561,9 +587,16 @@ void PsychicMqttClient::forceStop()
     {
         ESP_LOGI(TAG, "Forced stop MQTT client.");
     }
-    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_mqtt_client_stop(_client));
+    const esp_err_t result = esp_mqtt_client_stop(_client);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(result);
+    if (result != ESP_OK)
+    {
+        ESP_LOGW(TAG, "Forced MQTT stop failed: %s", esp_err_to_name(result));
+        return;
+    }
     _connected = false;
     _started = false;
+    _outbox_size.store(0, std::memory_order_relaxed);
     ESP_LOGI(TAG, "MQTT client forcefully stopped.");
 }
 
@@ -604,18 +637,18 @@ int PsychicMqttClient::publish(const char *topic, int qos, bool retain, const ch
         // own (esp-mqtt frees entries only on send-ack or time-based expiry), so on a
         // stalled uplink QoS0 frames pile up on internal heap without limit. Cap it
         // here: if the outbox is already at/over _outbox_limit, drop this QoS0 message
-        // and report -2 ("outbox full") so the caller can retry/drop. QoS1/2 (durable,
-        // low-rate) are never gated.
-        if (qos == 0 && _outbox_limit > 0 && _client != nullptr &&
-            esp_mqtt_client_get_outbox_size(_client) >= _outbox_limit)
+        // and report -2 ("outbox full") so the caller can retry/drop. Apply the
+        // same bound to durable status messages on a stalled connection.
+        const size_t outbox_size = refreshOutboxSize();
+        if (_outbox_limit > 0 && _client != nullptr && outbox_size >= _outbox_limit)
         {
             _outbox_drops++;
             static unsigned long last_full_log = 0;
             unsigned long now = millis();
             if (now - last_full_log > 5000)
             {
-                ESP_LOGW(TAG, "Outbox at cap (%u bytes); dropping QoS0 message to topic %s",
-                         (unsigned)_outbox_limit, topic);
+                ESP_LOGW(TAG, "Outbox at cap (%u bytes); dropping QoS%d message to topic %s",
+                         (unsigned)_outbox_limit, qos, topic);
                 last_full_log = now;
             }
             return -2;
@@ -625,6 +658,7 @@ int PsychicMqttClient::publish(const char *topic, int qos, bool retain, const ch
         bool store_in_outbox = true;
         int result = esp_mqtt_client_enqueue(_client, topic, payload, length, qos, retain, store_in_outbox);
         if (result < 0) _publish_err++; else _publish_ok++;
+        refreshOutboxSize();
         return result;
     }
     else
@@ -635,6 +669,7 @@ int PsychicMqttClient::publish(const char *topic, int qos, bool retain, const ch
         // callers can surface delivery health without per-message logging.
         int result = esp_mqtt_client_publish(_client, topic, payload, length, qos, retain);
         if (result < 0) _publish_err++; else _publish_ok++;
+        if (qos > 0) refreshOutboxSize(); else serviceOutboxDiagnostics();
         return result;
     }
 }
@@ -661,10 +696,24 @@ PsychicMqttClient &PsychicMqttClient::setOutboxLimit(size_t bytes)
 
 size_t PsychicMqttClient::getOutboxSize()
 {
-    if (_client == nullptr)
-        return 0;
-    int size = esp_mqtt_client_get_outbox_size(_client);
-    return size > 0 ? (size_t)size : 0;
+    return _outbox_size.load(std::memory_order_relaxed);
+}
+
+size_t PsychicMqttClient::refreshOutboxSize()
+{
+    const int size = _client ? esp_mqtt_client_get_outbox_size(_client) : 0;
+    const size_t bytes = size > 0 ? static_cast<size_t>(size) : 0;
+    _outbox_size.store(bytes, std::memory_order_relaxed);
+    _outbox_sampled_at.store(static_cast<uint32_t>(millis()), std::memory_order_relaxed);
+    return bytes;
+}
+
+void PsychicMqttClient::serviceOutboxDiagnostics()
+{
+    if (!_started.load(std::memory_order_relaxed) || !getOutboxSize()) return;
+    const uint32_t now = static_cast<uint32_t>(millis());
+    if (now - _outbox_sampled_at.load(std::memory_order_relaxed) >= 1000U)
+        refreshOutboxSize();
 }
 
 size_t PsychicMqttClient::getOutboxLimit()
@@ -862,6 +911,9 @@ void PsychicMqttClient::_onMessage(esp_mqtt_event_handle_t &event)
 
 void PsychicMqttClient::_onPublish(esp_mqtt_event_handle_t &event)
 {
+    // The SDK removes the acknowledged item before dispatch and its API mutex
+    // is recursive, so this callback can sample without waiting on another task.
+    refreshOutboxSize();
     _publish_ack.fetch_add(1, std::memory_order_relaxed);
     ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
     for (uint8_t i = 0; i < _onPublishUserCallbackCount; ++i)

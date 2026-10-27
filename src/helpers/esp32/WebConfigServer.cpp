@@ -2364,7 +2364,12 @@ void WebConfigServer::handleStatus(AsyncWebServerRequest* req) {
   // duplicated in the page, which cannot know how this build was sized.
   doc["max_cmds"] = MAX_BATCH;
 
+  if (doc.overflowed()) {
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
   AsyncResponseStream* res = req->beginResponseStream("application/json");
+  if (!res) { req->send(503); return; }
   serializeJson(doc, *res);
   req->send(res);
 }
@@ -2407,7 +2412,13 @@ void WebConfigServer::handleLogin(AsyncWebServerRequest* req) {
   }
   const char* body = (const char*)req->_tempObject;
   DynamicJsonDocument doc(256);
-  if (!body || deserializeJson(doc, body) != DeserializationError::Ok) {
+  const auto json_error = body ? deserializeJson(doc, body)
+      : DeserializationError(DeserializationError::InvalidInput);
+  if (json_error == DeserializationError::NoMemory) {
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
+  if (json_error != DeserializationError::Ok) {
     req->send(400, "application/json", "{\"error\":\"bad request\"}");
     return;
   }
@@ -2601,7 +2612,12 @@ void WebConfigServer::handleConfigGet(AsyncWebServerRequest* req) {
 #endif
   }
 
+  if (doc.overflowed()) {
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
   AsyncResponseStream* res = req->beginResponseStream("application/json");
+  if (!res) { req->send(503); return; }
   serializeJson(doc, *res);
   req->send(res);
 }
@@ -2615,7 +2631,13 @@ void WebConfigServer::handleConfigPost(AsyncWebServerRequest* req) {
   }
   const char* body = (const char*)req->_tempObject;
   DynamicJsonDocument doc(6144);
-  if (!body || deserializeJson(doc, body) != DeserializationError::Ok) {
+  const auto json_error = body ? deserializeJson(doc, body)
+      : DeserializationError(DeserializationError::InvalidInput);
+  if (json_error == DeserializationError::NoMemory) {
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
+  if (json_error != DeserializationError::Ok) {
     req->send(400, "application/json", "{\"error\":\"bad json\"}");
     return;
   }
@@ -2650,6 +2672,10 @@ void WebConfigServer::handleConfigPost(AsyncWebServerRequest* req) {
     ack["state"] = WebConfigBatch::replayStateName(bstate);
     ack["count"] = _batch_count;
     ack["reqid"] = (const char*)_batch_reqid;
+    if (ack.overflowed()) {
+      req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+      return;
+    }
     String out;
     serializeJson(ack, out);
     req->send(202, "application/json", out);
@@ -2659,6 +2685,10 @@ void WebConfigServer::handleConfigPost(AsyncWebServerRequest* req) {
     StaticJsonDocument<96> busy;
     busy["error"] = "busy";
     busy["reqid"] = (const char*)_batch_reqid;
+    if (busy.overflowed()) {
+      req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+      return;
+    }
     String out;
     serializeJson(busy, out);
     req->send(409, "application/json", out);
@@ -2699,6 +2729,10 @@ void WebConfigServer::handleConfigPost(AsyncWebServerRequest* req) {
       StaticJsonDocument<128> err;
       err["error"] = "bad key";
       err["key"] = safe_key;
+      if (err.overflowed()) {
+        req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+        return;
+      }
       String out;
       serializeJson(err, out);
       req->send(400, "application/json", out);
@@ -2710,6 +2744,10 @@ void WebConfigServer::handleConfigPost(AsyncWebServerRequest* req) {
         StaticJsonDocument<128> err;
         err["error"] = "ESP-NOW channel must be 1-13";
         err["key"] = key;
+        if (err.overflowed()) {
+          req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+          return;
+        }
         String out;
         serializeJson(err, out);
         req->send(400, "application/json", out);
@@ -2754,6 +2792,10 @@ void WebConfigServer::handleConfigPost(AsyncWebServerRequest* req) {
       StaticJsonDocument<128> ed;
       ed["error"] = "value too long";
       ed["key"] = safe_key;
+      if (ed.overflowed()) {
+        req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+        return;
+      }
       String out;
       serializeJson(ed, out);
       req->send(400, "application/json", out);
@@ -2766,6 +2808,17 @@ void WebConfigServer::handleConfigPost(AsyncWebServerRequest* req) {
     req->send(400, "application/json", "{\"error\":\"no changes\"}");
     return;
   }
+  StaticJsonDocument<96> ack;
+  ack["state"] = "pending";
+  ack["count"] = count;
+  ack["reqid"] = reqid;
+  if (ack.overflowed()) {
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
+  String out;
+  serializeJson(ack, out);
+
   _batch_kind = BATCH_CONFIG;
   _batch_count = count;
   _batch_next = 0;
@@ -2787,12 +2840,6 @@ void WebConfigServer::handleConfigPost(AsyncWebServerRequest* req) {
       "WC: config POST accepted, %d cmds, reboot=%d\n",
       count, (int)reboot_after);
 
-  StaticJsonDocument<96> ack;
-  ack["state"] = "pending";
-  ack["count"] = count;
-  ack["reqid"] = (const char*)_batch_reqid;
-  String out;
-  serializeJson(ack, out);
   req->send(202, "application/json", out);
 }
 
@@ -2836,6 +2883,10 @@ void WebConfigServer::handleConfigResult(AsyncWebServerRequest* req) {
     StaticJsonDocument<64> idle;
     idle["state"] = "idle";
     idle["reqid"] = requested_reqid;
+    if (idle.overflowed()) {
+      req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+      return;
+    }
     String out;
     serializeJson(idle, out);
     req->send(200, "application/json", out);
@@ -2850,6 +2901,10 @@ void WebConfigServer::handleConfigResult(AsyncWebServerRequest* req) {
     pending["state"] = "pending";
     pending["reqid"] = (const char*)_batch_reqid;
     pending["reauth_required"] = _batch_reauth_required && !authenticated;
+    if (pending.overflowed()) {
+      req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+      return;
+    }
     String out;
     serializeJson(pending, out);
     req->send(200, "application/json", out);
@@ -2865,11 +2920,6 @@ void WebConfigServer::handleConfigResult(AsyncWebServerRequest* req) {
       WebConfigBatch::doneReportsReboot(_batch_reboot, _batch_all_ok);
   doc["all_ok"] = _batch_all_ok;
   doc["reauth_required"] = _batch_reauth_required && !authenticated;
-  if (_batch_reauth_required && !_batch_reauth_delivered) {
-    _batch_reauth_delivered = true;
-    if (_ap_rekey_generation)
-      _ap_rekey_after = WebConfigBatch::scheduleAt(millis(), 3000);
-  }
   doc["reqid"] = (const char*)_batch_reqid;
   if (_setup_wifi_handoff_ip[0]) {
     doc["wifi_ip"] = (const char*)_setup_wifi_handoff_ip;
@@ -2884,19 +2934,20 @@ void WebConfigServer::handleConfigResult(AsyncWebServerRequest* req) {
   }
   // State stays DONE (re-readable) until the next POST claims the slot.
   const uint32_t result_now = millis();
-  if (WebConfigBatch::shouldArmConfirmReboot(
+  const bool arm_reboot = WebConfigBatch::shouldArmConfirmReboot(
           toSpecState(_batch_state), _batch_reboot,
-          _batch_all_ok, _batch_reboot_armed)) {
+          _batch_all_ok, _batch_reboot_armed);
+  uint32_t confirmed_reboot_at = 0;
+  if (arm_reboot) {
     // Confirmation delivered. The handoff page remains rendered in the
     // browser after the AP disappears, so it only needs a one-second response
     // flush before reboot. Armed once; re-reads cannot push the deadline out.
-    _batch_reboot_armed = true;
     const bool setup_handoff = _setup_wifi_handoff_ip[0] != 0;
     const uint32_t reboot_delay = setup_handoff
         ? WebConfigBatch::kSetupHandoffRebootConfirmMs
         : WebConfigBatch::kRebootConfirmMs;
     doc["reboot_in_ms"] = reboot_delay;
-    _reboot_at = setup_handoff
+    confirmed_reboot_at = setup_handoff
         ? WebConfigBatch::confirmSetupHandoffRebootAt(result_now)
         : WebConfigBatch::confirmRebootAt(result_now);
   } else if (WebConfigBatch::doneReportsReboot(
@@ -2907,7 +2958,21 @@ void WebConfigServer::handleConfigResult(AsyncWebServerRequest* req) {
         result_now, _reboot_at) ? 1u : _reboot_at - result_now;
   }
 
+  if (doc.overflowed()) {
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
   AsyncResponseStream* res = req->beginResponseStream("application/json");
+  if (!res) { req->send(503); return; }
+  if (_batch_reauth_required && !_batch_reauth_delivered) {
+    _batch_reauth_delivered = true;
+    if (_ap_rekey_generation)
+      _ap_rekey_after = WebConfigBatch::scheduleAt(millis(), 3000);
+  }
+  if (arm_reboot) {
+    _batch_reboot_armed = true;
+    _reboot_at = confirmed_reboot_at;
+  }
   serializeJson(doc, *res);
   req->send(res);
 }
@@ -3023,7 +3088,12 @@ void WebConfigServer::handleTerminalPost(AsyncWebServerRequest* req) {
     return;
   }
   DynamicJsonDocument doc(2048);
-  if (deserializeJson(doc, static_cast<const char*>(req->_tempObject))) {
+  const auto json_error = deserializeJson(doc, static_cast<const char*>(req->_tempObject));
+  if (json_error == DeserializationError::NoMemory) {
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
+  if (json_error) {
     req->send(400, "application/json", "{\"error\":\"bad json\"}");
     return;
   }
@@ -3117,7 +3187,12 @@ void WebConfigServer::handleTerminalOutput(AsyncWebServerRequest* req) {
   doc["seq"] = _terminal->queue.sequence;
   doc["done"] = !_terminal->queue.pending;
   doc["closed"] = _terminal->closed;
+  if (doc.overflowed()) {
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
   AsyncResponseStream* response = req->beginResponseStream("application/json");
+  if (!response) { req->send(503); return; }
   response->addHeader("Cache-Control", "no-store");
   serializeJson(doc, *response);
   req->send(response);
@@ -3146,7 +3221,13 @@ void WebConfigServer::handleCliPost(AsyncWebServerRequest* req) {
   }
   const char* body = (const char*)req->_tempObject;
   DynamicJsonDocument doc(6144);
-  if (!body || deserializeJson(doc, body) != DeserializationError::Ok) {
+  const auto json_error = body ? deserializeJson(doc, body)
+      : DeserializationError(DeserializationError::InvalidInput);
+  if (json_error == DeserializationError::NoMemory) {
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
+  if (json_error != DeserializationError::Ok) {
     req->send(400, "application/json", "{\"error\":\"bad json\"}");
     return;
   }
@@ -3180,6 +3261,10 @@ void WebConfigServer::handleCliPost(AsyncWebServerRequest* req) {
     ack["state"] = (bstate == WebConfigBatch::State::Done) ? "done" : "running";
     ack["total"] = _batch_count;
     ack["reqid"] = (const char*)_batch_reqid;
+    if (ack.overflowed()) {
+      req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+      return;
+    }
     String out;
     serializeJson(ack, out);
     req->send(202, "application/json", out);
@@ -3189,6 +3274,10 @@ void WebConfigServer::handleCliPost(AsyncWebServerRequest* req) {
     StaticJsonDocument<96> bd;
     bd["error"] = "busy";
     bd["reqid"] = (const char*)_batch_reqid;
+    if (bd.overflowed()) {
+      req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+      return;
+    }
     String out;
     serializeJson(bd, out);
     req->send(409, "application/json", out);
@@ -3204,6 +3293,10 @@ void WebConfigServer::handleCliPost(AsyncWebServerRequest* req) {
       StaticJsonDocument<96> ed;
       ed["error"] = "too many commands";
       ed["max"] = MAX_BATCH;
+      if (ed.overflowed()) {
+        req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+        return;
+      }
       String out;
       serializeJson(ed, out);
       req->send(413, "application/json", out);
@@ -3241,6 +3334,10 @@ void WebConfigServer::handleCliPost(AsyncWebServerRequest* req) {
     if (why) {
       StaticJsonDocument<256> ed;
       ed["error"] = why;
+      if (ed.overflowed()) {
+        req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+        return;
+      }
       String out;
       serializeJson(ed, out);
       req->send(400, "application/json", out);
@@ -3270,6 +3367,17 @@ void WebConfigServer::handleCliPost(AsyncWebServerRequest* req) {
     return;
   }
 
+  StaticJsonDocument<96> ack;
+  ack["state"] = "running";
+  ack["total"] = count;
+  ack["reqid"] = reqid;
+  if (ack.overflowed()) {
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
+  String out;
+  serializeJson(ack, out);
+
   _batch_kind = BATCH_CLI;
   _batch_count = count;
   _batch_next = 0;
@@ -3284,12 +3392,6 @@ void WebConfigServer::handleCliPost(AsyncWebServerRequest* req) {
       "WC: cli POST accepted, %d cmds, reboot=%d\n",
       count, (int)defer_reboot);
 
-  StaticJsonDocument<96> ack;
-  ack["state"] = "running";
-  ack["total"] = count;
-  ack["reqid"] = (const char*)_batch_reqid;
-  String out;
-  serializeJson(ack, out);
   req->send(202, "application/json", out);
 }
 
@@ -3343,6 +3445,10 @@ void WebConfigServer::handleCliResult(AsyncWebServerRequest* req) {
     StaticJsonDocument<64> idle;
     idle["state"] = "idle";
     idle["reqid"] = requested_reqid;
+    if (idle.overflowed()) {
+      req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+      return;
+    }
     String out;
     serializeJson(idle, out);
     req->send(200, "application/json", out);
@@ -3379,24 +3485,30 @@ void WebConfigServer::handleCliResult(AsyncWebServerRequest* req) {
         : WebConfigBatch::cliWriteSucceeded(_batch[i].reply) ? "OK"
         : "Sign in again to read this result";
   }
+  const bool arm_reboot = final_read && WebConfigBatch::shouldArmConfirmReboot(
+      toSpecState(_batch_state), _batch_reboot, _batch_all_ok, _batch_reboot_armed);
   if (final_read) {
-    if (_batch_reauth_required && !_batch_reauth_delivered) {
-      _batch_reauth_delivered = true;
-      if (_ap_rekey_generation)
-        _ap_rekey_after = WebConfigBatch::scheduleAt(millis(), 3000);
-    }
     doc["all_ok"] = _batch_all_ok;
     const bool rebooting = WebConfigBatch::cliRebootAllowed(_batch_reboot, _batch_all_ok);
     doc["reboot"] = rebooting;
     // Tell the operator why a `reboot` they asked for is not happening.
     if (_batch_reboot && !_batch_all_ok) doc["reboot_withheld"] = true;
-    if (WebConfigBatch::shouldArmConfirmReboot(toSpecState(_batch_state), _batch_reboot,
-                                               _batch_all_ok, _batch_reboot_armed)) {
-      _batch_reboot_armed = true;
-      _reboot_at = WebConfigBatch::confirmRebootAt(millis());
-    }
+  }
+  if (doc.overflowed()) {
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
   }
   AsyncResponseStream* res = req->beginResponseStream("application/json");
+  if (!res) { req->send(503); return; }
+  if (final_read && _batch_reauth_required && !_batch_reauth_delivered) {
+    _batch_reauth_delivered = true;
+    if (_ap_rekey_generation)
+      _ap_rekey_after = WebConfigBatch::scheduleAt(millis(), 3000);
+  }
+  if (arm_reboot) {
+    _batch_reboot_armed = true;
+    _reboot_at = WebConfigBatch::confirmRebootAt(millis());
+  }
   serializeJson(doc, *res);
   req->send(res);
 }
@@ -3452,7 +3564,12 @@ void WebConfigServer::handleScan(AsyncWebServerRequest* req) {
     net["enc"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
     net["channel"] = WiFi.channel(i);
   }
+  if (doc.overflowed()) {
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
   AsyncResponseStream* res = req->beginResponseStream("application/json");
+  if (!res) { req->send(503); return; }
   serializeJson(doc, *res);
   req->send(res);
 }
@@ -3485,7 +3602,12 @@ void WebConfigServer::handlePresets(AsyncWebServerRequest* req) {
       o["needs"] = "none";
     }
   }
+  if (doc.overflowed()) {
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
   AsyncResponseStream* res = req->beginResponseStream("application/json");
+  if (!res) { req->send(503); return; }
   serializeJson(doc, *res);
   req->send(res);
 #else

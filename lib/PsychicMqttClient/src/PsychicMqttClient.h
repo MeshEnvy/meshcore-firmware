@@ -436,15 +436,15 @@ public:
     esp_mqtt_client_config_t *getMqttConfig();
 
     /**
-     * @brief Caps the size of the esp-mqtt outbox for async QoS 0 publishes.
+     * @brief Caps the size of the esp-mqtt outbox for asynchronous publishes.
      *
      * QoS 0 async publishes are forced into the esp-mqtt outbox (store=true) so
      * packet topics keep flowing, but the outbox has no size bound of its own --
      * it only frees entries on send-ack or time-based expiry. On a stalled uplink
      * the entries accumulate on internal heap without limit. When the current
-     * outbox size is at/over this cap, publish() drops the new QoS 0 message
+     * outbox size is at/over this cap, publish() drops the new message
      * (returns -2) instead of enqueuing it, applying backpressure. 0 disables the
-     * cap. QoS 1/2 publishes are never gated by this.
+     * cap. The publish owner samples the SDK immediately before admission.
      *
      * @param bytes Maximum outbox size in bytes, or 0 to disable.
      * @return A reference to the PsychicMqttClient instance.
@@ -452,12 +452,17 @@ public:
     PsychicMqttClient &setOutboxLimit(size_t bytes);
 
     /**
-     * @brief Returns the current esp-mqtt outbox size in bytes (0 if the client
-     * is not initialized). Useful for diagnostics/backpressure monitoring.
+     * @brief Returns the last owner-sampled outbox size without taking the SDK
+     * mutex. Publish/ACK events update it; nonempty idle outboxes refresh within
+     * one second when the owner calls serviceOutboxDiagnostics().
      *
      * @return Current outbox size in bytes.
      */
     size_t getOutboxSize();
+
+    // Call only from the client's network owner, never a radio/CLI reader.
+    // Expiry can remove queued items without a broker acknowledgment event.
+    void serviceOutboxDiagnostics();
 
     /**
      * @brief Returns the configured outbox cap in bytes (0 = disabled). Lets
@@ -466,7 +471,7 @@ public:
     size_t getOutboxLimit();
 
     /**
-     * @brief Returns the cumulative count of QoS0 messages dropped because the
+     * @brief Returns the cumulative count of async messages dropped because the
      * outbox was at/over the cap. Monotonic; useful for backpressure diagnostics.
      */
     unsigned long getOutboxDrops();
@@ -500,10 +505,12 @@ private:
     bool _config_dirty = true;
     std::atomic<bool> _started{false};
 
-    // Runtime cap on the esp-mqtt outbox for QoS 0 async publishes (bytes).
+    // Runtime cap on the esp-mqtt outbox for async publishes (bytes).
     // 0 = disabled. Enforced in publish(); not an esp-mqtt config field.
     size_t _outbox_limit = 0;
-    // Cumulative count of QoS0 publishes dropped because the outbox hit the cap.
+    std::atomic<size_t> _outbox_size{0};
+    std::atomic<uint32_t> _outbox_sampled_at{0};
+    // Cumulative count of async publishes dropped because the outbox hit the cap.
     unsigned long _outbox_drops = 0;
     // Cumulative publish accept/fail counts (any QoS, sync or async path).
     unsigned long _publish_ok = 0;
@@ -513,6 +520,8 @@ private:
 
     // Multipart message reassembly. _buffer is lazily allocated at connect() time
     // to match the configured buffer size, then reused for the client's lifetime.
+    // PSRAM builds prefer external byte storage; internal fallback preserves
+    // the network/AES DMA reserve. The client object and task stacks stay internal.
     // _topic is inline storage, never heap-allocated.
     char *_buffer = nullptr;
     size_t _buffer_capacity = 0;
@@ -523,6 +532,7 @@ private:
     // Configuration is transactional: never start/reconnect on stale credentials
     // after a failed esp_mqtt_set_config().
     esp_err_t applyConfig();
+    size_t refreshOutboxSize();
     bool _isTopicMatch(const char *topic, const char *subscription);
 
     // Fixed-size callback storage. Each slot is "used" once registered; we never

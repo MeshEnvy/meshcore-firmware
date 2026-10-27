@@ -26,9 +26,11 @@ PREAMBLE = r'''
 #include <vector>
 #include "helpers/AlertFaultPolicy.h"
 #include "helpers/MQTTConnectionAdmission.h"
+#include "helpers/MQTTPublishAdmission.h"
 #include "helpers/MQTTConnectionHealth.h"
 #include "helpers/MQTTConnectionPolicy.h"
 #include "helpers/MQTTTransportHealth.h"
+#include "helpers/MQTTStatusPublishPolicy.h"
 #include "helpers/WiFiPowerSave.h"
 #define ESP_PLATFORM 1
 #define MQTT_DEBUG_PRINTLN(...) ((void)0)
@@ -158,6 +160,7 @@ struct PsychicMqttClient {
     dma_free += 44000; dma_largest = 20000;
   }
   void setCredentials(const char*, const char*) { ++credentials; }
+  void serviceOutboxDiagnostics() {}
 };
 struct MQTTBridge {
   struct MQTTSlot {
@@ -179,8 +182,10 @@ struct MQTTBridge {
     int last_sock_errno = 0;
     unsigned long last_error_time = 0;
     MQTTTransportHealth::State transport_health;
+    MQTTStatusPublishPolicy::State status_publish;
   } _slots[RUNTIME_MQTT_SLOTS];
   PsychicMqttClient clients[RUNTIME_MQTT_SLOTS];
+  MQTTPublishAdmission::State _publish_memory;
   char tokens[RUNTIME_MQTT_SLOTS][16] = {};
   bool setup_succeeds[RUNTIME_MQTT_SLOTS] = {true, true, true, true, true, true};
   bool ready[RUNTIME_MQTT_SLOTS] = {true, true, true, true, true, true};
@@ -191,7 +196,7 @@ struct MQTTBridge {
   std::atomic<uint8_t> _slot_health_reason[RUNTIME_MQTT_SLOTS] = {};
   std::atomic<bool> _slot_health_recovering[RUNTIME_MQTT_SLOTS] = {};
   std::atomic<uint32_t> _slot_health_ack_wait_secs[RUNTIME_MQTT_SLOTS] = {};
-  bool _status_publish_pending[RUNTIME_MQTT_SLOTS] = {};
+  std::atomic<bool> _status_publish_pending[RUNTIME_MQTT_SLOTS] = {};
   std::atomic<bool> _stop_requested{false}, _ntp_synced{true};
   bool _slot_force_jwt_mint[RUNTIME_MQTT_SLOTS] = {};
   void* _identity = this;
@@ -206,7 +211,7 @@ struct MQTTBridge {
     float *freq = nullptr, *bw = nullptr;
     int *sf = nullptr, *cr = nullptr;
   } _node_info;
-  struct Observer { uint8_t wifi_power_save = 1; } observer;
+  struct Observer { uint8_t wifi_power_save = 1; bool mqtt_status_enabled = true; } observer;
   Observer* _obs = &observer;
   AlertFaultPolicy::OutageSnapshot _wifi_outage{};
   unsigned long _last_slot_reconnect_ms = 0;
@@ -217,6 +222,8 @@ struct MQTTBridge {
   const char* _jwt_username = "jwt";
   static const unsigned long SLOT_SETUP_RETRY_INTERVAL = 60000;
   static const unsigned long SLOT_LOG_INTERVAL = 60000;
+  static const unsigned long STATUS_RETRY_INTERVAL = 30000;
+  unsigned long _status_interval = 300000;
   static constexpr int STATUS_JSON_BUFFER_SIZE = 1024, MSG_STATUS = 0;
   const char *_timezone = "UTC", *_origin = "node", *_device_id = "id";
   const char *_board_model = "V4", *_firmware_version = "test";
@@ -276,7 +283,10 @@ struct MQTTBridge {
   void updateCachedConnectionStatus() {}
   bool ensureSlotClient(int index);
   bool publishToSlot(int, const char*, const char*, size_t, bool, uint8_t);
-  void publishStatusToSlot(int);
+  bool hasPublishHeadroom(size_t = 0, size_t = 0, uint8_t = 0) { return true; }
+  bool publishStatusToSlot(int);
+  bool publishStatus(uint8_t);
+  void maintainStatus(uint32_t);
   void only(int index) {
     for (int i = 0; i < RUNTIME_MQTT_SLOTS; ++i) _slots[i].enabled = i == index;
   }
@@ -310,7 +320,9 @@ class MqttHandshakeSchedulerTest(unittest.TestCase):
             "void MQTTBridge::updateSlotTransportDiag(",
             "bool MQTTBridge::ensureSlotClient(",
             "bool MQTTBridge::publishToSlot(",
-            "void MQTTBridge::publishStatusToSlot(",
+            "bool MQTTBridge::publishStatusToSlot(",
+            "bool MQTTBridge::publishStatus(",
+            "void MQTTBridge::maintainStatus(",
             "unsigned long MQTTBridge::slotTokenLifetime(int index) const",
             "bool MQTTBridge::handleWiFiConnection(unsigned long now)",
             "void MQTTBridge::maintainSlotConnections()",

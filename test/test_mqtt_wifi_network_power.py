@@ -145,6 +145,7 @@ struct Client {
   int stops = 0;
   uint32_t publish_acks = 0;
   uint32_t getPublishAck() const { return publish_acks; }
+  void serviceOutboxDiagnostics() {}
   bool isStarted() const { return started; }
   bool connected() const { return live; }
   void disconnect() {

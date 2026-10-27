@@ -13,6 +13,8 @@
 #include "helpers/MQTTConnectionPolicy.h"
 #include "helpers/MQTTConnectionHealth.h"
 #include "helpers/MQTTTransportHealth.h"
+#include "helpers/MQTTPublishAdmission.h"
+#include "helpers/MQTTStatusPublishPolicy.h"
 #include "helpers/MQTTPayloadBuilder.h"
 #include "helpers/MQTTPacketFilter.h"
 #include "helpers/MQTTPresets.h"
@@ -108,6 +110,7 @@ private:
   // Connection slot - each slot holds one MQTT connection
   struct MQTTSlot {
     PsychicMqttClient* client;
+    char client_id[32];             // Persistent: the adapter retains this pointer
     const MQTTPresetDef* preset;    // Points to MQTT_PRESETS[] entry, nullptr for custom/none
     bool enabled;                   // true when preset is not "none"
     bool connected;                 // Updated in callbacks
@@ -163,6 +166,7 @@ private:
     // Only the bridge worker mutates this state; SDK callbacks raise atomic
     // latches instead. Retained across reconnects to expose recovery history.
     MQTTTransportHealth::State transport_health;
+    MQTTStatusPublishPolicy::State status_publish;
   };
 
   MQTTSlot _slots[RUNTIME_MQTT_SLOTS];
@@ -182,7 +186,6 @@ private:
   bool _raw_enabled;
   bool _rx_enabled;
   uint8_t _tx_mode;  // 0=off, 1=all TX, 2=self-advert only
-  unsigned long _last_status_publish;
   unsigned long _status_interval;
 
   // Packet queue for offline scenarios
@@ -278,8 +281,8 @@ private:
   // task (Core 0). publishStatusToSlot() touches the shared status doc/buffer/
   // origin that publishStatus() also uses, so it must run only on the bridge
   // task -- the callback just raises this flag. Same idiom as
-  // _slot_reconfigure_pending; a single-byte volatile store/load is atomic.
-  volatile bool _status_publish_pending[RUNTIME_MQTT_SLOTS];
+  // _slot_reconfigure_pending; exchange consumes each reconnect edge safely.
+  std::atomic<bool> _status_publish_pending[RUNTIME_MQTT_SLOTS];
 
   // CLI-requested forced NTP sync, marshalled onto the MQTT task (Core 0).
   // All NTP I/O (_ntp_client, configTime) must run on Core 0; the CLI thread
@@ -412,21 +415,18 @@ private:
   // feeds capacity(), so the object is 64 bytes and every pool comes from the allocator.
   JsonDocument _json_scratch_doc{&_json_allocator};
 
-  // Memory pressure monitoring (per-publish skip; see publishPacket()).
+  // Owner-task admission shared by packet, raw and status publication.
   // The broader fragmentation-recovery machinery was removed in Phase 4 of
   // the MQTT memory-defrag work. Persistent clients reduce MQTT storage churn;
   // ESP-IDF still reallocates TLS sessions when a connection closes.
-  unsigned long _last_memory_check;
-  bool _memory_pressure = false;  // Cached max-alloc verdict; re-sampled at most once per interval in publishPacket() so the heap walk isn't paid per-packet under pressure
-  int _skipped_publishes;  // Exposed via SNMP; count of publishes skipped when max_alloc is too low
+  MQTTPublishAdmission::State _publish_memory;
+  int _skipped_publishes;  // Exposed via SNMP; attempts suppressed by memory admission
   // Packets rejected by the per-slot filters before reaching the queue. Written
   // on Core 1 (radio callbacks), read on Core 0 for `mqtt.stats`; a torn read of
   // a diagnostic counter is harmless, so no atomic is warranted.
   unsigned long _filtered_packets = 0;
   unsigned long _bad_sig_adverts = 0;  // RX adverts dropped by mqtt.advert.verify
 
-  // Status publish retry tracking
-  unsigned long _last_status_retry;  // Track last retry attempt (separate from successful publish)
   static const unsigned long STATUS_RETRY_INTERVAL = 30000; // Retry every 30 seconds if failed
 
   // Device identity for JWT token creation
@@ -512,6 +512,7 @@ private:
   void releaseSlotAuthToken(int index);// Free the token buffer (only with the client -- see MQTTSlot)
   void destroySlotClients(bool force = false);
   bool setupSlot(int index);           // Configure and connect the slot; false = not activated
+  void setSlotClientId(int index);
   // Single definition of "this slot holds one of the _max_active_slots positions":
   // it is enabled and has been through a successful setupSlot(). Startup, the
   // setup-retry path, and live reconfigure all gate on these so the cap cannot be
@@ -533,13 +534,15 @@ private:
   // knows it, and passing it avoids re-scanning up to 2 KB of JSON per destination
   // slot (and up to NEIGHBORS_JSON_BUFFER_SIZE per neighbor snapshot).
   bool publishToSlot(int index, const char* topic, const char* payload, size_t payload_len, bool retained = false, uint8_t qos = 0);
+  bool hasPublishHeadroom(size_t payload_len = 0, size_t topic_len = 0, uint8_t qos = 0);
   bool publishToAllSlots(const char* topic, const char* payload, size_t payload_len, bool retained = false, uint8_t qos = 0);
-  void publishStatusToSlot(int index);
+  bool publishStatusToSlot(int index);
+  void maintainStatus(uint32_t now);
   MQTTConnHealth collectConnHealth() const;
   void updateCachedConnectionStatus();
 
   void processPacketQueue();
-  bool publishStatus();  // Returns true if status was successfully published
+  bool publishStatus(uint8_t slot_mask); // True when every selected destination accepted it
   bool handleWiFiConnection(unsigned long now);
 
   // FreeRTOS task function (runs on Core 0)

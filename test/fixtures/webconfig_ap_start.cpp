@@ -318,6 +318,7 @@ struct DynamicJsonDocument {
   std::string state;
   unsigned networks = 0;
   explicit DynamicJsonDocument(unsigned) {}
+  bool overflowed() const { return false; }
   JsonValue operator[](const char*) { return {&state}; }
   JsonArray createNestedArray(const char*) { return {&networks}; }
 };

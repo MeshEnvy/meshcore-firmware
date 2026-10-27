@@ -20,6 +20,7 @@ PREAMBLE = r'''
 #include <cassert>
 #include <cstddef>
 #include "helpers/MQTTConnectionAdmission.h"
+#include "helpers/MQTTPublishAdmission.h"
 #include "helpers/MQTTConnectionPolicy.h"
 #include "helpers/MQTTTransportHealth.h"
 struct esp_mqtt_client_config_t {
@@ -98,12 +99,19 @@ int main() {
 
 RECONFIGURE_PREAMBLE = r'''
 #include "helpers/MQTTConnectionAdmission.h"
+#include "helpers/MQTTPublishAdmission.h"
 #include "helpers/MQTTConnectionPolicy.h"
 #include "helpers/MQTTTransportHealth.h"
 #define MQTT_DEBUG_PRINTLN(...) ((void)0)
 #define pdMS_TO_TICKS(value) (value)
 constexpr int RUNTIME_MQTT_SLOTS = 2, MQTT_AUTH_JWT = 1;
 constexpr uint32_t MALLOC_CAP_INTERNAL = 1, MALLOC_CAP_DMA = 2;
+constexpr uint32_t MALLOC_CAP_SPIRAM = 4, MALLOC_CAP_8BIT = 8;
+void* heap_caps_malloc(size_t bytes, uint32_t caps) {
+  assert(caps == (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  return std::malloc(bytes);
+}
+void heap_caps_free(void* memory) { std::free(memory); }
 static size_t dma_free = 100000, dma_largest = 20000;
 size_t heap_caps_get_free_size(uint32_t caps) {
   assert(caps == (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA)); return dma_free;
@@ -329,6 +337,9 @@ class MqttNetworkTimeoutTest(unittest.TestCase):
             "void PsychicMqttClient::_onDisconnect(",
             "void PsychicMqttClient::_onSubscribe(",
             "void PsychicMqttClient::_onUnsubscribe(",
+            "size_t PsychicMqttClient::getOutboxSize()",
+            "size_t PsychicMqttClient::refreshOutboxSize()",
+            "void PsychicMqttClient::serviceOutboxDiagnostics()",
             "void PsychicMqttClient::_onPublish(",
         ))
         source += "\n".join(method("src/helpers/bridges/MQTTBridge.cpp", signature)

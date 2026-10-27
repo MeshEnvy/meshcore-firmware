@@ -528,7 +528,11 @@ jobs:
           python3 -B test/test_mqtt_network_timeout.py -v
           python3 -B test/test_mqtt_disconnect.py -v
           python3 -B test/test_mqtt_connection_admission.py -v
+          python3 -B test/test_mqtt_publish_admission.py -v
+          python3 -B test/test_mqtt_reassembly_buffer.py -v
+          python3 -B test/test_webconfig_json_allocator.py -v
           python3 -B test/test_mqtt_handshake_scheduler.py -v
+          python3 -B test/test_mqtt_slot_status.py -v
           python3 -B test/test_mqtt_transport_health.py -v
           python3 -B test/test_mqtt_diagnostics.py -v
           python3 -B test/test_mqtt_advert_verify.py -v

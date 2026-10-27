@@ -42,6 +42,7 @@
 #include <helpers/WebConfigLoginThrottle.h>
 #include <helpers/WiFiNetworkPowerPolicy.h>
 #include <helpers/ui/DisplayBuildFlags.h>
+#include "WebConfigJsonAllocator.h"
 
 class AsyncWebServer;
 class AsyncWebServerRequest;
@@ -75,6 +76,9 @@ class WebTerminalStream;
 #endif
 
 class WebConfigServer {
+  using DynamicJsonDocument = mesh::webconfig::DynamicJsonDocument;
+  template<size_t Capacity>
+  using StaticJsonDocument = mesh::webconfig::StaticJsonDocument<Capacity>;
 public:
   enum Mode : uint8_t { MODE_OFF = 0, MODE_SETUP, MODE_CONNECTING, MODE_LAN };
 

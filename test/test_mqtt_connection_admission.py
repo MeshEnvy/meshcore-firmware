@@ -221,55 +221,52 @@ int main() {
 #include <cstring>
 #define ESP_PLATFORM 1
 #define BOARD_HAS_PSRAM 1
-constexpr uint32_t MALLOC_CAP_INTERNAL = 1, MALLOC_CAP_SPIRAM = 4, MALLOC_CAP_8BIT = 8;
-static bool psram_fails = false, internal_fails = false;
-static size_t malloc_calls = 0, realloc_calls = 0, free_calls = 0;
+constexpr uint32_t MALLOC_CAP_INTERNAL=1, MALLOC_CAP_DMA=2,
+                   MALLOC_CAP_SPIRAM=4, MALLOC_CAP_8BIT=8;
+static bool psram_fails=false, internal_fails=false;
+static size_t dma_free=100000,dma_largest=100000,internal_calls=0,free_calls=0,malloc_calls=0;
 static unsigned char original[32], psram_storage[64], internal_storage[64];
-static void* freed = nullptr;
-void* allocation(uint32_t caps) {
-  if (caps == MALLOC_CAP_SPIRAM) return psram_fails ? nullptr : psram_storage;
-  // INTERNAL alone can select 32-bit-only IRAM on ESP32-S3.
-  assert(caps == (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-  return internal_fails ? nullptr : internal_storage;
+static void* freed=nullptr;
+size_t heap_caps_get_free_size(uint32_t caps){assert(caps==3);return dma_free;}
+size_t heap_caps_get_largest_free_block(uint32_t caps){assert(caps==3);return dma_largest;}
+size_t heap_caps_get_allocated_size(void*ptr){assert(ptr==original);return sizeof(original);}
+void* heap_caps_malloc(size_t size,uint32_t caps){
+  assert(size==32||size==48);++malloc_calls;
+  if(caps==MALLOC_CAP_SPIRAM)return psram_fails?nullptr:psram_storage;
+  assert(caps==(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+  ++internal_calls;return internal_fails?nullptr:internal_storage;
 }
-void* heap_caps_malloc(size_t size, uint32_t caps) {
-  assert(size == 32);
-  ++malloc_calls;
-  return allocation(caps);
-}
-void* heap_caps_realloc(void* ptr, size_t size, uint32_t caps) {
-  assert(ptr == original && size == 48);
-  ++realloc_calls;
-  return allocation(caps);
-}
-void heap_caps_free(void* ptr) { ++free_calls; freed = ptr; }
+void heap_caps_free(void*ptr){++free_calls;freed=ptr;}
 '''
         for signature in ("static void* psram_malloc(size_t size)",
                           "static void psram_free(void* ptr)",
                           "static void* psram_realloc(void* ptr, size_t new_size)"):
             source += method("src/helpers/bridges/MQTTBridge.cpp", signature)
         self.compile_run(source + r'''
-int main() {
-  assert(psram_malloc(0) == nullptr && malloc_calls == 0);
-  assert(psram_malloc(32) == psram_storage && malloc_calls == 1);
-  psram_fails = true;
-  assert(psram_malloc(32) == internal_storage && malloc_calls == 3);
-  internal_fails = true;
-  assert(psram_malloc(32) == nullptr && malloc_calls == 5 && free_calls == 0);
-
-  memset(original, 0xa5, sizeof(original));
-  psram_fails = internal_fails = false;
-  assert(psram_realloc(original, 48) == psram_storage && realloc_calls == 1);
-  psram_fails = true;
-  assert(psram_realloc(original, 48) == internal_storage && realloc_calls == 3);
-  internal_fails = true;
-  assert(psram_realloc(original, 48) == nullptr && realloc_calls == 5);
-  assert(free_calls == 0);
-  for (unsigned char byte : original) assert(byte == 0xa5);
-
-  assert(psram_realloc(original, 0) == nullptr);
-  assert(free_calls == 1 && freed == original && realloc_calls == 5);
-  assert(psram_realloc(nullptr, 0) == nullptr && free_calls == 1);
+int main(){
+  assert(psram_malloc(0)==nullptr&&malloc_calls==0);
+  assert(psram_malloc(32)==psram_storage&&internal_calls==0);
+  psram_fails=true;dma_free=16384+31;
+  assert(psram_malloc(32)==nullptr&&internal_calls==0);
+  dma_free=16384+32;dma_largest=31;
+  assert(psram_malloc(32)==nullptr&&internal_calls==0);
+  dma_largest=32;assert(psram_malloc(32)==internal_storage&&internal_calls==1);
+  memset(original,0xa5,sizeof(original));
+  const auto before=malloc_calls;
+  dma_free=0;assert(psram_realloc(original,16)==original&&malloc_calls==before);
+  assert(psram_realloc(original,48)==nullptr&&free_calls==0);
+  for(unsigned char byte:original)assert(byte==0xa5);
+  psram_fails=false;
+  assert(psram_realloc(original,48)==psram_storage&&freed==original&&free_calls==1);
+  assert(!memcmp(original,psram_storage,sizeof(original)));
+  psram_fails=true;dma_free=16384+48;dma_largest=48;
+  assert(psram_realloc(original,48)==internal_storage&&free_calls==2);
+  assert(!memcmp(original,internal_storage,sizeof(original)));
+  internal_fails=true;
+  assert(psram_realloc(original,48)==nullptr&&free_calls==2);
+  for(unsigned char byte:original)assert(byte==0xa5);
+  assert(psram_realloc(original,0)==nullptr&&free_calls==3);
+  assert(psram_realloc(nullptr,0)==nullptr&&free_calls==3);
 }
 ''')
 
