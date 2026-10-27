@@ -1161,12 +1161,15 @@ int main() {
                  "BLE_PIN_CODE": 123456, "UI_SMALL_MESSAGE_FONT": 0}
         with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             path = Path(temp) / "firmware.elf"
-            for available, accepted in ((54724, False), (73727, False), (73728, True), (74060, True)):
-                with self.subTest(available=available):
-                    elf32(path, {"__HeapBase": (0x2003F800 - available, 0), "__HeapLimit": (0x2003F800, 0)})
-                    result = ram.check_firmware(path, "NRF52_PLATFORM", "nrf52840", flags,
-                                                "Heltec_t096_companion_radio_full_femon")
-                    self.assertEqual(result == 0, accepted)
+            for host_kiss, boundary in ((0, 73728), (1, 74530)):
+                selected = {**flags, "MESH_ENABLE_HOST_KISS": host_kiss}
+                for available, accepted in ((54724, False), (boundary - 1, False),
+                                            (boundary, True), (boundary + 332, True)):
+                    with self.subTest(host_kiss=host_kiss, available=available):
+                        elf32(path, {"__HeapBase": (0x2003F800 - available, 0), "__HeapLimit": (0x2003F800, 0)})
+                        result = ram.check_firmware(path, "NRF52_PLATFORM", "nrf52840", selected,
+                                                    "Heltec_t096_companion_radio_full_femon")
+                        self.assertEqual(result == 0, accepted)
 
     def test_arm_heap_excludes_stack_softdevice_and_mota_arena(self):
         with tempfile.TemporaryDirectory() as temp:

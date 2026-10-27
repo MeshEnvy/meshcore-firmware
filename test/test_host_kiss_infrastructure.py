@@ -205,10 +205,13 @@ apply_policy() {
                        "-fno-pie", "-no-pie"] if sys.platform.startswith("linux") else [])
         for enabled, cooperative, lose_owner in ((0, 0, False), (0, 1, False),
                                                  (1, 0, False), (1, 1, False),
-                                                 (1, 1, True)):
+                                                 (1, 1, True), (1, 1, "late")):
             with self.subTest(enabled=enabled, cooperative=cooperative, lose_owner=lose_owner):
                 candidate = pump
-                if lose_owner:
+                if lose_owner == "late":
+                    candidate = candidate.replace("    if (mesh::hostkiss::usbInputReserved(console.peek())) break;\n", "")
+                    self.assertNotEqual(candidate, pump)
+                elif lose_owner:
                     candidate = candidate.replace("if (mesh::hostkiss::serviceUsb())",
                                                   "if (false && mesh::hostkiss::serviceUsb())")
                     self.assertNotEqual(candidate, pump)

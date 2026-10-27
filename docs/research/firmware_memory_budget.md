@@ -77,6 +77,16 @@ Headless and OLED devices use their own smaller totals. The JSON lists each
 component and checks the largest available region against the largest planned
 single allocation.
 
+Enabled Full host KISS images reserve a separate 2,048-byte
+`host_kiss_codec` allocation on ESP32 and nRF52, including while KISS is saved
+off. Turning the service on allocates its two host-TX and two encoded-output
+frames plus parser state. The source assertion bounds the complete Codec and
+allocator headroom to this allowance. WiFi/TCP retains its existing network
+allowance; the independent transient margin and all normal-role capacities
+remain additive. Explicit feature-off and ESP-NOW-only images omit this
+allocation. A passing report proves linked capacity, not physical session or
+maximum network-load qualification.
+
 ### MQTT startup minimum and runtime qualification
 
 The `mqtt_startup_allowance` component keeps a 24,576-byte internal startup

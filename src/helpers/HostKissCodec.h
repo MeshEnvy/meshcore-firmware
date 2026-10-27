@@ -146,4 +146,9 @@ class Codec {
   uint32_t droppedFrames() const { return dropped_; }
 };
 
+// Lazy Codec allocation is included in check_firmware_ram.py on every
+// enabled Full image. Retain allocator metadata room if queues grow later.
+static_assert(sizeof(Codec) + 32 <= 2048,
+              "Update the host KISS Codec runtime RAM allowance");
+
 }}  // namespace mesh::hostkiss

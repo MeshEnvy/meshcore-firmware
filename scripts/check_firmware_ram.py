@@ -314,6 +314,16 @@ def requirements(platform, defines, target):
             parts["neighbor_history"] = count * 9 + (16 if count else 0)
     else:
         parts["core_filesystems_sensors"] = 8192
+    if (platform in {"ESP32_PLATFORM", "NRF52_PLATFORM"}
+            and not integer(defines, "MESH_PRIMARY_ESPNOW", 0)
+            and integer(defines, "MESH_ENABLE_HOST_KISS",
+                        integer(defines, "COMPANION_RADIO_FULL", 0))):
+        # Full raw KISS is lazy but can coexist with every normal-role owner.
+        # Its two RX/output frames, two host TX frames and framing state live
+        # in one Codec allocation; its source assertion retains allocator
+        # headroom within 2 KiB. Socket/WiFi objects retain their existing
+        # network allowance. This never replaces the transient margin.
+        parts["host_kiss_codec"] = 2048
     # Packet bytes plus all three queue tables and allocation overhead.
     parts["radio_packet_pool"] = 5120 if companion else 10240
     # These tables moved out of .bss, so linker heap bounds now include their
@@ -448,7 +458,7 @@ def requirements(platform, defines, target):
                  "solarxiao_voltage_history",
                  "ota_context", "screen_objects_and_history", "ota_encoder_workspace",
                  "ota_generic_source_buffers", "ethernet_or_external_ota_workspaces", "ota_target_name_lookup",
-                 "ethernet_companion_worker"):
+                 "ethernet_companion_worker", "host_kiss_codec"):
         largest = max(largest, parts.get(name, 0))
     if "room_browser_mailbox" in parts:
         largest = max(largest, 8192, parts["room_browser_mailbox"])
