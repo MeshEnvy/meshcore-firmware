@@ -18,6 +18,7 @@
 #include <Mesh.h>
 #include <helpers/BluetoothMac.h>
 #include "MyMesh.h"
+#include <helpers/CompanionRtcTerminalInput.h>
 #include <helpers/HostKiss.h>
 #include <helpers/CompanionReader.h>
 #include "CompanionBluetooth.h"
@@ -696,7 +697,7 @@ bool handleRak4631PeripheralCommand(const char* command, char* reply, size_t cap
 #endif
 
 #if defined(ENABLE_USB_INTERFACE)
-static char usb_terminal_line[MAX_TRANS_UNIT * 2 + 32];
+MESH_COMPANION_TERMINAL_INPUT_ATTR static char usb_terminal_line[MAX_TRANS_UNIT * 2 + 32];
 static size_t usb_terminal_line_len = 0;
 static bool usb_terminal_discard_line = false;
 static bool usb_host_session_connected = false;
@@ -2473,7 +2474,7 @@ void halt() {
   #endif
   static WiFiServer ota_console_server(OTA_CONSOLE_TCP_PORT);
   static WiFiClient ota_console_client;
-  static char    ota_console_line[MAX_TRANS_UNIT * 2 + 32];
+  MESH_COMPANION_TERMINAL_INPUT_ATTR static char ota_console_line[MAX_TRANS_UNIT * 2 + 32];
   static size_t ota_console_len = 0;
   static bool ota_console_discard_line = false;
 #if COMPANION_FEATURE_NETWORK_TERMINAL && COMPANION_FEATURE_READER
@@ -3663,7 +3664,22 @@ bool handleCompanionWirelessCommand(const char* command, char* reply, size_t siz
   return mesh::wireless::control().handle(command, reply, size, millis(), requester);
 }
 
+#if COMPANION_RTC_TERMINAL_INPUT
+static_assert(sizeof(usb_terminal_line) + sizeof(ota_console_line) + 6 <= 6144,
+              "Leave RTC FAST bank space for the SDK and retained board state");
+static void resetCompanionRtcTerminalInput() {
+  // RTC bytes may survive a reboot; no prior command or credential is adopted.
+  // Ordinary BSS state resets separately. Clear before starting any transport.
+  clearUsbTerminalLine();
+  ota_console_clear_line();
+  usb_terminal_discard_line = ota_console_discard_line = false;
+}
+#endif
+
 void setup() {
+#if COMPANION_RTC_TERMINAL_INPUT
+  resetCompanionRtcTerminalInput();
+#endif
 #if MESH_ESP32_HWCDC_SESSION_GUARD
   // HWCDC's RX queue and TX ring are resized before Serial.begin() creates its
   // mutex and enables the USB ISR. This is before the nRF52 ordering below:
