@@ -1154,6 +1154,9 @@ bool WebConfigServer::prepareStationOwner() {
 }
 
 void WebConfigServer::createServer() {
+  // Delayed saved-network joins reach here without startLanMode(). Publish
+  // the committed admin credential before HTTP handlers can accept logins.
+  initializeManagementPassword();
   if (_host == NULL) {
     _host = new AsyncWebServer(80);
     _server = _host;
