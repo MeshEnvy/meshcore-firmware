@@ -68,10 +68,19 @@ private:
   ResponseStage _response_stage = SYNC_FIRST;
   uint32_t _response_payload_len = 0;
   uint32_t _response_remaining = 0;
+  // A repeater's USB admin command can include a full key and remote CLI text.
+  // Retain that whole bounded line when a synchronous source read encounters
+  // it. Constrained nRF52 Companions retain their existing short-control size.
+#if defined(ESP32_PLATFORM)
+  uint8_t _control_queue[384] = {};
+#else
   uint8_t _control_queue[64] = {};
-  uint8_t _control_offset = 0;
-  uint8_t _control_len = 0;
+#endif
+  uint16_t _control_offset = 0;
+  uint16_t _control_len = 0;
   bool _control_discard_line = false;
+  bool _control_in_line = false;
+  bool _last_control_byte = false;
 
   Stream&  _io;
   uint32_t _to;

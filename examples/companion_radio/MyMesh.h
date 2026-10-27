@@ -64,6 +64,9 @@ namespace mesh { class BeaconManager; }
 #endif
 #include <helpers/TrackerProtocol.h>
 #include <helpers/CompanionMotaControl.h>
+#if COMPANION_FEATURE_OTA_CLI
+#include <helpers/CompanionDirectAdminGuard.h>
+#endif
 #include <helpers/IdentityStore.h>
 #include <helpers/LogicalMessageCache.h>
 #include <helpers/SimpleMeshTables.h>
@@ -527,6 +530,14 @@ protected:
   bool onContactOverwrite(const ContactInfo& contact) override;
   void onContactReferenceChanged(const ContactInfo* previous, ContactInfo* replacement) override;
   bool onContactPathRecv(ContactInfo& from, uint8_t* in_path, uint8_t in_path_len, uint8_t* out_path, uint8_t out_path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) override;
+#if COMPANION_FEATURE_OTA_CLI
+  uint8_t getContactTxRadio(const mesh::Identity& peer) const override;
+  void onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_idx,
+                      const uint8_t* secret, uint8_t* data, size_t len) override;
+  bool onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint8_t* secret,
+                      uint8_t* path, uint8_t path_len, uint8_t extra_type,
+                      uint8_t* extra, uint8_t extra_len) override;
+#endif
   void onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) override;
   void onContactPathUpdated(const ContactInfo &contact) override;
 #if COMPANION_FEATURE_TEXT_TERMINAL
@@ -636,6 +647,9 @@ public:
   bool canRecoverUsbLogging() const;
 
 private:
+#if COMPANION_FEATURE_OTA_CLI
+  mesh::CompanionDirectAdminGuard _ota_direct_admin;
+#endif
 #if MESH_ENABLE_FLEET_CONTROL
   // Exact ownership of the optional radio copy during two-part admission.
   mesh::Packet* _fleet_admission_original = nullptr;

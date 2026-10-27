@@ -13,10 +13,13 @@ void SerialMotaSource::resetSessionState() {
   _response_payload_len = _response_remaining = 0;
   _control_offset = _control_len = 0;
   _control_discard_line = false;
+  _control_in_line = _last_control_byte = false;
 }
 
 void SerialMotaSource::queueControlByte(uint8_t b) {
   const bool newline = b == '\r' || b == '\n';
+  _last_control_byte = true;
+  _control_in_line = !newline;
   if (_control_discard_line) {
     if (!newline) return;
     _control_discard_line = false;
@@ -43,6 +46,7 @@ int SerialMotaSource::takeControlByte() {
 }
 
 int SerialMotaSource::readTrackedByte() {
+  _last_control_byte = false;
   const int value = _io.read();
   if (value < 0) return value;
   if (!_shared_text_control) return value;
@@ -53,7 +57,10 @@ int SerialMotaSource::readTrackedByte() {
   }
   switch (_response_stage) {
     case SYNC_FIRST:
-      if (b == MOTA_SEEDER_RSP_MAGIC0) _response_stage = SYNC_SECOND;
+      // The shared owner writes complete ASCII records under the same lock
+      // as binary responses. Once a CLI line starts, its password/arguments
+      // may contain "ms" without becoming a binary response header.
+      if (!_control_in_line && b == MOTA_SEEDER_RSP_MAGIC0) _response_stage = SYNC_SECOND;
       else queueControlByte(b);
       break;
     case SYNC_SECOND:
@@ -61,10 +68,8 @@ int SerialMotaSource::readTrackedByte() {
         _response_stage = RESPONSE_OP;
       } else {
         queueControlByte(MOTA_SEEDER_RSP_MAGIC0);
-        if (b != MOTA_SEEDER_RSP_MAGIC0) {
-          queueControlByte(b);
-          _response_stage = SYNC_FIRST;
-        }
+        queueControlByte(b);
+        _response_stage = SYNC_FIRST;
       }
       break;
     case RESPONSE_OP:
@@ -156,6 +161,7 @@ bool SerialMotaSource::txn(uint8_t op, const uint8_t* args, uint8_t arglen,
   while ((millis() - t0) < _to) {
     int c = readTrackedByte();
     if (c < 0) { delay(1); continue; }
+    if (_shared_text_control && _last_control_byte) { prev = 0; continue; }
     if (prev == MOTA_SEEDER_RSP_MAGIC0 && (uint8_t)c == MOTA_SEEDER_RSP_MAGIC1) { got = true; break; }
     prev = (uint8_t)c;
   }

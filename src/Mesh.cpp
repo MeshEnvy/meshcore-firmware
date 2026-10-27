@@ -3164,7 +3164,9 @@ Packet* Mesh::createOtaPacket(const uint8_t* data, size_t len) {
 
 bool Mesh::sendOtaFlood(Packet* packet, uint32_t delay_millis) {
   packet->header &= ~PH_ROUTE_MASK;
-  packet->header |= ROUTE_TYPE_FLOOD;
+  // A local hop cap cannot constrain other repeaters' forwarding policy.
+  // DIRECT0 prevents them relaying a zero-hop update at all.
+  packet->header |= getOtaHopLimit() == 0 ? ROUTE_TYPE_DIRECT : ROUTE_TYPE_FLOOD;
   packet->setPathHashSizeAndCount(1, 0);
   rememberOtaForward(packet);  // downstream echoes of our own OTA must not be relayed
   _tables->markSeen(packet);   // mark as sent, in case it floods back to us

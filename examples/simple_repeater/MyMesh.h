@@ -12,6 +12,16 @@
 #if defined(ENABLE_OTA)
   #include <helpers/ota/OtaContext.h>
 #endif
+#ifndef MESH_ENABLE_DIRECT_OTA_ADMIN
+  #if defined(ESP32_PLATFORM) && defined(ENABLE_OTA)
+    #define MESH_ENABLE_DIRECT_OTA_ADMIN 1
+  #else
+    #define MESH_ENABLE_DIRECT_OTA_ADMIN 0
+  #endif
+#endif
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+  #include <helpers/DirectOtaAdminClient.h>
+#endif
 #include <RTClib.h>
 #include <CayenneLPP.h>
 #include <target.h>
@@ -401,6 +411,9 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   bool handleGuestCommand(const char* command, char* reply, size_t capacity);
   bool handleDiscoveryResponseCommand(const char* command, char* reply, size_t capacity);
   ClientACL  acl;
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+  mesh::DirectOtaAdminClient direct_ota_admin;
+#endif
   CommonCLI _cli;
 #if defined(ESP32_PLATFORM) || defined(USER_GPIO_CONTROL)
   UserGpioReplyTracker _gpio_reply_tracker;
@@ -1350,6 +1363,9 @@ public:
   void handleUsbCommand(char* command, char* reply) {
     handleCommand(0, NULL, command, reply, -1, 1, true);
   }
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+  void closeDirectOtaAdmin() { direct_ota_admin.reset(); }
+#endif
   bool handleReplayResetCommand(ClientInfo* sender, const char* command,
                                 char* reply, bool usb_origin);
 #if MESH_ENABLE_HOST_CLI

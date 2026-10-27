@@ -56,6 +56,7 @@
   #include "MotaSourceSerial.h"   // relay an external folder served by a host daemon over the USB serial
   #include "../UsbLogging.h"
   #ifndef OTA_FOLDER_SERIAL_STREAM
+    #define MESH_OTA_FOLDER_SERIAL_SHARED_CONSOLE 1
     #if defined(NRF52_PLATFORM) \
         || MESH_ESP32_USB_CONSOLE_COOPERATIVE
       // Native USB serial-folder requests share the primary session facade.

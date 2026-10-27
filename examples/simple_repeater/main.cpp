@@ -153,6 +153,9 @@ static constexpr size_t LOCAL_SERIAL_COMMAND_MAX = 159U;
 #endif
 static char command[LOCAL_SERIAL_COMMAND_MAX + 2U];
 static bool command_overflow = false;
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+static bool command_sensitive = false;
+#endif
 #ifdef ETHERNET_ENABLED
 static char ethernet_command[160];
 #endif
@@ -481,15 +484,47 @@ static void __attribute__((noinline)) serviceCommandInterfaces() {
 #if MESH_ENABLE_HOST_KISS
     mesh::hostkiss::resetUsbSession();
 #endif
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+    mesh::DirectOtaAdminClient::clearInput(command, sizeof(command));
+    command_sensitive = false;
+    the_mesh.closeDirectOtaAdmin();
+#if defined(MESH_OTA_FOLDER_SERIAL_SHARED_CONSOLE)
+    mesh::ota::OtaContext::serialFolderSource().resetSessionState();
+#endif
+#endif
     command[0] = 0;
     command_overflow = false;
     the_mesh.cancelPendingSerialOutput();
   }
 #endif
+  Stream& console = mesh::usbConsolePort();
+#if MESH_ENABLE_DIRECT_OTA_ADMIN && defined(MESH_OTA_FOLDER_SERIAL_SHARED_CONSOLE)
+  auto& control_source = mesh::ota::OtaContext::serialFolderSource();
+  control_source.enableSharedTextControl();
+  auto console_available = [&]() { return control_source.availableControlBytes(); };
+  auto console_read = [&]() { return control_source.readControlByte(); };
+#else
+  auto console_available = [&]() { return console.available(); };
+  auto console_read = [&]() { return console.read(); };
+#endif
+#if MESH_ENABLE_HOST_KISS
+  const auto kiss_can_read = [&]() {
+#if MESH_ENABLE_DIRECT_OTA_ADMIN && defined(MESH_OTA_FOLDER_SERIAL_SHARED_CONSOLE)
+    return control_source.canReleaseControlInput();
+#else
+    return true;
+#endif
+  };
+#endif
 #if MESH_ENABLE_HOST_KISS
   // Claim binary input before a pending terminal listing can append text.
   // Keep the rest of this function alive for Ethernet and board housekeeping.
-  if (mesh::hostkiss::serviceUsb()) {
+  if (kiss_can_read() && mesh::hostkiss::serviceUsb()) {
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+    mesh::DirectOtaAdminClient::clearInput(command, sizeof(command));
+    command_sensitive = false;
+    the_mesh.closeDirectOtaAdmin();
+#endif
     command[0] = 0;
     command_overflow = false;
 #if MESH_USB_CONSOLE_COOPERATIVE
@@ -506,7 +541,6 @@ static void __attribute__((noinline)) serviceCommandInterfaces() {
   usb_ready = usb_ready && !the_mesh.hasPendingSerialOutput()
       && mesh::canAcceptUsbConsoleCommand();
 #endif
-  Stream& console = mesh::usbConsolePort();
 #if defined(MESH_HIL_STARTUP_TRACE) && MESH_HIL_STARTUP_TRACE
   if (usb_ready && first_cli_ready) {
     first_cli_ready = false;
@@ -525,14 +559,33 @@ static void __attribute__((noinline)) serviceCommandInterfaces() {
   bool line_complete = false;
   bool overlong_line_complete = false;
   size_t read_budget = 256;
-  while (usb_ready && read_budget-- > 0 && console.available()) {
+  while (usb_ready && read_budget-- > 0 && console_available()) {
 #if MESH_ENABLE_HOST_KISS
-    // Bytes may arrive after the loop-top KISS poll. Preserve its first FEND.
-    if (mesh::hostkiss::usbInputReserved(console.peek())) break;
+    // Reserve raw FEND only at a complete mOTA/text boundary. A late binary
+    // response body can contain FEND and must stay with its source framer.
+    if (kiss_can_read() && mesh::hostkiss::usbInputReserved(console.peek())) break;
 #endif
-    char c = console.read();
+    const int value = console_read();
+    if (value == -2) continue; // retained mOTA response byte, never CLI text
+    if (value < 0) break;
+    if (value == 0) { // source control-queue overflow invalidates the whole line
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+      mesh::DirectOtaAdminClient::clearInput(command, sizeof(command));
+#else
+      command[0] = 0;
+#endif
+      len = 0;
+      command_overflow = true;
+      continue;
+    }
+    char c = static_cast<char>(value);
     if (c == '\n') continue;
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+    command_sensitive = command_sensitive || mesh::DirectOtaAdminClient::sensitiveInput(command);
+    console.print(command_sensitive && c != '\r' ? '*' : c);
+#else
     console.print(c);
+#endif
 
     if (command_overflow) {
       if (c == '\r') {
@@ -559,6 +612,10 @@ static void __attribute__((noinline)) serviceCommandInterfaces() {
   }
 
   if (overlong_line_complete) {
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+    mesh::DirectOtaAdminClient::clearInput(command, sizeof(command));
+    command_sensitive = false;
+#endif
     console.print('\n');
     console.println("  -> Err - command too long");
     command[0] = 0;
@@ -602,6 +659,10 @@ static void __attribute__((noinline)) serviceCommandInterfaces() {
       console.printf("  -> %s\r\n", reply);
     }
 
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+    if (command_sensitive) mesh::DirectOtaAdminClient::clearInput(command, sizeof(command));
+    command_sensitive = false;
+#endif
     command[0] = 0;  // reset command buffer
   }
 

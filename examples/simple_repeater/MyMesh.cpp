@@ -2895,6 +2895,11 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
 
 int MyMesh::searchPeersByHash(const uint8_t *hash) {
   int n = 0;
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+  direct_ota_admin.tick(millis());
+  if (direct_ota_admin.matchesHash(hash))
+    matching_peer_indexes[n++] = mesh::DirectOtaAdminClient::PEER_INDEX;
+#endif
 #if defined(WITH_MQTT_NEIGHBORS)
   // While a neighbor-scope discovery is active, overlay the heard neighbours
   // that are NOT already ACL clients so their RESPONSE packets can be decoded.
@@ -2913,6 +2918,9 @@ int MyMesh::searchPeersByHash(const uint8_t *hash) {
 #endif
   for (int i = 0; i < acl.getNumClients() && n < MAX_CLIENTS; i++) {
     const auto* client = acl.getClientByIdx(i);
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+    if (direct_ota_admin.matchesTarget(client->id)) continue;
+#endif
     if (!guest_login.enabled()
         && (client->permissions & PERM_ACL_ROLE_MASK) == PERM_ACL_GUEST) continue;
     if (client->id.isHashMatch(hash)) {
@@ -2924,6 +2932,12 @@ int MyMesh::searchPeersByHash(const uint8_t *hash) {
 
 void MyMesh::getPeerSharedSecret(uint8_t *dest_secret, int peer_idx) {
   int i = matching_peer_indexes[peer_idx];
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+  if (i == mesh::DirectOtaAdminClient::PEER_INDEX) {
+    direct_ota_admin.sharedSecret(dest_secret);
+    return;
+  }
+#endif
 #if defined(WITH_MQTT_NEIGHBORS)
   // Overlay entries have no precomputed shared secret; derive it on the fly.
   if (neighbor_discover_active && i >= NEIGHBOR_DISCOVER_PEER_BASE) {
@@ -3002,6 +3016,12 @@ void MyMesh::onGroupPacketRecv(mesh::Packet* packet) {
 void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, const uint8_t *secret,
                             uint8_t *data, size_t len) {
   int i = matching_peer_indexes[sender_idx];
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+  if (i == mesh::DirectOtaAdminClient::PEER_INDEX) {
+    direct_ota_admin.onData(*this, packet, type, data, len, millis());
+    return;
+  }
+#endif
 #if defined(WITH_MQTT_NEIGHBORS)
   // Overlay response: a heard neighbour (not an ACL client) answering our
   // anon-regions scope query. Consume it and stop -- it is not a client packet.
@@ -3584,6 +3604,9 @@ bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t 
 #define CTL_TYPE_NODE_DISCOVER_RESP  0x90
 
 void MyMesh::onControlDataRecv(mesh::Packet* packet) {
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+  direct_ota_admin.onDiscovery(packet, millis());
+#endif
   uint8_t type = packet->payload[0] & 0xF0;    // just test upper 4 bits
   if (type == CTL_TYPE_NODE_DISCOVER_REQ && packet->payload_len >= 6
       && (_prefs.discovery_responses & mesh::discovery::NODE_RESPONSES)
@@ -12396,6 +12419,14 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, ClientInfo* sender, char *
                            char *reply, int gpio_client_index,
                            uint8_t gpio_path_hash_size, bool usb_origin) {
   _wireless_usb_command = usb_origin;
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+  if (mesh::DirectOtaAdminClient::isCommand(command)) {
+    if (!usb_origin || sender_timestamp || sender != nullptr)
+      strcpy(reply, "ERR ota.peer requires physical USB");
+    else direct_ota_admin.handleCommand(*this, command, reply, 160, millis());
+    return;
+  }
+#endif
 #if defined(ESP32_PLATFORM) || defined(USER_GPIO_CONTROL)
   _gpio_reply_tracker.beginCommand(gpio_client_index, gpio_path_hash_size,
                                    sender == NULL ? NULL : sender->id.pub_key);
@@ -13361,6 +13392,9 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, ClientInfo* sender, char *
 }
 
 void MyMesh::loop() {
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+  direct_ota_admin.service(*this, millis());
+#endif
 #if defined(WITH_WEBCONFIG) || defined(ETHERNET_ENABLED)
   _local_cli_output.service();
 #endif
