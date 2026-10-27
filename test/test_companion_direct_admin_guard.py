@@ -2,6 +2,7 @@
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -15,24 +16,48 @@ HARNESS = r'''
 #define CMD_SEND_PATH_DISCOVERY_REQ 52
 #define ERR_CODE_NOT_FOUND 1
 #define ERR_CODE_BAD_STATE 2
+#define ERR_CODE_ILLEGAL_ARG 3
+#define ERR_CODE_TABLE_FULL 4
+#define MAX_ANON_CONTACTS 8
+#define ADV_TYPE_NONE 0
+#define ADV_TYPE_REPEATER 2
+#define ADV_TYPE_ROOM 3
+#define TXT_TYPE_CLI_DATA 1
 struct ContactInfo {
   mesh::Identity id;
-  uint8_t secret[32];
-  ContactInfo(){memset(id.pub_key,0x11,32);memset(secret,0x44,32);}
-  const uint8_t* getSharedSecret(const mesh::LocalIdentity&)const{return secret;}
+  uint8_t type=0, out_path_len=0, tx_radio=0;
+  uint32_t sync_since=0;
+  uint8_t out_path[64]{},secret[32]{};
+  const uint8_t* getSharedSecret(const mesh::LocalIdentity&) {memset(secret,0x44,32);return secret;}
+  bool setPath(const uint8_t*,uint8_t length){out_path_len=length;memset(out_path,0,sizeof(out_path));return true;}
 };
+struct BaseSerialInterface {BaseSerialInterface* route=this;BaseSerialInterface* captureReplyRoute(){return route;}};
 struct Timer { uint32_t now=100;uint32_t getMillis()const{return now;} };
 struct BaseChatMesh:mesh::Mesh {
-  int data_calls=0,path_calls=0;
+  ContactInfo contact,anonymous[MAX_ANON_CONTACTS];
+  int data_calls=0,path_calls=0,login_calls=0,clear_calls=0;
+  BaseChatMesh(){memset(contact.id.pub_key,0x11,32);contact.type=2;contact.out_path_len=2;contact.out_path[0]=0xAA;}
+  ContactInfo* lookupContactByPubKey(const uint8_t* key,int n){
+    for(auto& p:anonymous) if(!memcmp(key,p.id.pub_key,n)) return &p;
+    return !memcmp(key,contact.id.pub_key,n)?&contact:nullptr;
+  }
+  ContactInfo* getContactPtrByIdx(unsigned i){return i<MAX_ANON_CONTACTS?&anonymous[i]:nullptr;}
+  bool isTransientContact(const ContactInfo& p){for(auto& a:anonymous)if(&a==&p)return true;return false;}
+  void resetContactValue(ContactInfo& c){c=ContactInfo();}
+  bool clearTransientContact(ContactInfo& c){assert(isTransientContact(c));resetContactValue(c);++clear_calls;return true;}
   uint8_t getContactTxRadio(const mesh::Identity&)const{return 2;}
   void onPeerDataRecv(mesh::Packet*,uint8_t,int,const uint8_t*,uint8_t*,size_t){++data_calls;}
   bool onPeerPathRecv(mesh::Packet*,int,const uint8_t*,uint8_t*,uint8_t,uint8_t,uint8_t*,uint8_t){++path_calls;return true;}
+  void onContactResponse(const ContactInfo&,const uint8_t*,uint8_t){++login_calls;}
 };
 struct MyMesh:BaseChatMesh {
-  Timer timer;Timer* _ms=&timer;ContactInfo contact;
+  Timer timer;Timer* _ms=&timer;
+  BaseSerialInterface wire;BaseSerialInterface* _serial=&wire;
+  BaseSerialInterface* _ota_direct_usb_route=&wire;
   uint8_t cmd_frame[64]{};int response=-1;
   mesh::CompanionDirectAdminGuard _ota_direct_admin;
-  ContactInfo* lookupContactByPubKey(const uint8_t* key,int){return !memcmp(key,contact.id.pub_key,32)?&contact:nullptr;}
+  ContactInfo _ota_direct_contact;
+  ContactInfo* _ota_direct_transient=nullptr;
   void writeOKFrame(){response=0;}
   void writeErrFrame(int value){response=value;}
   void dispatch(size_t len){
@@ -44,16 +69,20 @@ struct MyMesh:BaseChatMesh {
 #endif
   }
   bool handleDirectOtaFrame(size_t len);
-  void mode(int value){cmd_frame[0]=52;cmd_frame[1]=value;memcpy(cmd_frame+2,contact.id.pub_key,32);dispatch(34);}
-  bool command(const char* command,uint32_t sender_timestamp,char* reply){
-    const size_t reply_capacity=160;
-#if FULL
-    @GETTER@
-#else
-    (void)command;(void)sender_timestamp;(void)reply;(void)reply_capacity;
-#endif
-    return false;
+  bool handleDirectOtaCommand(const char*,uint32_t,char*,size_t);
+  void closeDirectOtaAdmin();
+  void mode(int value,const mesh::Identity* peer=nullptr){
+    cmd_frame[0]=52;cmd_frame[1]=value;memcpy(cmd_frame+2,(peer?peer->pub_key:contact.id.pub_key),32);
+    cmd_frame[34]=2;dispatch(value==1?35:34);
   }
+  bool command(const char* command,uint32_t stamp,char* reply){
+#if FULL
+    return handleDirectOtaCommand(command,stamp,reply,160);
+#else
+    (void)command;(void)stamp;(void)reply;return false;
+#endif
+  }
+  void expect(const char* prefix){cmd_frame[0]=52;cmd_frame[1]=4;memcpy(cmd_frame+2,contact.id.pub_key,32);memcpy(cmd_frame+34,prefix,3);dispatch(37);assert(response==0);}
   void onPeerDataRecv(mesh::Packet*,uint8_t,int,const uint8_t*,uint8_t*,size_t);
   uint8_t getContactTxRadio(const mesh::Identity&)const;
   bool onPeerPathRecv(mesh::Packet*,int,const uint8_t*,uint8_t*,uint8_t,uint8_t,uint8_t*,uint8_t);
@@ -67,50 +96,105 @@ struct MyMesh:BaseChatMesh {
 };
 @CALLBACKS@
 @BINARY@
+static void repeaterPrefix(char*& command,char*& reply){@REPEATER_PREFIX@}
+static void roomPrefix(char*& command,char*& reply){@ROOM_PREFIX@}
+[[maybe_unused]] static void body(uint8_t* data,uint32_t stamp,const char* prefix,const char* text){
+  memset(data,0,184);memcpy(data,&stamp,4);data[4]=4;memcpy(data+5,prefix,3);memcpy(data+8,text,strlen(text));
+}
 int main(){
   MyMesh m;char reply[160]{};
+  for(char a='!';a<='~';++a)for(char b='!';b<='~';++b){
+    if(a=='|'||b=='|')continue;
+    char input[]={a,b,'|','g','e','t',' ','p','u','b','l','i','c','.','k','e','y',0};
+    for(auto parser:{repeaterPrefix,roomPrefix}){
+      char* command=input;char* output=reply;
+      parser(command,output);
+      assert(!strcmp(command,"get public.key")&&output==reply+3&&!memcmp(reply,input,3));
+    }
+#if FULL
+    assert(m._ota_direct_admin.expect(reinterpret_cast<const uint8_t*>(input),m.timer.now)==false);
+#endif
+  }
   m.mode(1);
 #if FULL
   assert(m.response==0&&m.calls==0); // capability negotiation has no RF
+  assert(m.contact.out_path_len==2&&m.contact.out_path[0]==0xAA);
+  assert(m._ota_direct_contact.out_path_len==0&&m._ota_direct_contact.tx_radio==1);
   assert(m.getContactTxRadio(m.contact.id)==mesh::RADIO_TX_PRIMARY);
   mesh::Identity another;assert(m.getContactTxRadio(another)==2);
   mesh::Packet ota;ota.payload_type=12;m.rawRoute(&ota);assert(ota.tx_radio==mesh::RADIO_TX_PRIMARY);
-  mesh::Packet unrelated;unrelated.payload_type=2;m.rawRoute(&unrelated);assert(unrelated.tx_radio==0);
-  assert(m.command("get ota.direct",0,reply)&&strstr(reply,"active=1 busy=0"));
+  assert(m.command("get ota.direct",0,reply)&&strstr(reply,"v=2 active=1 busy=0"));
+  for(char a='!';a<='~';++a)for(char b='!';b<='~';++b){
+    if(a=='|'||b=='|')continue;
+    const uint8_t prefix[]={uint8_t(a),uint8_t(b),'|'};
+    assert(m._ota_direct_admin.expect(prefix,m.timer.now));
+    assert(m.command("get ota.direct.reply 0",0,reply));
+    const char* tag=strstr(reply,"req=")+4;assert(tag[0]==a&&tag[1]==b&&tag[2]==' ');
+  }
   assert(!m.command("get ota.direct",1,reply));
-  uint8_t body[13]{};mesh::Packet packet;packet.direct=false;
-  uint8_t other[32];memset(other,0x77,32);
-  m.onPeerDataRecv(&packet,PAYLOAD_TYPE_RESPONSE,0,m.contact.secret,body,13);assert(m.data_calls==0);
+  BaseSerialInterface foreign;m.wire.route=&foreign;
+  m.mode(1);assert(m.response==ERR_CODE_BAD_STATE);
+  assert(m.command("get ota.direct.reply 0",0,reply)&&strstr(reply,"physical USB"));
+  m.wire.route=&m.wire;
+
+  uint8_t data[184]{};mesh::Packet packet;packet.direct=false;
+  uint8_t secret[32],other[32];memset(secret,0x44,32);memset(other,0x77,32);
+  m.onPeerDataRecv(&packet,PAYLOAD_TYPE_RESPONSE,0,secret,data,13);assert(m.login_calls==0);
   m._ota_direct_admin.beginLogin(m.contact.id,m.timer.now);
-  m.onPeerDataRecv(&packet,PAYLOAD_TYPE_RESPONSE,0,m.contact.secret,body,13);assert(m.data_calls==1);
-  packet.path_len=1;
-  m.onPeerDataRecv(&packet,PAYLOAD_TYPE_RESPONSE,0,m.contact.secret,body,13);assert(m.data_calls==1);
-  m.onPeerDataRecv(&packet,PAYLOAD_TYPE_RESPONSE,0,other,body,13);assert(m.data_calls==2);
+  uint32_t login_stamp=1000;memcpy(data,&login_stamp,4);data[7]=3;
+  m.onPeerDataRecv(&packet,PAYLOAD_TYPE_RESPONSE,0,secret,data,13);assert(m.login_calls==1);
+  packet.path_len=1;m.onPeerDataRecv(&packet,PAYLOAD_TYPE_RESPONSE,0,secret,data,13);assert(m.login_calls==1);
+  m.onPeerDataRecv(&packet,PAYLOAD_TYPE_RESPONSE,0,other,data,13);assert(m.data_calls==1);
   packet.path_len=0;
-  m.onPeerDataRecv(&packet,PAYLOAD_TYPE_TXT_MSG,0,m.contact.secret,body,13);assert(m.data_calls==2);
-  m.mode(2);assert(m.response==0&&m.type==PAYLOAD_TYPE_PATH&&m.packet.tx_radio==mesh::RADIO_TX_PRIMARY);
+  m.mode(2);assert(m.response==0&&m.type==PAYLOAD_TYPE_PATH&&m.packet.tx_radio==1);
   assert(m.command("get ota.direct",0,reply)&&strstr(reply,"busy=1"));
   m.pending=false;assert(m.command("get ota.direct",0,reply)&&strstr(reply,"busy=0"));
-  m.onPeerDataRecv(&packet,PAYLOAD_TYPE_RESPONSE,0,m.contact.secret,body,13);assert(m.data_calls==2);
-  packet.direct=true;
-  m.onPeerDataRecv(&packet,PAYLOAD_TYPE_TXT_MSG,0,m.contact.secret,body,13);assert(m.data_calls==3);
-  assert(!m.onPeerPathRecv(&packet,0,m.contact.secret,body,1,0,body,0));assert(m.path_calls==0);
-  assert(m.onPeerPathRecv(&packet,0,m.contact.secret,body,0,0,body,0));assert(m.path_calls==1);
+
+  // Exact MAC-bound peer, fresh timestamp, DIRECT0 and command prefix are all
+  // required. Ordinary private messages and unmatched CLI replies stay in inbox.
+  m.expect("Ab|");
+  body(data,1001,"Ab|","reply");
+  m.onPeerDataRecv(&packet,PAYLOAD_TYPE_TXT_MSG,0,secret,data,16);
+  assert(m.command("get ota.direct.reply 0",0,reply)&&strstr(reply,"state=pending"));
+  packet.direct=true;packet.path_len=0x40;
+  body(data,999,"Ab|","stale");m.onPeerDataRecv(&packet,PAYLOAD_TYPE_TXT_MSG,0,secret,data,16);
+  assert(m.command("get ota.direct.reply 0",0,reply)&&strstr(reply,"state=pending"));
+  body(data,1001,"ZZ|","other CLI");m.onPeerDataRecv(&packet,PAYLOAD_TYPE_TXT_MSG,0,secret,data,32);assert(m.data_calls==2);
+  body(data,1001,"Ab|","unrelated message");data[4]=0;
+  m.onPeerDataRecv(&packet,PAYLOAD_TYPE_TXT_MSG,0,secret,data,32);assert(m.data_calls==3);
+  std::string expected(160,'X');body(data,1001,"Ab|",expected.c_str());
+  m.onPeerDataRecv(&packet,PAYLOAD_TYPE_TXT_MSG,0,secret,data,176);assert(m.data_calls==3);
+  for(unsigned offset: {0U,40U,80U,120U}){
+    std::string command="get ota.direct.reply "+std::to_string(offset);
+    assert(m.command(command.c_str(),0,reply));
+    assert(strstr(reply,"req=Ab state=ready bytes=160"));
+    const char* hex=strstr(reply,"data=")+5;assert(strlen(hex)==80);
+    for(unsigned i=0;i<80;++i)assert(hex[i]==(i%2?'8':'5'));
+  }
+  m.onPeerDataRecv(&packet,PAYLOAD_TYPE_TXT_MSG,0,secret,data,176);assert(m.data_calls==3); // duplicate is consumed
+  assert(m.command("get ota.direct.reply 161",0,reply)&&strstr(reply,"invalid reply offset"));
+  assert(m.command("get ota.direct.reply -1",0,reply)&&strstr(reply,"invalid reply offset"));
+  assert(!m.onPeerPathRecv(&packet,0,secret,data,1,0,data,0));assert(m.path_calls==0);
+  assert(!m.onPeerPathRecv(&packet,0,secret,data,0,0,data,0));assert(m.path_calls==0);
+  assert(m.contact.out_path_len==2&&m.contact.out_path[0]==0xAA);
+
   m.mode(3);assert(m.response==0&&!m._ota_direct_admin.active(m.timer.now));
   assert(m.getContactTxRadio(m.contact.id)==2);
-  ota.tx_radio=0;m.rawRoute(&ota);assert(ota.tx_radio==0);
-  packet.direct=false;packet.path_len=2;
-  m.onPeerDataRecv(&packet,PAYLOAD_TYPE_TXT_MSG,0,m.contact.secret,body,13);assert(m.data_calls==4);
-  m.timer.now=0xFFFFFF00;m.mode(1);assert(m._ota_direct_admin.active(m.timer.now+1));
-  assert(!m._ota_direct_admin.active(m.timer.now+mesh::CompanionDirectAdminGuard::LEASE_MS));
-  m.mode(2);assert(m.response==ERR_CODE_BAD_STATE);
-  m.cmd_frame[1]=1;m.cmd_frame[2]^=1;m.dispatch(34);assert(m.response==ERR_CODE_NOT_FOUND);
+  m.mode(3);assert(m.response==0); // cleanup is idempotent
+  mesh::Identity fresh;memset(fresh.pub_key,0x22,32);m.mode(1,&fresh);
+  assert(m.response==0&&m._ota_direct_transient);
+  assert(m._ota_direct_transient->type==ADV_TYPE_NONE&&m.contact.out_path_len==2);
+  m.mode(3,&fresh);assert(m.response==0&&m.clear_calls==1);
+  for(auto& slot:m.anonymous){memset(slot.id.pub_key,0x33,32);slot.type=ADV_TYPE_NONE;}
+  m.mode(1,&fresh);assert(m.response==ERR_CODE_TABLE_FULL); // never evict occupied transient requests
+  for(auto& slot:m.anonymous)assert(slot.id.pub_key[0]==0x33);
 #else
-  assert(m.response==-1&&m.calls==0); // reserved stock mode never sends RF
+  assert(m.response==-1&&m.calls==0);
   assert(!m.command("get ota.direct",0,reply));
 #endif
 }
 '''
+
 
 
 class CompanionDirectAdminGuardTest(unittest.TestCase):
@@ -120,11 +204,16 @@ class CompanionDirectAdminGuardTest(unittest.TestCase):
             self.skipTest("a host C++17 compiler is required")
         source = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text()
         binary = extract_braced(source, "bool MyMesh::handleDirectOtaFrame(")
-        getter = extract_braced(source, 'if (sender_timestamp == 0 && !strcmp(command, "get ota.direct"))')
+        getter = extract_braced(source, "bool MyMesh::handleDirectOtaCommand(")
+        closer = extract_braced(source, "void MyMesh::closeDirectOtaAdmin(")
         callbacks = "\n".join(extract_braced(source, signature) for signature in (
             "uint8_t MyMesh::getContactTxRadio(", "void MyMesh::onPeerDataRecv(", "bool MyMesh::onPeerPathRecv("))
         raw = extract_braced(source, "if (pkt->getPayloadType() == PAYLOAD_TYPE_OTA\n            && _ota_direct_admin.active")
         self.assertIn("_ota_direct_admin.beginLogin(recipient->id", source)
+        self.assertIn("if (handleDirectOtaCommand(command, sender_timestamp, reply, reply_capacity))", source)
+        self.assertIn("closeDirectOtaAdmin();", extract_braced(source, "void MyMesh::resetUsbHostSessionInput("))
+        self.assertIn("setDirectAdminUsbRoute(&usb_serial_interface)", (ROOT / "examples/companion_radio/main.cpp").read_text())
+        self.assertIn("recipient = &_ota_direct_contact", source)
         self.assertIn("if (handleDirectOtaFrame(len)) return;", source)
         self.assertIn("&& (!COMPANION_FEATURE_DIRECT_OTA_ADMIN || cmd_frame[1] == 0))", source)
         mesh = (ROOT / "src/Mesh.cpp").read_text()
@@ -133,17 +222,25 @@ class CompanionDirectAdminGuardTest(unittest.TestCase):
         stub = STUB.replace("@PATH_BUILDER@", mesh[start:end])
         stub = stub.replace("#define PAYLOAD_TYPE_PATH 8", "#define PAYLOAD_TYPE_PATH 8\n#define PAYLOAD_TYPE_OTA 12")
         stub = stub.replace("bool direct=true;", "uint8_t payload_type=0;uint8_t getPayloadType()const{return payload_type;}\n  bool direct=true;")
+        prefix_blocks = []
+        for board in ("simple_repeater", "simple_room_server"):
+            server = (ROOT / "examples" / board / "MyMesh.cpp").read_text()
+            prefix_blocks.append(extract_braced(server, "if (strlen(command) > 4 && command[2] == '|') {"))
         with tempfile.TemporaryDirectory(prefix="meshcore-companion-direct-") as folder:
             folder = Path(folder)
             (folder / "Mesh.h").write_text(stub)
             for full in (0, 1):
-                code = HARNESS.replace("@BINARY@", binary if full else "").replace("@GETTER@", getter)
+                code = HARNESS.replace("@BINARY@", (binary + "\n" + getter + "\n" + closer) if full else "")
                 code = code.replace("@RAW_ROUTE@", raw)
                 code = code.replace("@CALLBACKS@", callbacks if full else "")
+                code = code.replace("@REPEATER_PREFIX@", prefix_blocks[0])
+                code = code.replace("@ROOM_PREFIX@", prefix_blocks[1])
                 (folder / "test.cpp").write_text(code)
                 executable = folder / "guard.exe"
+                sanitize = (["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-pie", "-no-pie"]
+                            if sys.platform.startswith("linux") else [])
                 result = subprocess.run([compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror",
-                                         f"-DFULL={full}", "-I" + str(folder), "-I" + str(ROOT / "src"),
+                                         *sanitize, f"-DFULL={full}", "-I" + str(folder), "-I" + str(ROOT / "src"),
                                          str(folder / "test.cpp"), "-o", str(executable)],
                                         capture_output=True, text=True, timeout=60)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

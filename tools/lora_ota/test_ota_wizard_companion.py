@@ -50,6 +50,10 @@ class Commands:
         self.temporary = "TempRadio active: 910.525,62.50,7,5 100s left,preamble=16"
         self.next_reply = None
         self.guard_supported = True
+        self.guard_version = 2
+        self.mailbox_prefix = "--"
+        self.mailbox = None
+        self.inbox = []
         self.guard_modes = []
         self.guard_busy = 0
         self.proof_key = KEY
@@ -71,6 +75,8 @@ class Commands:
         return await self.response("get_contacts", event("contacts"))
 
     async def get_msg(self, timeout=None):
+        if self.inbox:
+            return await self.response("get_msg", self.inbox.pop(0))
         return await self.response("get_msg", event("no_more_messages"))
 
     async def send_appstart(self):
@@ -84,16 +90,30 @@ class Commands:
         if text == "get ota.direct":
             busy = int(self.guard_busy > 0)
             self.guard_busy = max(0, self.guard_busy - 1)
-            return await self.response("run_cli_command", event("cli_reply", text=f"> ota.direct v=1 active=1 busy={busy}"))
+            return await self.response("run_cli_command", event("cli_reply", text=f"> ota.direct v={self.guard_version} active=1 busy={busy}"))
+        if text.startswith("get ota.direct.reply "):
+            offset = int(text.rsplit(" ", 1)[1])
+            body = self.mailbox
+            raw = b"" if body is None else body[offset:offset+40]
+            return await self.response("run_cli_command", event("cli_reply", text=(
+                f"> ota.reply req={self.mailbox_prefix} state={'pending' if body is None else 'ready'} "
+                f"bytes={0 if body is None else len(body)} off={offset} data={raw.hex() or '-'}")))
         return await self.response("run_cli_command", event("cli_reply", text=self.temporary))
 
     async def send(self, data, expected):
-        assert data[:1] == b"\x34" and len(data) == 34 and data[2:].hex() == KEY
+        assert data[:1] == b"\x34" and data[2:34].hex() == KEY
+        assert len(data) == {1:35,2:34,3:34,4:37}[data[1]]
         self.guard_modes.append(data[1])
         if not self.guard_supported:
             return await self.response("send", event("command_error", reason="unsupported"))
+        if data[1] == 1:
+            assert data[34] in (2, 3)
         if data[1] == 2:
             self.guard_busy = 1
+        if data[1] == 4:
+            assert data[36] == ord('|')
+            self.mailbox_prefix = data[34:36].decode()
+            self.mailbox = None
         return await self.response("send")
 
     async def set_time(self, timestamp):
@@ -151,6 +171,8 @@ class Commands:
                             dict(path_len=2), dict(path_len=0), dict(text=stale)):
                 self.sdk.emit(Types.CONTACT_MSG_RECV, **(reply | changed))
             self.sdk.emit(Types.CONTACT_MSG_RECV, **reply)
+            assert self.mailbox_prefix == text[:2]
+            self.mailbox = result.encode("utf-8")
         return await self.response("send_cmd", event("message_sent"))
 
     async def send_raw_packet(self, raw, priority):
@@ -225,6 +247,70 @@ class CompanionTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         await self.transport.close()
+
+    async def test_open_check_and_admin_leave_private_and_channel_inbox_untouched(self):
+        queued = [event("contact_message", text="private message"),
+                  event("channel_message", text="channel message")]
+        self.sdk.commands.inbox = list(queued)
+        self.sdk.emit(Types.MESSAGES_WAITING)
+        await asyncio.sleep(.01)
+        self.assertEqual(self.sdk.commands.inbox, queued)
+        self.assertEqual(await self.transport.remote_command(KEY, "secret", "ver"), "> verified")
+        self.assertEqual(self.sdk.commands.inbox, queued)
+        self.assertNotIn("get_msg", self.sdk.commands.calls)
+        self.assertNotIn("update_contact", self.sdk.commands.calls)
+        self.assertNotIn("remove_contact", self.sdk.commands.calls)
+
+    async def test_v1_source_is_rejected_without_draining_or_changing_contacts(self):
+        self.sdk.commands.guard_version = 1
+        queued = [event("contact_message", text="unread")]
+        self.sdk.commands.inbox = list(queued)
+        with self.assertRaisesRegex(companion.CompanionError, "v2"):
+            await self.transport.remote_command(KEY, "secret", "ver")
+        self.assertEqual(self.sdk.commands.inbox, queued)
+        self.assertEqual(self.sdk.commands.login_count, 0)
+        self.assertEqual(self.sdk.commands.guard_modes, [])
+        self.assertEqual(self.sdk.contacts[KEY], self.original)
+        self.assertNotIn("get_msg", self.sdk.commands.calls)
+
+    async def test_v1_source_cannot_emit_discovery_or_login(self):
+        self.sdk.commands.guard_version = 1
+        with self.assertRaisesRegex(companion.CompanionError, "v2"):
+            await self.transport.discover()
+        self.assertNotIn("send_node_discover_req", self.sdk.commands.calls)
+        self.assertEqual(self.sdk.commands.login_count, 0)
+
+    async def test_hard_restart_has_no_changed_route_to_restore(self):
+        await self.transport.remote_command(KEY, "secret", "ver")
+        self.assertEqual(self.sdk.contacts[KEY], self.original)
+        async def factory(*args, **kwargs):
+            return self.sdk
+        restarted = companion.CompanionTransport("FAKE", sdk_factory=factory,
+            event_types=Types, discovery_seconds=0, remote_timeout=.05)
+        await restarted.open()
+        try:
+            await restarted.remote_command(KEY, "secret", "ver")
+            await restarted.restore_contact_path()
+            self.assertEqual(self.sdk.contacts[KEY], self.original)
+            self.assertNotIn("update_contact", self.sdk.commands.calls)
+            self.assertNotIn("remove_contact", self.sdk.commands.calls)
+        finally:
+            await restarted.close()
+
+    async def test_mailbox_reassembles_full_reply_without_reading_normal_inbox(self):
+        expected = "0123456789abcdef" * 10
+        self.sdk.commands.next_reply = expected
+        self.assertEqual(await self.transport.remote_command(KEY, "secret", "ver"), expected)
+        self.assertNotIn("get_msg", self.sdk.commands.calls)
+
+    async def test_printable_tags_support_long_transfers_without_reusing_old_tags(self):
+        old = companion.string.ascii_letters + companion.string.digits
+        self.transport._used_correlations = {a + b + "|" for a in old for b in old}
+        with mock.patch.object(companion.secrets, "choice", side_effect=["]", "\\", "`", "~"]):
+            self.assertEqual(await self.transport.remote_command(KEY, "secret", "ver"), "> verified")
+        self.assertIn("]\\|", self.transport._used_correlations)
+        self.assertIn("`~|", self.transport._used_correlations)
+        self.assertEqual(len(self.transport._used_correlations), len(old) ** 2 + 2)
 
     async def test_discovery_uses_fresh_full_key_direct_responses_only(self):
         rows = await self.transport.discover()
@@ -316,10 +402,10 @@ class CompanionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await self.transport.remote_command(KEY, "secret", command), "> verified")
         self.assertEqual(self.sdk.commands.login_count, 1)
         self.assertEqual(len(self.transport._used_correlations), 3)
-        self.assertEqual(self.sdk.contacts[KEY]["out_path_len"], 0)
+        self.assertEqual(self.sdk.contacts[KEY], self.original)
         await self.transport.restore_contact_path()
         self.assertEqual(self.sdk.contacts[KEY], self.original)
-        self.assertEqual(self.sdk.commands.guard_modes, [1, 2, 1, 3])
+        self.assertEqual(self.sdk.commands.guard_modes, [1, 2, 4, 4, 1, 4, 3])
 
     async def test_reboot_reset_reauthenticates_without_reusing_old_correlations(self):
         await self.transport.remote_command(KEY, "secret", "ver")
@@ -327,7 +413,7 @@ class CompanionTests(unittest.IsolatedAsyncioTestCase):
         await self.transport.reset_remote_session(KEY)
         self.assertNotIn(KEY, self.transport._authenticated)
         self.assertEqual(self.transport._used_correlations, previous)
-        self.assertEqual(self.sdk.contacts[KEY]["out_path_len"], 0)
+        self.assertEqual(self.sdk.contacts[KEY], self.original)
         await self.transport.remote_command(KEY, "secret", "ota self")
         self.assertEqual(self.sdk.commands.login_count, 2)
         self.assertEqual(len(self.transport._used_correlations), 4)

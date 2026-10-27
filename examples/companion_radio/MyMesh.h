@@ -233,6 +233,9 @@ public:
   void cancelSerialOperationsForRoute(BaseSerialInterface* route);
   bool hasFiniteDelayedReplyForRoute(BaseSerialInterface* route) const;
   void resetUsbHostSessionInput();
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
+  void setDirectAdminUsbRoute(BaseSerialInterface* route) { _ota_direct_usb_route = route; }
+#endif
 
   const char *getNodeName();
   CompanionNodePrefs *getNodePrefs();
@@ -649,7 +652,12 @@ public:
 private:
 #if COMPANION_FEATURE_DIRECT_OTA_ADMIN
   mesh::CompanionDirectAdminGuard _ota_direct_admin;
+  ContactInfo _ota_direct_contact;
+  ContactInfo* _ota_direct_transient = nullptr;
+  BaseSerialInterface* _ota_direct_usb_route = nullptr;
+  void closeDirectOtaAdmin();
   bool handleDirectOtaFrame(size_t len);
+  bool handleDirectOtaCommand(const char* command, uint32_t timestamp, char* reply, size_t capacity);
 #endif
 #if MESH_ENABLE_FLEET_CONTROL
   // Exact ownership of the optional radio copy during two-part admission.

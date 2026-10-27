@@ -129,16 +129,14 @@ class CompanionTransport:
         self._admin_lock = asyncio.Lock()
         self._discovery_lock = asyncio.Lock()
         self._subscriptions = []
-        self._saved_paths = {}
+        self._guard_version_checked = False
         self._authenticated = set()
         self._guarded_key = None
         self._discovered = {}
         self._discovery_tag = None
-        self._login_waiter = self._reply_waiter = None
+        self._login_waiter = None
         self._used_correlations = set()
         self._timestamps = {}
-        self._messages_ready = asyncio.Event()
-        self._message_task = None
         self._raw = asyncio.Queue(maxsize=64)
         self._serve_task = None
         self._serve_stop = asyncio.Event()
@@ -184,14 +182,11 @@ class CompanionTransport:
                 default_timeout=self.command_timeout, auto_reconnect=False)
             if self._sdk is None:
                 raise CompanionError("No Binary Companion response on this USB port")
-            for name in ("DISCOVER_RESPONSE", "RX_LOG_DATA", "CONTACT_MSG_RECV",
-                         "LOGIN_SUCCESS", "LOGIN_FAILED", "MESSAGES_WAITING", "DISCONNECTED"):
+            for name in ("DISCOVER_RESPONSE", "RX_LOG_DATA", "LOGIN_SUCCESS", "LOGIN_FAILED", "DISCONNECTED"):
                 self._subscriptions.append(self._sdk.subscribe(
                     getattr(self._event_types, name), self._on_event))
             await self._call("get_contacts")
             self._disconnected = False
-            self._message_task = asyncio.create_task(self._fetch_messages())
-            self._messages_ready.set()
             return self
         except BaseException:
             await self.close()
@@ -206,10 +201,6 @@ class CompanionTransport:
             except (asyncio.TimeoutError, CompanionError, ConnectionError):
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
-        if self._message_task is not None:
-            self._message_task.cancel()
-            await asyncio.gather(self._message_task, return_exceptions=True)
-            self._message_task = None
         error = None
         if self._sdk is not None:
             try:
@@ -251,11 +242,9 @@ class CompanionTransport:
         kind, payload = _kind(event), _payload(event)
         if kind == "disconnected":
             self._disconnected = True
-            for waiting in (self._login_waiter, self._reply_waiter):
-                if waiting is not None and not waiting[-1].done():
-                    waiting[-1].set_exception(ConnectionError("USB Companion disconnected"))
-        elif kind == "messages_waiting":
-            self._messages_ready.set()
+            waiting = self._login_waiter
+            if waiting is not None and not waiting[-1].done():
+                waiting[-1].set_exception(ConnectionError("USB Companion disconnected"))
         elif kind == "discover_response":
             public_key = str(payload.get("pubkey", "")).lower()
             tag = payload.get("tag")
@@ -281,33 +270,16 @@ class CompanionTransport:
                 future.set_exception(CompanionError("The selected repeater rejected the admin login"))
             else:
                 future.set_result(payload)
-        elif kind == "contact_message" and self._reply_waiter is not None:
-            key, correlation, future = self._reply_waiter
-            text = payload.get("text", "")
-            if (not future.done() and payload.get("pubkey_prefix", "").lower() == key[:12]
-                    and payload.get("txt_type") == 1 and payload.get("path_len") == 255
-                    and isinstance(text, str) and text.startswith(correlation)):
-                future.set_result(text[len(correlation):])
 
-    async def _fetch_messages(self):
-        while True:
-            try:
-                try:
-                    await asyncio.wait_for(self._messages_ready.wait(), 1)
-                except asyncio.TimeoutError:
-                    if self._reply_waiter is None:
-                        continue
-                self._messages_ready.clear()
-                for _ in range(32):
-                    result = await self._call("get_msg", timeout=2)
-                    if _kind(result) == "no_more_messages":
-                        break
-            except (CompanionError, TimeoutError, ConnectionError):
-                if self._disconnected:
-                    return
-                await asyncio.sleep(.2)
+    async def _require_guard(self):
+        if not self._guard_version_checked:
+            status = await self.local_command("get ota.direct")
+            if not re.fullmatch(r"\s*>?\s*ota\.direct v=2 active=[01] busy=[01]\s*", status):
+                raise CompanionError("The USB radio needs current Full Companion firmware with the v2 zero-hop OTA mailbox")
+            self._guard_version_checked = True
 
     async def discover(self):
+        await self._require_guard()
         async with self._discovery_lock:
             tag = secrets.randbits(32) or 1
             self._discovery_tag = tag.to_bytes(4, "little").hex()
@@ -329,45 +301,28 @@ class CompanionTransport:
         contacts = getattr(self._sdk, "contacts", {})
         if any(other.lower() != key and other.lower().startswith(key[:12]) for other in contacts):
             raise CompanionError("Contact key prefix is ambiguous; refusing remote administration")
-        if key not in self._saved_paths:
-            original = deepcopy(contacts.get(key))
-            if original is None and key not in self._discovered:
-                raise CompanionError("Discover the selected repeater on this direct link first")
-            self._saved_paths[key] = original
         contact = deepcopy(contacts.get(key))
         if contact is None:
+            if key not in self._discovered:
+                raise CompanionError("Discover the selected repeater on this direct link first")
             discovered = self._discovered[key]
             contact = dict(public_key=key, type=discovered["type"], flags=0,
-                           out_path="", out_path_len=0, out_path_hash_mode=0,
                            adv_name=discovered.get("name", key[:12]), last_advert=0,
                            adv_lat=0, adv_lon=0)
-        # Reassert the direct path before every operation: background adverts or
-        # another client must not silently restore a routed/flood path.
+        if contact.get("type") not in (2, 3):
+            raise CompanionError("The selected device must be a Repeater or Room Server")
+        # This is an SDK command argument only. The v2 source keeps its own
+        # RAM-only peer and sends DIRECT0 without changing stored contacts.
         contact.update(out_path="", out_path_len=0, out_path_hash_mode=0)
-        await self._call("update_contact", contact)
-        contacts[key] = contact
         return contact
 
     async def restore_contact_path(self, public_key=None):
-        keys = [_key(public_key)] if public_key else list(self._saved_paths)
-        if self._guarded_key in keys:
-            await self._guard_mode(self._guarded_key, 3)
+        # No route was mutated. Keep this shared-session cleanup API to release
+        # the RAM mailbox/anonymous peer, including after a receiver reboot.
+        key = _key(public_key) if public_key else self._guarded_key
+        if key and self._guarded_key == key:
+            await self._guard_mode(key, 3)
             self._guarded_key = None
-        for key in keys:
-            if key not in self._saved_paths:
-                continue
-            original = self._saved_paths[key]
-            contacts = getattr(self._sdk, "contacts", {})
-            if original is None:
-                await self._call("remove_contact", key)
-                contacts.pop(key, None)
-            else:
-                contact = deepcopy(contacts.get(key, original))
-                for field in ("out_path", "out_path_len", "out_path_hash_mode"):
-                    contact[field] = original[field]
-                await self._call("update_contact", contact)
-                contacts[key] = contact
-            self._saved_paths.pop(key)
             self._authenticated.discard(key)
 
     async def local_command(self, text):
@@ -413,9 +368,10 @@ class CompanionTransport:
     async def _remote_command(self, key, password, text, renewed=False):
         # Caller owns the admin lock; a verified explicit login-required reply
         # permits one fresh login. Silence never invalidates authentication.
+        await self._require_guard()
         contact = await self._direct_contact(key)
         try:
-            await self._guard_mode(key, 1)
+            await self._guard_mode(key, 1, bytes([contact["type"]]))
         except CompanionError as exc:
             raise CompanionError(
                 "The USB radio needs current Full Companion firmware with the zero-hop OTA admin guard. "
@@ -483,10 +439,10 @@ class CompanionTransport:
         # is a little ahead of the computer or was just advanced above it.
         self._timestamps[key] = max(self._timestamps.get(key, 0), current)
 
-    async def _guard_mode(self, key, mode):
+    async def _guard_mode(self, key, mode, extra=b""):
         # Reserved modes of CMD52 are rejected by stock firmware without RF.
         # The public SDK send method preserves the connection's single owner.
-        await self._call("send", b"\x34" + bytes([mode]) + bytes.fromhex(key),
+        await self._call("send", b"\x34" + bytes([mode]) + bytes.fromhex(key) + extra,
                          [self._event_types.OK, self._event_types.ERROR])
 
     async def _teach_return_path(self, key):
@@ -494,7 +450,7 @@ class CompanionTransport:
         deadline = time.monotonic() + self.remote_timeout
         while time.monotonic() < deadline:
             status = await self.local_command("get ota.direct")
-            match = re.fullmatch(r"\s*>?\s*ota\.direct v=1 active=1 busy=([01])\s*", status)
+            match = re.fullmatch(r"\s*>?\s*ota\.direct v=2 active=1 busy=([01])\s*", status)
             if match is None:
                 raise CompanionError("Companion did not confirm the active zero-hop admin guard")
             if match[1] == "0":
@@ -503,7 +459,7 @@ class CompanionTransport:
         raise TimeoutError("Timed out waiting for the direct return path to finish transmitting")
 
     async def _command_reply(self, key, contact, text):
-        alphabet = string.ascii_letters + string.digits
+        alphabet = string.ascii_letters + string.digits + string.punctuation.replace("|", "")
         if len(self._used_correlations) >= len(alphabet) ** 2:
             raise CompanionError("Remote command correlation space exhausted; reconnect")
         while True:
@@ -511,23 +467,43 @@ class CompanionTransport:
             if correlation not in self._used_correlations:
                 self._used_correlations.add(correlation)
                 break
-        future = asyncio.get_running_loop().create_future()
-        self._reply_waiter = (key, correlation, future)
+        await self._guard_mode(key, 4, correlation.encode("ascii"))
         timestamp = max(int(time.time()), self._timestamps.get(key, 0) + 1)
         self._timestamps[key] = timestamp
-        try:
-            await self._call("send_cmd", contact, correlation + text, timestamp=timestamp)
-            self._messages_ready.set()
-            reply = await asyncio.wait_for(future, self.remote_timeout)
-        except asyncio.TimeoutError as exc:
-            raise TimeoutError("Timed out waiting for the selected repeater's command reply") from exc
-        finally:
-            self._reply_waiter = None
-            if not future.done():
-                future.cancel()
-            elif not future.cancelled():
-                future.exception()
-        return reply
+        await self._call("send_cmd", contact, correlation + text, timestamp=timestamp)
+        deadline = time.monotonic() + self.remote_timeout
+        reply = bytearray()
+        total = None
+        while time.monotonic() < deadline:
+            page = await self.local_command("get ota.direct.reply " + str(len(reply)))
+            match = re.fullmatch(
+                r"\s*>?\s*ota\.reply req=([!-~]{2}) state=(idle|pending|ready) "
+                r"bytes=(\d+) off=(\d+) data=([0-9A-Fa-f]+|-)\s*", page)
+            if match is None or match[1] != correlation[:2]:
+                raise CompanionError("The Companion mailbox did not confirm the selected command")
+            size, offset = int(match[3]), int(match[4])
+            if size > 160 or offset != len(reply):
+                raise CompanionError("The Companion mailbox returned an invalid reply boundary")
+            if match[2] == "idle":
+                raise CompanionError("The Companion direct admin mailbox expired")
+            if match[2] == "pending":
+                if reply or size or match[5] != "-":
+                    raise CompanionError("The Companion mailbox changed during reply retrieval")
+                await asyncio.sleep(min(.1, max(.001, self.remote_timeout / 10)))
+                continue
+            if total is not None and size != total:
+                raise CompanionError("The Companion mailbox reply changed during retrieval")
+            total = size
+            try:
+                chunk = b"" if match[5] == "-" else bytes.fromhex(match[5])
+            except ValueError as exc:
+                raise CompanionError("The Companion mailbox returned invalid reply bytes") from exc
+            if len(chunk) > 40 or len(reply) + len(chunk) > total or not chunk and len(reply) != total:
+                raise CompanionError("The Companion mailbox returned an invalid reply page")
+            reply.extend(chunk)
+            if len(reply) == total:
+                return reply.decode("utf-8", "replace")
+        raise TimeoutError("Timed out waiting for the selected repeater's command reply")
 
     async def serve(self, blob, stop_event):
         """Serve one validated package concurrently with Binary admin commands.

@@ -4231,6 +4231,9 @@ void setup() {
 #endif
 
   the_mesh.startInterface(interface_manager);
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN && defined(ENABLE_USB_INTERFACE)
+  the_mesh.setDirectAdminUsbRoute(&usb_serial_interface);
+#endif
 #if defined(ESP32) && defined(WIFI_SSID)
   if (!companion_wifi_requested) wifi_interface.disable();
 #endif

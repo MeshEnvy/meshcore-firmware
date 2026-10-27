@@ -2534,14 +2534,35 @@ uint8_t MyMesh::getContactTxRadio(const mesh::Identity& peer) const {
 
 void MyMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_idx,
                           const uint8_t* secret, uint8_t* data, size_t len) {
-  if (!_ota_direct_admin.accepts(packet, type, secret, _ms->getMillis())) return;
+  const uint32_t now = _ms->getMillis();
+  const bool selected = _ota_direct_admin.matchesSecret(secret, now);
+  const bool cli_reply = type == PAYLOAD_TYPE_TXT_MSG && data && len >= 5
+      && (data[4] >> 2) == TXT_TYPE_CLI_DATA;
+  if (selected && (type == PAYLOAD_TYPE_RESPONSE || cli_reply)) {
+    if (!_ota_direct_admin.accepts(packet, type, secret, now)) return;
+    if (cli_reply) {
+      if (_ota_direct_admin.captureReply(data, len, now)) return;
+    } else {
+      _ota_direct_admin.noteLogin(data, len);
+      onContactResponse(_ota_direct_contact, data, len);
+      return;  // Do not let the normal callback rewrite a stored route.
+    }
+  }
   BaseChatMesh::onPeerDataRecv(packet, type, sender_idx, secret, data, len);
 }
 
 bool MyMesh::onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint8_t* secret,
                           uint8_t* path, uint8_t path_len, uint8_t extra_type,
                           uint8_t* extra, uint8_t extra_len) {
-  if (!_ota_direct_admin.acceptsPath(packet, secret, path_len, _ms->getMillis())) return false;
+  const uint32_t now = _ms->getMillis();
+  if (_ota_direct_admin.matchesSecret(secret, now)) {
+    if (_ota_direct_admin.acceptsPath(packet, secret, path_len, now)
+        && extra_type == PAYLOAD_TYPE_RESPONSE && extra && extra_len) {
+      _ota_direct_admin.noteLogin(extra, extra_len);
+      onContactResponse(_ota_direct_contact, extra, extra_len);
+    }
+    return false;  // RAM maintenance peer never changes a saved contact path.
+  }
   return BaseChatMesh::onPeerPathRecv(packet, sender_idx, secret, path, path_len,
                                     extra_type, extra, extra_len);
 }
@@ -2632,7 +2653,11 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, 
     // different transport has issued a command in the meantime.
     _delayed_replies.rememberLoginTag(tag);
     if (writePendingSerialFrame(out_frame, i, now) != (size_t)i) return;
-    if (keep_alive_secs > 0) startConnection(contact, keep_alive_secs);
+    if (keep_alive_secs > 0
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
+        && !_ota_direct_admin.matches(contact.id, now)
+#endif
+        ) startConnection(contact, keep_alive_secs);
 #if COMPANION_FEATURE_TEXT_TERMINAL
     if (terminal_login_response) {
       if (hasTerminalOutput()) {
@@ -6230,6 +6255,9 @@ void MyMesh::cancelSerialOperationsForRoute(BaseSerialInterface* route) {
 }
 
 void MyMesh::resetUsbHostSessionInput() {
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
+  closeDirectOtaAdmin();
+#endif
   // CLI rescue deliberately remains active across reconnects, but no bytes
   // typed by the old host may complete a command for the new one. This is
   // especially important for the rescue shell's erase/rm commands.
@@ -6240,25 +6268,123 @@ void MyMesh::resetUsbHostSessionInput() {
 }
 
 #if COMPANION_FEATURE_DIRECT_OTA_ADMIN
-// Keep the opt-in USB maintenance modes out of the large Binary dispatcher.
+void MyMesh::closeDirectOtaAdmin() {
+  if (_ota_direct_transient && isTransientContact(*_ota_direct_transient)
+      && _ota_direct_transient->type == ADV_TYPE_NONE
+      && _ota_direct_transient->id.matches(_ota_direct_contact.id)) {
+    clearTransientContact(*_ota_direct_transient);
+  }
+  _ota_direct_transient = nullptr;
+  resetContactValue(_ota_direct_contact);
+  _ota_direct_admin.clear();
+}
+
+// No accepted contact or stored route is changed by these USB-owned modes.
 __attribute__((noinline, cold)) bool MyMesh::handleDirectOtaFrame(size_t len) {
-  if (cmd_frame[0] != CMD_SEND_PATH_DISCOVERY_REQ || len != 2 + PUB_KEY_SIZE
-      || cmd_frame[1] < 1 || cmd_frame[1] > 3) return false;
-  // Mode 0 remains flood path discovery. Stock firmware rejects these reserved
-  // modes without transmitting; every maintenance frame here is DIRECT0.
-  ContactInfo* recipient = lookupContactByPubKey(&cmd_frame[2], PUB_KEY_SIZE);
-  if (!recipient) {
-    writeErrFrame(ERR_CODE_NOT_FOUND);
-  } else if (cmd_frame[1] == 1) {
-    _ota_direct_admin.arm(recipient->id, recipient->getSharedSecret(self_id), _ms->getMillis());
+  if (cmd_frame[0] != CMD_SEND_PATH_DISCOVERY_REQ || len < 2 + PUB_KEY_SIZE
+      || cmd_frame[1] < 1 || cmd_frame[1] > 4) return false;
+  if (!_ota_direct_usb_route || _serial->captureReplyRoute() != _ota_direct_usb_route) {
+    writeErrFrame(ERR_CODE_BAD_STATE);
+    return true;
+  }
+  const uint8_t mode = cmd_frame[1];
+  if ((mode == 1 && len != 3 + PUB_KEY_SIZE)
+      || ((mode == 2 || mode == 3) && len != 2 + PUB_KEY_SIZE)
+      || (mode == 4 && len != 5 + PUB_KEY_SIZE)) {
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    return true;
+  }
+  const uint8_t* key = cmd_frame + 2;
+  if (mode == 1) {
+    const uint8_t type = cmd_frame[2 + PUB_KEY_SIZE];
+    if (type != ADV_TYPE_REPEATER && type != ADV_TYPE_ROOM) {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+      return true;
+    }
+    mesh::Identity peer;
+    memcpy(peer.pub_key, key, PUB_KEY_SIZE);
+    if (!_ota_direct_admin.matches(peer, _ms->getMillis())) {
+      closeDirectOtaAdmin();
+      ContactInfo* contact = lookupContactByPubKey(key, PUB_KEY_SIZE);
+      if (contact) {
+        _ota_direct_contact = *contact;
+      } else {
+        // Empty anonymous slots are RAM-only. Never evict another request,
+        // add an accepted contact, or schedule a contact-store write.
+        for (unsigned i = 0; i < MAX_ANON_CONTACTS; ++i) {
+          ContactInfo* slot = getContactPtrByIdx(i);
+          static const uint8_t empty[PUB_KEY_SIZE] = {};
+          if (slot && slot->type == ADV_TYPE_NONE && !memcmp(slot->id.pub_key, empty, PUB_KEY_SIZE)) {
+            _ota_direct_transient = slot;
+            break;
+          }
+        }
+        if (!_ota_direct_transient) {
+          writeErrFrame(ERR_CODE_TABLE_FULL);
+          return true;
+        }
+        resetContactValue(*_ota_direct_transient);
+        _ota_direct_transient->id = peer;
+        _ota_direct_transient->out_path_len = 0;
+        _ota_direct_contact.id = peer;
+      }
+      if (!_ota_direct_contact.setPath(nullptr, 0)) {
+        closeDirectOtaAdmin();
+        writeErrFrame(ERR_CODE_BAD_STATE);
+        return true;
+      }
+      _ota_direct_contact.type = type;
+      _ota_direct_contact.sync_since = 0;
+      _ota_direct_contact.tx_radio = mesh::RADIO_TX_PRIMARY;
+    }
+    _ota_direct_admin.arm(_ota_direct_contact.id,
+        _ota_direct_contact.getSharedSecret(self_id), _ms->getMillis());
     writeOKFrame();
-  } else if (cmd_frame[1] == 2) {
-    if (_ota_direct_admin.sendReturnPath(*this, recipient->id, _ms->getMillis())) writeOKFrame();
+  } else if (mode == 3 && (!_ota_direct_contact.type
+             || !memcmp(_ota_direct_contact.id.pub_key, key, PUB_KEY_SIZE))) {
+    closeDirectOtaAdmin();
+    writeOKFrame();
+  } else if (!_ota_direct_admin.matchesPrefix(key, PUB_KEY_SIZE, _ms->getMillis())) {
+    writeErrFrame(ERR_CODE_BAD_STATE);
+  } else if (mode == 2) {
+    if (_ota_direct_admin.sendReturnPath(*this, _ota_direct_contact.id, _ms->getMillis())) writeOKFrame();
     else writeErrFrame(ERR_CODE_BAD_STATE);
   } else {
-    if (_ota_direct_admin.matches(recipient->id, _ms->getMillis())) _ota_direct_admin.clear();
-    writeOKFrame();
+    if (_ota_direct_admin.expect(cmd_frame + 2 + PUB_KEY_SIZE, _ms->getMillis())) writeOKFrame();
+    else writeErrFrame(ERR_CODE_ILLEGAL_ARG);
   }
+  return true;
+}
+
+bool MyMesh::handleDirectOtaCommand(const char* command, uint32_t timestamp,
+                                    char* reply, size_t capacity) {
+  const bool status = !strcmp(command, "get ota.direct");
+  static const char prefix[] = "get ota.direct.reply";
+  const size_t prefix_len = sizeof(prefix) - 1;
+  const bool result = !strncmp(command, prefix, prefix_len)
+      && (command[prefix_len] == 0 || command[prefix_len] == ' ');
+  if ((!status && !result) || timestamp != 0) return false;
+  if (!_ota_direct_usb_route || _serial->captureReplyRoute() != _ota_direct_usb_route) {
+    snprintf(reply, capacity, "ERR ota.direct requires physical USB");
+    return true;
+  }
+  if (status) {
+    snprintf(reply, capacity, "> ota.direct v=2 active=%u busy=%u",
+             _ota_direct_admin.active(_ms->getMillis()) ? 1 : 0,
+             hasPendingRadioWork() ? 1 : 0);
+    return true;
+  }
+  const char* value = command + prefix_len;
+  while (*value == ' ') ++value;
+  size_t offset = 0;
+  for (; *value; ++value) {
+    if (*value < '0' || *value > '9' || offset > 160) {
+      snprintf(reply, capacity, "ERR invalid reply offset");
+      return true;
+    }
+    offset = offset * 10 + static_cast<unsigned>(*value - '0');
+  }
+  _ota_direct_admin.readReply(offset, reply, capacity, _ms->getMillis());
   return true;
 }
 #endif
@@ -6410,6 +6536,10 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint8_t *pub_key_prefix = &cmd_frame[i];
     i += 6;
     ContactInfo *recipient = lookupContactByPubKey(pub_key_prefix, 6);
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
+    if (txt_type == TXT_TYPE_CLI_COMMAND && _ota_direct_admin.matchesPrefix(pub_key_prefix, 6, _ms->getMillis()))
+      recipient = &_ota_direct_contact;
+#endif
     if (recipient && (txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_CLI_DATA || txt_type == TXT_TYPE_CLI_COMMAND)) {
       char *text = (char *)&cmd_frame[i];
       int tlen = len - i;
@@ -7079,6 +7209,9 @@ void MyMesh::handleCmdFrame(size_t len) {
   } else if (cmd_frame[0] == CMD_SEND_LOGIN && len >= 1 + PUB_KEY_SIZE) {
     uint8_t *pub_key = &cmd_frame[1];
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
+    if (_ota_direct_admin.matchesPrefix(pub_key, PUB_KEY_SIZE, _ms->getMillis())) recipient = &_ota_direct_contact;
+#endif
     char *password = (char *)&cmd_frame[1 + PUB_KEY_SIZE];
     cmd_frame[len] = 0; // ensure null terminator in password
     if (recipient) {
@@ -10837,12 +10970,7 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
   while (*command == ' ' || *command == '\t') command++;
 
 #if COMPANION_FEATURE_DIRECT_OTA_ADMIN
-  if (sender_timestamp == 0 && !strcmp(command, "get ota.direct")) {
-    snprintf(reply, reply_capacity, "> ota.direct v=1 active=%u busy=%u",
-             _ota_direct_admin.active(_ms->getMillis()) ? 1 : 0,
-             hasPendingRadioWork() ? 1 : 0);
-    return true;
-  }
+  if (handleDirectOtaCommand(command, sender_timestamp, reply, reply_capacity)) return true;
 #endif
 
   if (strlen(command) > 3 && command[2] == '|') {
@@ -11573,6 +11701,9 @@ void MyMesh::checkSerialInterface() {
 }
 
 void MyMesh::loop() {
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
+  if (_ota_direct_contact.type && !_ota_direct_admin.active(_ms->getMillis())) closeDirectOtaAdmin();
+#endif
   // Storage callbacks can request recovery while holding ContactInfo/path
   // references. Retire those references only here, between callbacks.
   if (_store->contactRecoveryPending() && !mesh::morseTimingActive(_radio)) {
