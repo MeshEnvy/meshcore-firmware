@@ -113,7 +113,8 @@ class WebConfigStationOwnershipTest(unittest.TestCase):
         fixture = self.station_fixture().split("int main() {", 1)[0]
         auth = (ROOT / "test/fixtures/webconfig_login_handler.cpp").read_text()
         transport = "\n".join(extract_braced(auth, signature) + ";" for signature in (
-            "struct Client", "struct AsyncWebServerResponse", "struct AsyncWebServerRequest"))
+            "struct Client", "struct AsyncWebHeader", "struct AsyncWebServerResponse", "struct AsyncResponseStream",
+            "struct AsyncWebServerRequest"))
         transport = r'''
 #include <map>
 #include <ArduinoJson.h>

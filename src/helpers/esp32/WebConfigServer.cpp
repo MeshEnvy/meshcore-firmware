@@ -2440,15 +2440,25 @@ void WebConfigServer::handleLogin(AsyncWebServerRequest* req) {
     req->send(401, "application/json", "{\"error\":\"password changed; sign in again\"}");
     return;
   }
+  static constexpr char response_body[] = "{\"ok\":true}";
+  AsyncResponseStream* res = req->beginResponseStream("application/json", sizeof(response_body) - 1);
+  if (!res) { req->send(503); return; }
+  res->write(reinterpret_cast<const uint8_t*>(response_body), sizeof(response_body) - 1);
+  char cookie[80];
+  sprintf(cookie, "wcs=%s; HttpOnly; SameSite=Lax; Path=/", token);
+  res->addHeader("Set-Cookie", cookie);
+  // Header insertion can succeed even if its String storage was truncated.
+  const AsyncWebHeader* retained_cookie = res->getHeader("Set-Cookie");
+  if (res->available() != sizeof(response_body) - 1
+      || !retained_cookie || retained_cookie->value() != cookie) {
+    delete res;
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
   memcpy(_session_token, token, sizeof(_session_token));
   _session_last_seen = now;
   _session_generation = credential.generation;
   noteNetworkActivity();
-
-  AsyncWebServerResponse* res = req->beginResponse(200, "application/json", "{\"ok\":true}");
-  char cookie[80];
-  sprintf(cookie, "wcs=%s; HttpOnly; SameSite=Lax; Path=/", _session_token);
-  res->addHeader("Set-Cookie", cookie);
   req->send(res);
 }
 
@@ -2816,8 +2826,18 @@ void WebConfigServer::handleConfigPost(AsyncWebServerRequest* req) {
     req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
     return;
   }
-  String out;
-  serializeJson(ack, out);
+  const size_t response_length = measureJson(ack);
+  // A stream can exist with an incomplete buffer. Build the receipt before
+  // admitting work, so allocation failure cannot enqueue an unseen change.
+  AsyncResponseStream* res = req->beginResponseStream("application/json", response_length);
+  if (!res) { req->send(503); return; }
+  serializeJson(ack, *res);
+  if (res->available() != response_length) {
+    delete res;
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
+  res->setCode(202);
 
   _batch_kind = BATCH_CONFIG;
   _batch_count = count;
@@ -2840,7 +2860,7 @@ void WebConfigServer::handleConfigPost(AsyncWebServerRequest* req) {
       "WC: config POST accepted, %d cmds, reboot=%d\n",
       count, (int)reboot_after);
 
-  req->send(202, "application/json", out);
+  req->send(res);
 }
 
 void WebConfigServer::handleConfigResult(AsyncWebServerRequest* req) {
@@ -2964,6 +2984,13 @@ void WebConfigServer::handleConfigResult(AsyncWebServerRequest* req) {
   }
   AsyncResponseStream* res = req->beginResponseStream("application/json");
   if (!res) { req->send(503); return; }
+  const size_t response_length = measureJson(doc);
+  serializeJson(doc, *res);
+  if (res->available() != response_length) {
+    delete res;
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
   if (_batch_reauth_required && !_batch_reauth_delivered) {
     _batch_reauth_delivered = true;
     if (_ap_rekey_generation)
@@ -2973,7 +3000,6 @@ void WebConfigServer::handleConfigResult(AsyncWebServerRequest* req) {
     _batch_reboot_armed = true;
     _reboot_at = confirmed_reboot_at;
   }
-  serializeJson(doc, *res);
   req->send(res);
 }
 
@@ -3375,8 +3401,16 @@ void WebConfigServer::handleCliPost(AsyncWebServerRequest* req) {
     req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
     return;
   }
-  String out;
-  serializeJson(ack, out);
+  const size_t response_length = measureJson(ack);
+  AsyncResponseStream* res = req->beginResponseStream("application/json", response_length);
+  if (!res) { req->send(503); return; }
+  serializeJson(ack, *res);
+  if (res->available() != response_length) {
+    delete res;
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
+  res->setCode(202);
 
   _batch_kind = BATCH_CLI;
   _batch_count = count;
@@ -3392,7 +3426,7 @@ void WebConfigServer::handleCliPost(AsyncWebServerRequest* req) {
       "WC: cli POST accepted, %d cmds, reboot=%d\n",
       count, (int)defer_reboot);
 
-  req->send(202, "application/json", out);
+  req->send(res);
 }
 
 void WebConfigServer::handleCliResult(AsyncWebServerRequest* req) {
@@ -3500,6 +3534,13 @@ void WebConfigServer::handleCliResult(AsyncWebServerRequest* req) {
   }
   AsyncResponseStream* res = req->beginResponseStream("application/json");
   if (!res) { req->send(503); return; }
+  const size_t response_length = measureJson(doc);
+  serializeJson(doc, *res);
+  if (res->available() != response_length) {
+    delete res;
+    req->send(503, "application/json", "{\"error\":\"not enough memory\"}");
+    return;
+  }
   if (final_read && _batch_reauth_required && !_batch_reauth_delivered) {
     _batch_reauth_delivered = true;
     if (_ap_rekey_generation)
@@ -3509,7 +3550,6 @@ void WebConfigServer::handleCliResult(AsyncWebServerRequest* req) {
     _batch_reboot_armed = true;
     _reboot_at = WebConfigBatch::confirmRebootAt(millis());
   }
-  serializeJson(doc, *res);
   req->send(res);
 }
 

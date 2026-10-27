@@ -77,6 +77,12 @@ struct String : std::string {
   size_t write(uint8_t value) { push_back(char(value)); return 1; }
   size_t write(const uint8_t* data, size_t count) { append(reinterpret_cast<const char*>(data), count); return count; }
 };
+struct AsyncResponseStream : String {
+  int code = 200;
+  size_t available() const { return size(); }
+  void setCode(int value) { code = value; }
+  bool addHeader(const char*, const char*) { return true; }
+};
 struct WCLock { explicit WCLock(int) {} };
 uint32_t millis() { return 1; }
 static constexpr uint32_t WEBCONFIG_SESSION_TTL_MS = 120000;
@@ -102,6 +108,10 @@ struct AsyncWebServerRequest {
   Client* client() { return &socket; }
   bool hasHeader(const char*) const { return !header.cookies.empty(); }
   Header* getHeader(const char*) { return &header; }
+  AsyncResponseStream* beginResponseStream(const char*, size_t = 0) { return new AsyncResponseStream; }
+  void send(AsyncResponseStream* response) {
+    status = response->code; output = static_cast<const String&>(*response); delete response;
+  }
   void send(int code, const char* = nullptr, const String& body = "") { status = code; output = body; }
 };
 struct WebConfigServer {

@@ -60,13 +60,23 @@ struct Callback {
   void onConfigBatchStart() { ++starts; }
   void onConfigBatchEnd() { ++ends; }
 };
+struct AsyncResponseStream : std::string {
+  int code = 200;
+  size_t available() const { return size(); }
+  void setCode(int value) { code = value; }
+  bool addHeader(const char*, const char*) { return true; }
+  size_t write(uint8_t value) { push_back(char(value)); return 1; }
+  size_t write(const uint8_t* bytes, size_t count) { append(reinterpret_cast<const char*>(bytes), count); return count; }
+};
 struct AsyncWebServerRequest {
   int status = 0;
   std::string body, reply;
   void* _tempObject = nullptr;
   size_t contentLength() const { return body.size(); }
-  void send(int code, const char*, const char* text) { status = code; reply = text; }
+  void send(int code, const char* = nullptr, const char* text = "") { status = code; reply = text; }
   void send(int code, const char*, const String& text) { status = code; reply = text; }
+  AsyncResponseStream* beginResponseStream(const char*, size_t = 0) { return new AsyncResponseStream; }
+  void send(AsyncResponseStream* response) { status = response->code; reply = *response; delete response; }
   void payload(const std::string& text) { body = text; _tempObject = &body[0]; }
 };
 static const char SECRET_SENTINEL[] = "********";

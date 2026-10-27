@@ -120,16 +120,123 @@ int main() {
         end = source.index('\nvoid WebConfigServer::handleConfigPost(', start)
         source = source[:start] + extract_braced(SERVER, 'void WebConfigServer::handleConfigGet(') + source[end:]
         source = source.replace('struct AsyncWebServerRequest {',
-            'struct AsyncResponseStream : String { void addHeader(const char*,const char*) {} };\n'
             'static void webConfigRegulatorsSnapshot(JsonObject) {}\nstruct AsyncWebServerRequest {')
-        source = source.replace('  Client socket;', '  AsyncResponseStream response;\n  Client socket;')
-        source = source.replace('  void send(int code,',
-            '  AsyncResponseStream* beginResponseStream(const char*) { return &response; }\n'
-            '  void send(AsyncResponseStream* result) { status=200;output=*result; }\n  void send(int code,')
         source = source.replace('  Callbacks* _cb = &callbacks;',
             '  Callbacks* _cb = &callbacks;\n  char _wifi_password[65]="saved-secret";\n'
             '  unsigned _wifi_power_save=0;\n')
         return source
+
+    def response_failures(self):
+        source = self.config()
+        stream = extract_braced(source, 'struct AsyncResponseStream') + ';'
+        source = source.replace(stream, r'''
+struct AsyncResponseStream : String {
+  static inline size_t limit=SIZE_MAX;
+  static inline bool cookie_ok=true;
+  static inline unsigned destroyed=0;
+  int code=200;
+  ~AsyncResponseStream() { ++destroyed; }
+  size_t write(const uint8_t* data,size_t count) {
+    const size_t room=limit>size()?limit-size():0;
+    const size_t accepted=count<room?count:room;
+    append(reinterpret_cast<const char*>(data),accepted);return accepted;
+  }
+  size_t write(uint8_t byte) { return write(&byte,1); }
+  size_t available() const { return size(); }
+  bool addHeader(const char*,const char*) { return cookie_ok; }
+  void setCode(int value) { code=value; }
+};''')
+        source = source.replace('uint32_t millis() { return 1; }',
+            'uint32_t fixture_time=1;\nuint32_t millis() { return fixture_time; }')
+        source = source.replace('  int indexOf(', '  int toInt() const { return atoi(c_str()); }\n  int indexOf(')
+        source = source.replace('void printf(const char*, Args...) {}',
+            'void printf(const char*, Args...) {} void println(const char*) {}')
+        source = source.replace('struct AsyncWebServerRequest {',
+            'struct Parameter { String text="0123456789abcdef"; const String& value() const { return text; } };\n'
+            'struct AsyncWebServerRequest {\n  Parameter parameter;\n'
+            '  bool hasParam(const char* key) const { return !strcmp(key,"reqid"); }\n'
+            '  Parameter* getParam(const char*) { return &parameter; }')
+        source = source.replace('  struct Callbacks {',
+            '  struct Callbacks {\n  bool supportsCliTerminal() const { return true; }')
+        source = source.replace('  void handleConfigGet(',
+            '  bool _cli_enabled=true, _admin_pwd_set=true;\n'
+            '  uint32_t _reboot_at=0, _ap_rekey_after=0, _ap_rekey_generation=0;\n'
+            '  bool resultReceiptAllowedLocked(AsyncWebServerRequest*,const char*,int,uint32_t) { return false; }\n'
+            '  void handleConfigResult(AsyncWebServerRequest*);\n'
+            '  void handleCliPost(AsyncWebServerRequest*);\n'
+            '  void handleCliResult(AsyncWebServerRequest*);\n'
+            '  void handleConfigGet(')
+        source += '\n#include <helpers/CLICommandUtils.h>\n' + '\n'.join(
+            extract_braced(SERVER, signature) for signature in (
+                'static inline bool wcCliEchoesSecret(', 'static inline bool wcIsDeferredReboot(',
+                'static const char* wcCliUnavailable(', 'void WebConfigServer::handleCliPost(',
+                'void WebConfigServer::handleConfigResult(', 'void WebConfigServer::handleCliResult('))
+        return source
+
+    def test_actual_posts_reject_partial_receipts_before_batch_admission(self):
+        self.compile_run(self.response_failures()+r'''
+int main() {
+  assert(mesh::esp32::managementPassword::publish("password"));
+  for(bool cli:{false,true}) {
+    for(size_t limit:{size_t(0),size_t(7),SIZE_MAX}) {
+      WebConfigServer server;server.callbacks.node.capabilities=WebConfigServer::CAP_LOST_REPLY;
+      AsyncResponseStream::limit=limit;
+      const unsigned freed=AsyncResponseStream::destroyed;
+      AsyncWebServerRequest post(cli
+          ? "{\"reqid\":\"0123456789abcdef\",\"cmds\":[\"get name\"]}"
+          : writeBody("\"yes\""));
+      if(cli)server.handleCliPost(&post);else server.handleConfigPost(&post);
+      assert(AsyncResponseStream::destroyed==freed+1);
+      if(limit==SIZE_MAX) {
+        assert(post.status==202&&server._batch_state==WebConfigBatch::State::Pending);
+        assert(server._batch_count==1);
+        JsonDocument ack;assert(!deserializeJson(ack,post.output));
+        assert(!strcmp(ack["reqid"],"0123456789abcdef"));
+      } else {
+        assert(post.status==503&&server._batch_state==WebConfigBatch::State::Idle);
+        assert(server._batch_count==0&&!server._batch_reqid[0]);
+        assert(!server._batch_auth_generation&&!server._batch_reboot_armed);
+      }
+    }
+  }
+}
+''')
+
+    def test_actual_results_do_not_arm_reboot_or_rekey_until_complete_body(self):
+        self.compile_run(self.response_failures()+r'''
+int main() {
+  assert(mesh::esp32::managementPassword::publish("password"));
+  for(bool cli:{false,true})for(size_t limit:{size_t(0),size_t(7)}) {
+    fixture_time=1;
+    WebConfigServer server;server._batch_kind=cli?WebConfigServer::BATCH_CLI:WebConfigServer::BATCH_CONFIG;
+    server._batch_state=WebConfigBatch::State::Done;server._batch_count=server._batch_next=1;
+    strcpy(server._batch_reqid,"0123456789abcdef");
+    strcpy(server._batch[0].key,"name");strcpy(server._batch[0].reply,"OK");
+    server._batch_reboot=server._batch_reauth_required=true;server._ap_rekey_generation=7;
+    AsyncResponseStream::limit=limit;
+    const unsigned freed=AsyncResponseStream::destroyed;
+    AsyncWebServerRequest failed;
+    if(cli)server.handleCliResult(&failed);else server.handleConfigResult(&failed);
+    assert(failed.status==503&&AsyncResponseStream::destroyed==freed+1);
+    assert(!server._batch_reauth_delivered&&!server._batch_reboot_armed);
+    assert(!server._ap_rekey_after&&!server._reboot_at);
+    assert(server._batch_state==WebConfigBatch::State::Done);
+    AsyncResponseStream::limit=SIZE_MAX;
+    AsyncWebServerRequest retry;
+    if(cli)server.handleCliResult(&retry);else server.handleConfigResult(&retry);
+    assert(retry.status==200&&server._batch_reauth_delivered&&server._batch_reboot_armed);
+    assert(server._ap_rekey_after==WebConfigBatch::scheduleAt(1,3000));
+    assert(server._reboot_at==WebConfigBatch::confirmRebootAt(1));
+    JsonDocument result;assert(!deserializeJson(result,retry.output));
+    assert(!strcmp(result["state"],"done")&&result["results"].size()==1);
+    const auto reboot=server._reboot_at,rekey=server._ap_rekey_after;
+    fixture_time=500;
+    AsyncWebServerRequest reread;
+    if(cli)server.handleCliResult(&reread);else server.handleConfigResult(&reread);
+    assert(reread.status==200&&server._reboot_at==reboot&&server._ap_rekey_after==rekey);
+  }
+}
+''')
 
     def test_actual_config_handlers_use_psram_and_reject_no_memory_before_queue_admission(self):
         self.compile_run(self.config()+r'''
@@ -190,6 +297,52 @@ int main() {
   AsyncWebServerRequest request;request.body="{\"password\":\"existing-secret\"}";
   request._tempObject=request.body.data();portal.handleLogin(&request);
   assert(request.status==200&&portal._session_token[0]);
+}
+''')
+
+    def test_actual_login_keeps_session_when_body_or_cookie_allocation_fails(self):
+        source = login_fixture.WebConfigLoginThrottleTest.handler_fixture(self).split('static const char* kLocked', 1)[0]
+        source = source.replace('struct WebConfigServer {', 'struct WebConfigServer {'+ALIASES)
+        stream = extract_braced(source, 'struct AsyncResponseStream') + ';'
+        source = source.replace(stream, r'''
+struct AsyncResponseStream : AsyncWebServerResponse {
+  static inline size_t limit=SIZE_MAX;
+  static inline unsigned cookie_failure=0;
+  static inline unsigned destroyed=0;
+  std::string body;
+  ~AsyncResponseStream() { ++destroyed; }
+  size_t available() const { return body.size(); }
+  size_t write(const uint8_t* bytes,size_t count) {
+    const size_t accepted=count<limit?count:limit;
+    body.append(reinterpret_cast<const char*>(bytes),accepted);return accepted;
+  }
+  bool addHeader(const char* key,const char* value) {
+    if(cookie_failure==1)return true; // library can report success after String OOM
+    return AsyncWebServerResponse::addHeader(key,cookie_failure==2?"wcs=partial":value);
+  }
+};''')
+        self.compile_run(source+r'''
+int main() {
+  WebConfigServer portal;
+  strcpy(portal._session_token,"0123456789abcdef0123456789abcdef");
+  portal._session_last_seen=123;portal._session_generation=456;
+  for(int failure=0;failure<4;++failure) {
+    AsyncResponseStream::limit=failure==0?0:failure==1?7:SIZE_MAX;
+    AsyncResponseStream::cookie_failure=failure<2?0:failure-1;
+    const unsigned freed=AsyncResponseStream::destroyed;
+    AsyncWebServerRequest request;request.body="{\"password\":\"existing-secret\"}";
+    request._tempObject=request.body.data();portal.handleLogin(&request);
+    assert(request.status==503&&AsyncResponseStream::destroyed==freed+1);
+    assert(!strcmp(portal._session_token,"0123456789abcdef0123456789abcdef"));
+    assert(portal._session_last_seen==123&&portal._session_generation==456);
+  }
+  AsyncResponseStream::limit=SIZE_MAX;AsyncResponseStream::cookie_failure=0;
+  AsyncWebServerRequest retry;retry.body="{\"password\":\"existing-secret\"}";
+  retry._tempObject=retry.body.data();portal.handleLogin(&retry);
+  assert(retry.status==200&&retry.reply=="{\"ok\":true}");
+  assert(strcmp(portal._session_token,"0123456789abcdef0123456789abcdef"));
+  assert(portal._session_last_seen==now_ms);
+  assert(retry.response.headers.at("Set-Cookie").find(portal._session_token)!=std::string::npos);
 }
 ''')
 

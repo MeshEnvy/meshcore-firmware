@@ -23,9 +23,27 @@ struct Client {
   int localIP() const { return local_ip; }
   uint32_t getRemoteAddress() const { return remote; }
 };
+struct AsyncWebHeader {
+  std::string text;
+  const std::string& value() const { return text; }
+};
 struct AsyncWebServerResponse {
-  int status; std::map<std::string, std::string> headers;
-  void addHeader(const char* key, const char* value) { headers[key]=value; }
+  int status = 200; std::map<std::string, std::string> headers;
+  mutable AsyncWebHeader header_view;
+  bool addHeader(const char* key, const char* value) { headers[key]=value; return true; }
+  const AsyncWebHeader* getHeader(const char* key) const {
+    const auto found = headers.find(key);
+    if (found == headers.end()) return nullptr;
+    header_view.text = found->second;
+    return &header_view;
+  }
+};
+struct AsyncResponseStream : AsyncWebServerResponse {
+  std::string body;
+  size_t available() const { return body.size(); }
+  void setCode(int value) { status = value; }
+  size_t write(uint8_t value) { body.push_back(char(value)); return 1; }
+  size_t write(const uint8_t* bytes, size_t count) { body.append(reinterpret_cast<const char*>(bytes), count); return count; }
 };
 struct AsyncWebServerRequest {
   Client socket; bool has_client=true;
@@ -34,6 +52,8 @@ struct AsyncWebServerRequest {
   Client* client() { return has_client ? &socket : nullptr; }
   void send(int code, const char* =nullptr, const char* content=nullptr) { status=code; reply=content ? content : ""; }
   AsyncWebServerResponse* beginResponse(int code, const char*, const char*) { response.status=code; return &response; }
+  AsyncResponseStream* beginResponseStream(const char*, size_t = 0) { return new AsyncResponseStream; }
+  void send(AsyncResponseStream* value) { status=value->status; response=*value; reply=value->body; delete value; }
   void send(AsyncWebServerResponse* value) { status=value->status; }
 };
 struct WebConfigServer {

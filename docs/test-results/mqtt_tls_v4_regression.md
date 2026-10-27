@@ -313,3 +313,26 @@ stopped broker can attempt recovery, while an additional broker waits when
 another slot is connected. The Station G3 Full repeater compiled and passed
 capability, dual-OTA partition and linked RAM checks. These are host/build
 checks, not a physical five-broker G3 soak.
+
+## Station G3 follow-up: publishing with WebConfig active
+
+The 27 October capture shows `Max=9716`, `DMA=15348/9716`,
+`drops=0/3615` and `Outbox=0`. The largest block is below the previous
+16,000-byte structured-publication guard. The skipped counter counts attempts,
+including retries, rather than distinct lost packets. `rec:1/write` records a
+failed synchronous write and recovery; `no errors` describes the current
+connected session, not its earlier failures. This capture does not establish
+a memory leak or explain the timed-out status command.
+
+The repair prefers PSRAM for WebConfig JSON and each client's receive buffer,
+with internal fallbacks charged against the existing DMA reserve. A shared
+publish guard covers structured packets, raw packets and status. Its bounded
+outgoing workspace is separate from the retained TLS reconnect bounds. CLI
+outbox statistics now read a cached value without taking the SDK's network
+mutex. Status retries are tracked per broker, and client IDs include the slot
+number so two slots at the same broker cannot evict each other.
+
+Allocation-failure checks also reject incomplete MQTT JSON and WebConfig
+responses before accepting commands or committing login/result state. Host
+tests and a G3 Full build exercise these paths; neither substitutes for a live
+five-broker test. The reported G3 was not reachable for flashing or a retest.
