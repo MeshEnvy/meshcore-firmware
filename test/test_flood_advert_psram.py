@@ -115,7 +115,6 @@ class FloodAdvertPsramTests(unittest.TestCase):
         (cls.work / "esp_heap_caps.h").write_text(HEAP)
         (cls.work / "sdkconfig.h").write_text(
             "#define CONFIG_IDF_TARGET_ESP32S3 1\n"
-            "#define CONFIG_SPIRAM_BOOT_INIT 1\n"
             "#define CONFIG_SPIRAM_USE_MALLOC 1\n")
         cls.compiler = [os.environ.get("CXX", "g++")]
         cls.binaries = {}
@@ -132,6 +131,16 @@ class FloodAdvertPsramTests(unittest.TestCase):
         source = self.work / (name + ".cpp")
         binary = self.work / name
         code = HARNESS.replace("@BANKS@", "").replace("int main(", "int traceMain(")
+        code = code.replace(
+            "#define MAKE_LIMITER(name) mesh::StaticFloodAdvertLimiter<> name\n",
+            "#define MAKE_LIMITER(name) \\\n"
+            " const unsigned name##_calls = heap_test::heap().external_calls + heap_test::heap().internal_calls; \\\n"
+            " mesh::StaticFloodAdvertLimiter<> name; \\\n"
+            " CHECK(heap_test::heap().external_calls + heap_test::heap().internal_calls == name##_calls); \\\n"
+            " CHECK(name.begin()); \\\n"
+            " const unsigned name##_initialized = heap_test::heap().external_calls + heap_test::heap().internal_calls; \\\n"
+            " CHECK(name.begin()); \\\n"
+            " CHECK(heap_test::heap().external_calls + heap_test::heap().internal_calls == name##_initialized)\n")
         # Release builds of the limiter are exercised while harness assertions
         # stay active. The trace also checks exact full-key prefix collisions.
         code = code.rstrip()[:-1] + " return 0;\n}\n"

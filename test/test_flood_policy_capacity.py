@@ -66,6 +66,10 @@ public:
   uint8_t flood_channel_data_rule_max_hops = FLOOD_CHANNEL_HOPS_ALL;
   FloodChannelScopeEntry flood_channel_scopes[FLOOD_CHANNEL_SCOPE_SLOTS]{};
   char flood_channel_direct_scopes[FLOOD_CHANNEL_DIRECT_SCOPE_SLOTS][32]{};
+  auto floodChannelScopes() -> decltype(flood_channel_scopes)& { return flood_channel_scopes; }
+  auto floodChannelScopes() const -> const decltype(flood_channel_scopes)& { return flood_channel_scopes; }
+  auto floodChannelDirectScopes() -> decltype(flood_channel_direct_scopes)& { return flood_channel_direct_scopes; }
+  auto floodChannelDirectScopes() const -> const decltype(flood_channel_direct_scopes)& { return flood_channel_direct_scopes; }
   uint8_t flood_packet_filter_blacklist_count = 0;
   uint8_t flood_packet_filter_blacklist[18][3]{};
   unsigned seeded = 0;

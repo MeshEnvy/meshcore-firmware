@@ -13,7 +13,6 @@ from test_flood_advert_psram import HEAP
 
 ROOT = Path(__file__).resolve().parents[1]
 SDK = ("#define CONFIG_IDF_TARGET_ESP32S3 1\n"
-       "#define CONFIG_SPIRAM_BOOT_INIT 1\n"
        "#define CONFIG_SPIRAM_USE_MALLOC 1\n")
 DEFINES = ["ESP32_PLATFORM=1", "BOARD_HAS_PSRAM=1", "STATION_G3_ESP32=1",
            "MESH_CLIENT_REPEATER_ONLY=1"]
@@ -112,19 +111,19 @@ static std::vector<uint8_t> snapshot(const MyMesh& mesh) {
     const auto first = static_cast<const uint8_t*>(data);
     bytes.insert(bytes.end(), first, first + size);
   };
-  add(mesh.flood_channel_scopes, sizeof(mesh.flood_channel_scopes));
-  add(mesh.flood_channel_direct_scopes, sizeof(mesh.flood_channel_direct_scopes));
-  add(mesh.flood_channel_scope_requirements, sizeof(mesh.flood_channel_scope_requirements));
+  add(mesh.floodChannelScopes(), sizeof(mesh.floodChannelScopes()));
+  add(mesh.floodChannelDirectScopes(), sizeof(mesh.floodChannelDirectScopes()));
+  add(mesh.floodChannelScopeRequirements(), sizeof(mesh.floodChannelScopeRequirements()));
   return bytes;
 }
 static void populate(MyMesh& mesh) {
   for (unsigned i = 0; i < 32; ++i)
-    std::snprintf(mesh.flood_channel_direct_scopes[i], 32, "#Scope%u", i);
+    std::snprintf(mesh.floodChannelDirectScopes()[i], 32, "#Scope%u", i);
   for (unsigned i = 0; i < 255; ++i) {
-    auto& row = mesh.flood_channel_scopes[i];
+    auto& row = mesh.floodChannelScopes()[i];
     row.target_id = i % 32 + 1;
     row.selector = FloodFilterPolicy::encodeChannelScopeTargetSelector(0, true);
-    auto& requirement = mesh.flood_channel_scope_requirements[i];
+    auto& requirement = mesh.floodChannelScopeRequirements()[i];
     requirement.key_len = 32;
     std::memset(requirement.secret, uint8_t(i + 1), sizeof(requirement.secret));
   }
@@ -132,10 +131,13 @@ static void populate(MyMesh& mesh) {
 static void exercise(const char* mode) {
   MemoryFS disk;
   {
+    const unsigned constructor_calls = heap_test::heap().external_calls + heap_test::heap().internal_calls;
     MyMesh writer(disk);
-    static_assert(sizeof(writer.flood_channel_scopes) == 255 * 36, "all scope slots");
-    static_assert(sizeof(writer.flood_channel_direct_scopes) == 32 * 32, "all direct names");
-    static_assert(sizeof(writer.flood_channel_scope_requirements) == 255 * 34, "all requirements");
+    CHECK(heap_test::heap().external_calls + heap_test::heap().internal_calls == constructor_calls);
+    writer.begin();
+    static_assert(sizeof(writer.floodChannelScopes()) == 255 * 36, "all scope slots");
+    static_assert(sizeof(writer.floodChannelDirectScopes()) == 32 * 32, "all direct names");
+    static_assert(sizeof(writer.floodChannelScopeRequirements()) == 255 * 34, "all requirements");
 #if MESH_REPEATER_PSRAM_TABLES
     static_assert(sizeof(MyMesh) < 256, "no inline fallback arrays");
     auto& heap = heap_test::heap();
@@ -153,24 +155,26 @@ static void exercise(const char* mode) {
     (void)mode;
 #endif
     CHECK(snapshot(writer) == std::vector<uint8_t>(18874, 0));
-    const void* scopes = writer.flood_channel_scopes;
-    const void* direct = writer.flood_channel_direct_scopes;
-    const void* require = writer.flood_channel_scope_requirements;
+    const void* scopes = writer.floodChannelScopes();
+    const void* direct = writer.floodChannelDirectScopes();
+    const void* require = writer.floodChannelScopeRequirements();
     populate(writer);
     const auto initial = snapshot(writer);
+    writer.begin();
+    CHECK(snapshot(writer) == initial);
     CHECK(writer.saveFloodChannelScopes());
     CHECK(writer.saveFloodChannelScopeRequirements());
     CHECK(disk.files["/scopes"].size() == 10210);
     CHECK(disk.files["/require"].size() == 8675);
     std::vector<uint8_t> expected = {'F','C','S','5',255};
-    const auto* start = reinterpret_cast<const uint8_t*>(writer.flood_channel_scopes);
+    const auto* start = reinterpret_cast<const uint8_t*>(writer.floodChannelScopes());
     expected.insert(expected.end(), start, start + 9180);
     expected.push_back(32);
-    start = reinterpret_cast<const uint8_t*>(writer.flood_channel_direct_scopes);
+    start = reinterpret_cast<const uint8_t*>(writer.floodChannelDirectScopes());
     expected.insert(expected.end(), start, start + 1024);
     CHECK(disk.files["/scopes"] == expected);
     expected = {'F','C','R','1',255};
-    start = reinterpret_cast<const uint8_t*>(writer.flood_channel_scope_requirements);
+    start = reinterpret_cast<const uint8_t*>(writer.floodChannelScopeRequirements());
     expected.insert(expected.end(), start, start + 8670);
     CHECK(disk.files["/require"] == expected);
     const auto saved = disk.files;
@@ -191,9 +195,9 @@ static void exercise(const char* mode) {
       CHECK(snapshot(writer) == initial && disk.files == saved);
     }
     disk.fail_rename = disk.short_write = false;
-    std::memset(writer.flood_channel_scopes, 0xa5, sizeof(writer.flood_channel_scopes));
-    std::memset(writer.flood_channel_direct_scopes, 0xa5, sizeof(writer.flood_channel_direct_scopes));
-    std::memset(writer.flood_channel_scope_requirements, 0xa5, sizeof(writer.flood_channel_scope_requirements));
+    std::memset(writer.floodChannelScopes(), 0xa5, sizeof(writer.floodChannelScopes()));
+    std::memset(writer.floodChannelDirectScopes(), 0xa5, sizeof(writer.floodChannelDirectScopes()));
+    std::memset(writer.floodChannelScopeRequirements(), 0xa5, sizeof(writer.floodChannelScopeRequirements()));
     CHECK(writer.loadFloodChannelScopes());
     writer.loadFloodChannelScopeRequirements();
     CHECK(snapshot(writer) == initial);
@@ -206,17 +210,17 @@ static void exercise(const char* mode) {
     CHECK(writer.loadFloodChannelScopes());
     writer.loadFloodChannelScopeRequirements();
     CHECK(snapshot(writer) == initial);
-    CHECK(scopes == writer.flood_channel_scopes && direct == writer.flood_channel_direct_scopes
-          && require == writer.flood_channel_scope_requirements);
+    CHECK(scopes == writer.floodChannelScopes() && direct == writer.floodChannelDirectScopes()
+          && require == writer.floodChannelScopeRequirements());
     // Compare the complete production file payloads between inline and PSRAM runs.
     for (const char* path : {"/scopes", "/require"}) {
       const auto& bytes = disk.files[path];
       CHECK(std::fwrite(bytes.data(), 1, bytes.size(), stdout) == bytes.size());
     }
     writer.deleteFloodChannelScope(".255", reply);
-    CHECK(!std::strcmp(reply, "OK") && writer.flood_channel_scopes[254].target_id == 0);
+    CHECK(!std::strcmp(reply, "OK") && writer.floodChannelScopes()[254].target_id == 0);
     writer.deleteFloodChannelScopeRequirement(".255", reply);
-    CHECK(!std::strcmp(reply, "OK") && writer.flood_channel_scope_requirements[254].key_len == 0);
+    CHECK(!std::strcmp(reply, "OK") && writer.floodChannelScopeRequirements()[254].key_len == 0);
     writer.deleteFloodChannelScope("all", reply);
     CHECK(!std::strcmp(reply, "OK"));
     writer.deleteFloodChannelScopeRequirement("all", reply);
@@ -225,6 +229,8 @@ static void exercise(const char* mode) {
   }
   CHECK(heap_test::heap().blocks.empty());
   MyMesh recreated(disk);
+  CHECK(heap_test::heap().blocks.empty());
+  recreated.begin();
   CHECK(snapshot(recreated) == std::vector<uint8_t>(18874, 0));
 }
 int main(int argc, char** argv) {
@@ -260,10 +266,11 @@ def production_program():
     start = header.rfind("#if MESH_REPEATER_PSRAM_TABLES", 0, location)
     declarations = header[start:header.index("#if MESH_ENABLE_FLOOD_GROUP_MODERATION", location)]
     constructor = source.index("MyMesh::MyMesh(")
-    start = source.index("#if MESH_REPEATER_PSRAM_TABLES", constructor)
-    binders = source[start:source.index("#endif", start) + len("#endif")]
-    start = source.index("  memset(flood_channel_scopes, 0, sizeof(flood_channel_scopes));", constructor)
+    start = source.index("#if !MESH_REPEATER_PSRAM_TABLES\n  memset(flood_channel_scopes", constructor)
     resets = source[start:source.index("#if MESH_ENABLE_FLOOD_GROUP_MODERATION", start)]
+    begin_start = source.index("void MyMesh::begin(FILESYSTEM *fs) {")
+    begin_start = source.index("{", begin_start) + 1
+    begin = source[begin_start:source.index("#if MESH_ENABLE_FLOOD_RULE_ENGINE", begin_start)]
     methods = [
         "bool MyMesh::loadFloodChannelScopes(", "bool MyMesh::saveFloodChannelScopes(",
         "void MyMesh::loadFloodChannelScopeRequirements(",
@@ -277,12 +284,13 @@ def production_program():
         "static bool isValidStoredFloodFilterScopeName(",
         "static bool isExactFloodChannelScopeSelector(",
     ]
-    owner = "class MyMesh {\npublic:\nMemoryFS* _fs;\n"
+    owner = ("class MyMesh {\npublic:\nMemoryFS* _fs;\n"
+             "struct Limiter { bool begin() { return true; } } flood_advert_limiter;\n")
     for name in ("FloodChannelScopeEntry", "FloodChannelScopeRequireEntry"):
         owner += body(header, "struct " + name + " {") + ";\n"
-    owner += declarations + "\nint end_marker;\n"
-    owner += "explicit MyMesh(MemoryFS& fs) : _fs(&fs),\n" + binders
-    owner += "\nend_marker(0) {\n" + resets + "}\n"
+    owner += declarations
+    owner += "explicit MyMesh(MemoryFS& fs) : _fs(&fs) {\n" + resets + "}\n"
+    owner += "void begin() {\n" + begin + "}\n"
     owner += ("bool loadFloodChannelScopes();\n"
               "bool saveFloodChannelScopes(bool empty_table=false);\n"
               "void loadFloodChannelScopeRequirements();\n"
@@ -353,11 +361,17 @@ class RepeaterScopePsramTests(unittest.TestCase):
         cases = [([], 0, True, SDK), (["ESP32_PLATFORM=1", "STATION_G3_ESP32=1"], 0, True, SDK),
             (["ESP32_PLATFORM=1", "BOARD_HAS_PSRAM=1"], 0, True, SDK),
             (DEFINES[:-1], 0, True, SDK),
+            ([define for define in DEFINES if not define.startswith("STATION_G3")], 1, True, SDK),
             (DEFINES, 1, True, SDK), (DEFINES + ["MESH_REPEATER_PSRAM_TABLES=0"], 0, True, ""),
             (["MESH_REPEATER_PSRAM_TABLES=1"], 1, False, SDK),
+            (DEFINES[:-1] + ["MESH_REPEATER_PSRAM_TABLES=1"], 1, False, SDK),
+            (DEFINES[:-1] + ["MESH_CLIENT_REPEATER_ONLY=0", "MESH_REPEATER_PSRAM_TABLES=1"],
+             1, False, SDK),
             (DEFINES + ["MESH_REPEATER_PSRAM_TABLES=2"], 2, False, SDK),
-            (DEFINES, 1, False, SDK.replace("CONFIG_IDF_TARGET_ESP32S3 1", "CONFIG_IDF_TARGET_ESP32 1")),
-            (DEFINES, 1, False, SDK.replace("CONFIG_SPIRAM_BOOT_INIT 1", "CONFIG_SPIRAM_BOOT_INIT 0")),
+            (DEFINES, 0, True, SDK.replace("CONFIG_IDF_TARGET_ESP32S3 1", "CONFIG_IDF_TARGET_ESP32 1")),
+            (DEFINES + ["MESH_REPEATER_PSRAM_TABLES=1"], 1, False,
+             SDK.replace("CONFIG_IDF_TARGET_ESP32S3 1", "CONFIG_IDF_TARGET_ESP32 1")),
+            (DEFINES, 1, True, SDK + "#define CONFIG_SPIRAM_BOOT_INIT 1\n"),
             (DEFINES, 1, False, SDK.replace("CONFIG_SPIRAM_USE_MALLOC 1", "CONFIG_SPIRAM_USE_MALLOC 0"))]
         for index, (defines, expected, success, config) in enumerate(cases):
             with self.subTest(index=index, defines=defines):

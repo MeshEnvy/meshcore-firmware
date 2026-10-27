@@ -1,7 +1,12 @@
 #pragma once
 
+#if defined(ESP32_PLATFORM) && defined(BOARD_HAS_PSRAM)
+#include <sdkconfig.h>
+#endif
+
 #ifndef MESH_REPEATER_PSRAM_TABLES
-  #if defined(STATION_G3_ESP32) && defined(ESP32_PLATFORM) && defined(BOARD_HAS_PSRAM) \
+  #if defined(ESP32_PLATFORM) && defined(BOARD_HAS_PSRAM) \
+      && defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_IDF_TARGET_ESP32S3 \
       && defined(MESH_CLIENT_REPEATER_ONLY) && MESH_CLIENT_REPEATER_ONLY
     #define MESH_REPEATER_PSRAM_TABLES 1
   #else
@@ -17,12 +22,14 @@
 #if !defined(ESP32_PLATFORM) || !defined(BOARD_HAS_PSRAM)
 #error "Repeater PSRAM tables require an ESP32 target with PSRAM support"
 #endif
+#if !defined(MESH_CLIENT_REPEATER_ONLY) || !MESH_CLIENT_REPEATER_ONLY
+#error "Repeater PSRAM tables require the repeater startup path"
+#endif
 
 #include <sdkconfig.h>
 #if !defined(CONFIG_IDF_TARGET_ESP32S3) || !CONFIG_IDF_TARGET_ESP32S3 \
-    || !defined(CONFIG_SPIRAM_BOOT_INIT) || !CONFIG_SPIRAM_BOOT_INIT \
     || !defined(CONFIG_SPIRAM_USE_MALLOC) || !CONFIG_SPIRAM_USE_MALLOC
-#error "Repeater PSRAM tables require ESP32-S3 with boot-initialized PSRAM heaps"
+#error "Repeater PSRAM tables require ESP32-S3 with PSRAM heaps"
 #endif
 
 #include <esp_heap_caps.h>
@@ -34,8 +41,8 @@
 namespace mesh {
 
 // Own only CPU data here. ISR state, locks, task stacks and DMA buffers retain
-// their existing internal storage. G3's pinned SDK initializes PSRAM-backed
-// heaps before global constructors, so tables can keep their startup lifetime.
+// their existing internal storage. Allocate from begin(), after initArduino()
+// initializes both QSPI and OPI PSRAM. Global constructors own only a pointer.
 template<typename T> class RepeaterPsramStorage {
   static_assert(std::is_trivial<T>::value,
                 "Repeater PSRAM tables require zero-initialized trivial data");
@@ -67,10 +74,14 @@ public:
 
   T* data() { return value_; }
   const T* data() const { return value_; }
-  T& require(const char* label) {
-    // Used only while binding the owner's references during construction.
-    // Allocation never moves after pointers escape to routing or persistence.
-    if (!begin(label)) abort();
+  T& require() {
+    // Never allocate through a getter: initialization must precede routing
+    // and persistence, and allocation never moves after pointers escape.
+    if (!value_) abort();
+    return *value_;
+  }
+  const T& require() const {
+    if (!value_) abort();
     return *value_;
   }
 };
