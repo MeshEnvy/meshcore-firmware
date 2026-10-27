@@ -302,3 +302,33 @@ match for identity/private key, contacts, channels, self settings, auto-add,
 tuning and custom variables. The bootloader and storage were not flashed.
 Other panel families were host-tested, not physically flashed or visually
 qualified in this step. Physical readability remains a user check.
+
+## nRF52 Full Companion flash encoding
+
+nRF52 Full Companions retain all 879 verses with a separate generated stream
+asset. The encoded corpus, stream headers and vocabulary occupy 28,787 flash bytes, compared
+with 33,399 bytes for the ESP32 block asset. Both decode to the same ASCII text.
+The existing 4 KiB scratch is reused first as circular DEFLATE history, then
+for the selected verse and vocabulary. There is no new heap buffer or retained
+cache. Long verses that cannot share the scratch with the vocabulary are stored
+literally, preserving the original 4095-byte verse capacity.
+
+Three independent streams limit a lookup to at most 16,959 encoded bytes
+through the selected verse, using the same scratch for each history. This
+makes cold Reader access slower in exchange for nRF52 flash space;
+normal packet handling does not enter this path. ESP32 keeps its existing
+independent blocks. Native tests compare every verse and output byte, exercise
+malformed inputs, and check the actual ARM stack against the existing 8 KiB
+loop stack. Linked-ELF tests retain the same text and reply checks.
+
+`reader-stream-tokens.json` is the pinned compression vocabulary. It substitutes
+only exact source byte strings, including substrings of words. Host-only Google
+Zopfli uses 1,000 iterations with a 4 KiB match window; its Apache-2.0 source,
+license and archive hash are in `zopfli4k/README.meshcore.txt`. A host C compiler
+is needed only when regenerating this asset. Ordinary firmware builds use the
+committed header and require no extra downloads.
+
+```sh
+python tools/bible/pack_reader_stream.py --check
+python test/test_reader_stream.py
+```

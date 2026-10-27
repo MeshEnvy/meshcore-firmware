@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Check canonical Reader replies and stack using the linked RAK Full ARM ELF.
 
-Requires unicorn==2.1.4. Every first page and all pages of the three longest
+Requires unicorn==2.1.4. A host C compiler accelerates the identical per-
+instruction measurement callback; otherwise Python is used. Every first page and all pages of the three longest
 verses are compared with the independently ASCII-normalized pinned source.
 --every-page reconstructs every verse. Only replyVerse and its callee frames
 are measured; the fixed caller reserve is not a physical high-water reading
@@ -14,7 +15,8 @@ from pathlib import Path
 import re
 import sys
 from firmware_elf import FirmwareElf
-from unicorn import Uc, UC_ARCH_ARM, UC_MODE_THUMB, UC_MODE_MCLASS, UC_HOOK_CODE
+from unicorn import Uc, UC_ARCH_ARM, UC_MODE_THUMB, UC_MODE_MCLASS
+from arm_instruction_meter import ArmInstructionMeter
 from unicorn import arm_const as arm
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,11 +43,7 @@ def check(path, every_page=False):
             uc.mem_write(section[3], elf.section_bytes(section))
     stop, top, reply = 0x1000, 0x2003e000, 0x20030000
     uc.mem_write(stop, b'\0\xbe')
-    state = {'minimum_sp': top, 'instructions': 0}
-    def instruction(machine, address, size, data):
-        state['minimum_sp'] = min(state['minimum_sp'], machine.reg_read(arm.UC_ARM_REG_SP))
-        state['instructions'] += 1
-    uc.hook_add(UC_HOOK_CODE, instruction)
+    meter = ArmInstructionMeter(uc)
     document = json.loads((ROOT / 'tools/bible/reader-web.json').read_text(encoding='utf-8'))
     counts = (51, 25, 36, 54, 47, 71, 53, 59, 41, 42, 57,
               50, 38, 31, 27, 33, 26, 40, 42, 31, 25)
@@ -59,6 +57,7 @@ def check(path, every_page=False):
                           reverse=True)[:3])
     maximum, calls, total_instructions, checked_bytes = 0, 0, 0, 0
     max_ref = None
+    maximum_instructions, instruction_ref, instruction_page = 0, None, None
     guard = b'\x91\xa2\xb3\xc4'
     for index, ref in enumerate(references):
         raw = document['verses'][ref]
@@ -72,7 +71,7 @@ def check(path, every_page=False):
             for register, value in zip((arm.UC_ARM_REG_R0, arm.UC_ARM_REG_R1, arm.UC_ARM_REG_R2, arm.UC_ARM_REG_R3), (selection, page, reply, capacity)):
                 uc.reg_write(register, value)
             uc.mem_write(reply-4, guard + b'?'*capacity + guard)
-            state['minimum_sp'], state['instructions'] = top, 0
+            meter.reset(top)
             uc.emu_start(elf.address(name) | 1, stop, timeout=10000000, count=10000000)
             if uc.reg_read(arm.UC_ARM_REG_PC) != stop or uc.reg_read(arm.UC_ARM_REG_SP) != top:
                 raise ValueError('Function return/stack restoration failed for ' + ref)
@@ -92,6 +91,7 @@ def check(path, every_page=False):
                 raise ValueError('Canonical linked text mismatch for ' + ref + ' page ' + str(page))
             reconstructed += fragment
             checked_bytes += len(fragment)
+            state = meter.snapshot()
             used = top - state['minimum_sp']
             if used + 1536 > 8192:
                 raise ValueError('Reader frames exceed 8 KiB with caller reserve: ' + str(used))
@@ -99,6 +99,8 @@ def check(path, every_page=False):
                 maximum, max_ref = used, ref
             calls += 1
             total_instructions += state['instructions']
+            if state['instructions'] > maximum_instructions:
+                maximum_instructions, instruction_ref, instruction_page = state['instructions'], ref, page
             if next_command is None:
                 if reconstructed != expected:
                     raise ValueError('Canonical text incomplete for ' + ref)
@@ -120,7 +122,9 @@ def check(path, every_page=False):
             'canonical_source_sha256': source_digest,
             'maximum_reply_verse_stack_bytes': maximum, 'maximum_stack_reference': max_ref,
             'caller_reserve_bytes': 1536, 'loop_stack_bytes': 8192,
-            'total_arm_instructions': total_instructions,
+            'total_arm_instructions': total_instructions, 'measurement_backend': meter.backend,
+            'maximum_reply_arm_instructions': maximum_instructions,
+            'maximum_instruction_reference': instruction_ref, 'maximum_instruction_page': instruction_page,
             'scope': 'Actual linked replyVerse instructions and callees; excludes firmware caller/ISR/task and physical high-water.'}
 
 

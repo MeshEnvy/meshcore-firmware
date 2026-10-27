@@ -11,7 +11,14 @@
 /* nRF52's Arduino recipe defaults to -Ofast, which more than doubles this
  * decoder. Keep the size policy local to tinf instead of changing MeshCore. */
 #pragma GCC push_options
+#if defined(NRF52_PLATFORM)
+#pragma GCC optimize ("Oz")
+#else
 #pragma GCC optimize ("Os")
+#endif
+#endif
+#if (defined(NRF52_PLATFORM) && COMPANION_FEATURE_READER) || defined(TINF_READER_STREAM_TEST)
+#define MESHCORE_TINF_RECORD 1
 #endif
 #define MESHCORE_TINF_IMPLEMENTATION 1
 #include "tinf/tinflate.c"

@@ -643,6 +643,10 @@ int tinf_uncompress_exact(void *dest, unsigned int *destLen,
 	return tinf_uncompress_internal(dest, destLen, source, sourceLen, 1);
 }
 
+#if defined(MESHCORE_TINF_RECORD)
+#include "reader_record.inc"
+#endif
+
 /* clang -g -O1 -fsanitize=fuzzer,address -DTINF_FUZZING tinflate.c */
 #if defined(TINF_FUZZING)
 #include <limits.h>

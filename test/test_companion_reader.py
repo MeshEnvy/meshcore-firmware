@@ -93,11 +93,22 @@ class CompanionReaderTest(unittest.TestCase):
                 return found[0]
 
             reader, decoder = frames("reader"), frames("tinf")
-            # Summing all helper frames overbounds mutually exclusive branches
-            # (tree building and block decoding), including their leaf calls.
-            decoder_bytes = sum(count for name, count in decoder.items()
-                if not name.endswith(":tinf_init") and not name.endswith(":tinf_uncompress"))
+            # Tree building and block decoding are mutually exclusive too;
+            # sum their helpers as a conservative overbound. Linear OTA and
+            # circular Reader entry points never nest, so retain the larger
+            # entry family instead of adding both independent histories.
+            linear_names = (":tinf_uncompress_internal", ":tinf_uncompress_exact",
+                            ":tinf_inflate_block_data")
+            ring_names = (":tinf_uncompress_record", ":tinf_record_block",
+                          ":tinf_record_emit", ":tinf_record_reverse")
+            linear = sum(count for name, count in decoder.items() if name.endswith(linear_names))
+            ring = sum(count for name, count in decoder.items() if name.endswith(ring_names))
+            shared = sum(count for name, count in decoder.items()
+                if not name.endswith(linear_names + ring_names + (":tinf_init", ":tinf_uncompress")))
+            self.assertGreater(ring, 0, "actual nRF52 Reader ring decoder must be measured")
+            decoder_bytes = shared + max(linear, ring)
             lookup = frame(reader, "mesh::readReaderVerse(")
+            lookup += sum(count for name, count in reader.items() if "mesh::bible::lookup(" in name)
             terminal = (frame(reader, "mesh::handleReaderCommand(")
                 + frame(reader, "::printReplyPage(") + frame(reader, "::replyVerse(")
                 + lookup + decoder_bytes)
@@ -434,7 +445,10 @@ int main() {
                                       "-I" + str(ROOT / "src"), "-I" + str(FIXTURE),
                                       str(FIXTURE / "test_reader_screen.cpp"), str(ROOT / "src/helpers/CompanionReader.cpp"),
                                       str(obj), "-o", str(binary)])
-                    self.run_checked([str(binary)])
+                    # All 879 verses are laid out forwards/backwards at 18 panel
+                    # geometries. The 4 KiB streaming nRF corpus does more
+                    # bounded decode work per cold lookup; keep every case.
+                    self.run_checked([str(binary)], timeout=600)
 
     def test_actual_reader_stream_pauses_and_decode_entrypoints_reject_during_morse(self):
         cc, cxx = shutil.which("gcc"), shutil.which("g++")
@@ -651,9 +665,9 @@ int main() {
                                       str(ROOT / "src/helpers/ui/DisplayDriver.cpp"), "-o", str(binary)])
                     self.run_checked([str(binary)])
 
-    def run_checked(self, command):
+    def run_checked(self, command, timeout=60):
         result = subprocess.run(command, capture_output=True, encoding="utf-8",
-                                errors="backslashreplace", timeout=60)
+                                errors="backslashreplace", timeout=timeout)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout
 

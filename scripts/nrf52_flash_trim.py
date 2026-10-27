@@ -48,6 +48,11 @@ TRIM_DEFINES = {
     # Keep MeshCore's own startup logo; only omit the invisible library bitmap.
     "SSD1306_NO_SPLASH": 1,
 }
+# The reviewed main runs the Arduino loop forever. Scheduler failure and every
+# normal reset/update path reset the MCU; global process-exit cleanup cannot run.
+# Unknown/custom core revisions retain the standard ABI registration behavior.
+NRF52_MAIN_NO_EXIT_SHA256 = "25c3a05b2631a6daff58048a517b8f86c33e97aa978d8b365f03a5b4fa371231"
+
 CC310_ARCHIVE_SHA256 = "97dc648d44520e47252f62c402a71f976e36d7b3aef99235bbdc4de79a928577"
 CC310_ARCHIVE = "src/cortex-m4/fpv4-sp-d16-hard/libnrf_cc310_0.9.13-no-interrupts.a"
 
@@ -149,6 +154,13 @@ def supported_cc310(framework_dir, mcu, defines):
     return archive.is_file() and hashlib.sha256(archive.read_bytes()).hexdigest() == CC310_ARCHIVE_SHA256
 
 
+def supported_program_lifetime(framework_dir):
+    if not framework_dir:
+        return False
+    main = Path(framework_dir) / "cores/nRF5/main.cpp"
+    return main.is_file() and hashlib.sha256(main.read_bytes()).hexdigest() == NRF52_MAIN_NO_EXIT_SHA256
+
+
 def companion_trim_policy(platform, mcu, src_filter, flags=(), cppdefines=()):
     """Qualify the actual Companion sources, independent of board/alias name."""
     if platform != "nordicnrf52" or not str(mcu).lower().startswith("nrf52"):
@@ -237,6 +249,9 @@ def install(build_env):
         print("nRF52 Companion flash trim: small crypto table, unused USB device classes/GPS cache/vendor splash; fonts and Reader retained")
     framework = platform.get_package_dir("framework-arduinoadafruitnrf52")
     values = flag_defines(flags, cppdefines)
+    if "MESH_NRF52_NO_PROGRAM_EXIT" not in values and supported_program_lifetime(framework):
+        build_env.AppendUnique(CPPDEFINES=[("MESH_NRF52_NO_PROGRAM_EXIT", 1)])
+        print("nRF52 reviewed firmware lifetime: omit unreachable process-exit registrations")
     if infrastructure and values.get("ST7789") is not None:
         # Keep the font license with this qualified display build, including
         # cached DFU packages. The hook independently checks the effective

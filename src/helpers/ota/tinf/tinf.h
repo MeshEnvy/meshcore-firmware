@@ -93,6 +93,13 @@ int TINFCC tinf_uncompress(void *dest, unsigned int *destLen,
 int TINFCC tinf_uncompress_exact(void *dest, unsigned int *destLen,
                                  const void *source, unsigned int sourceLen);
 
+/* MeshCore: stop after one NUL-delimited record, using the caller's 4096-byte
+ * circular history as the final contiguous record buffer. output_limit bounds
+ * total inflated bytes, including preceding records. No heap is used. */
+int TINFCC tinf_uncompress_record(void *window, unsigned int window_size,
+    unsigned int *record_length, const void *source, unsigned int source_len,
+    unsigned int output_limit, unsigned int record_index);
+
 /**
  * Decompress `sourceLen` bytes of gzip data from `source` to `dest`.
  *
