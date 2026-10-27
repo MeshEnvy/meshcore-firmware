@@ -174,6 +174,7 @@ struct CommonCLI {
   struct Profiles { unsigned loops=0; void loop() { ++loops; } } _radio_profiles;
   unsigned management=0, tx_services=0, rx_services=0;
   void loopBatteryForwarding(bool = false) {}
+  void recoverMediaMeshRegions() {}
   void loopManagement() { ++management; }
   void servicePendingTxPower() { ++tx_services; }
   void servicePendingRxSettings() { ++rx_services; }

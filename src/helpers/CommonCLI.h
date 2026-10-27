@@ -953,6 +953,11 @@ class CommonCLI {
 #endif
   SensorManager* _sensors;
   RegionMap* _region_map;
+  uint32_t _media_regions_retry_ms = 0;
+  bool _media_regions_ready = false;
+  static bool mediaMeshRegionStoreMissing(FILESYSTEM* fs);
+  void recoverMediaMeshRegions();
+  static bool updateMediaMeshScope(void* context, bool enable, bool commit);
   ClientACL* _acl;
   char tmp[COMMON_CLI_TMP_LEN];
 #if defined(NRF52_PLATFORM) && defined(OTA_SD_STORE)
@@ -1072,6 +1077,9 @@ public:
                               uint16_t preamble);
   mesh::RadioProfileCLI& radioProfiles() { return _radio_profiles; }
   const mesh::RadioProfileCLI& radioProfiles() const { return _radio_profiles; }
+  // Bind only after the role has loaded its saved regions, so boot-time
+  // radio2 scope reconciliation does not get replaced by the region image.
+  void onRegionsLoaded(FILESYSTEM* fs, bool loaded);
   mesh::MorseReplyHandoff& morseReply() { return _morse_reply; }
   const mesh::MorseReplyHandoff& morseReply() const { return _morse_reply; }
 #if MESH_ENABLE_FLEET_CONTROL

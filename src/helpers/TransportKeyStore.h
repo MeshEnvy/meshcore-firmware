@@ -19,10 +19,12 @@ class TransportKeyStore {
   int num_cache;
 
   void putCache(uint16_t id, const TransportKey& key);
-  void invalidateCache() { num_cache = 0; }
 
 public:
   TransportKeyStore() { num_cache = 0; }
+  // Region reloads can assign an existing ID to a different public name.
+  // Discard only derived/cached keys; stored private keys remain untouched.
+  void invalidateCache() { num_cache = 0; }
   void getAutoKeyFor(uint16_t id, const char* name, TransportKey& dest);
   int loadKeysFor(uint16_t id, TransportKey keys[], int max_num);
   bool saveKeysFor(uint16_t id, const TransportKey keys[], int num);

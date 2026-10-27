@@ -16,6 +16,7 @@
 #include "HostKiss.h"
 #include "PowerSavingDiagnostics.h"
 #include "HilStartupTrace.h"
+#include "FilePresence.h"
 #if defined(ESP32_PLATFORM)
 #include <helpers/esp32/CpuClockPolicy.h>
 #include <helpers/esp32/PowerTestControls.h>
@@ -166,6 +167,57 @@ static bool isGpioConfig(const char* config) {
 }
 #endif
 
+bool CommonCLI::mediaMeshRegionStoreMissing(FILESYSTEM* fs) {
+  if (!fs) return false;
+  static const char* const paths[] = {"/regions2", "/regions2.tmp", "/regions2.bak"};
+  for (const char* path : paths) {
+#if defined(ESP32_PLATFORM) || defined(RP2040_PLATFORM)
+    bool present;
+    if (!mesh::filePresence(fs, path, present) || present) return false;
+#else
+    if (fs->exists(path)) return false;
+#endif
+  }
+  return true;
+}
+
+bool CommonCLI::updateMediaMeshScope(void* context, bool enable, bool commit) {
+  auto* cli = static_cast<CommonCLI*>(context);
+  if (!cli || !cli->_region_map || !cli->_callbacks || !cli->_media_regions_ready) return false;
+  auto* region = cli->_region_map->findByName("mediamesh");
+  if (!commit) {
+    return !enable || region || cli->_region_map->getCount() < MAX_REGION_ENTRIES;
+  }
+  if (!region) {
+    if (!enable) return true;
+    region = cli->_region_map->putRegion("mediamesh", 0);
+    if (!region) return false;
+  }
+  if (enable) region->flags &= ~REGION_DENY_FLOOD;
+  else region->flags |= REGION_DENY_FLOOD;
+  // Retry storage even when the RAM flags already match: the previous attempt
+  // may have failed after this mutation. RadioProfileCLI owns paced retries.
+  return cli->_callbacks->saveRegions();
+}
+
+void CommonCLI::onRegionsLoaded(FILESYSTEM* fs, bool loaded) {
+  _management_fs = fs;
+  _media_regions_ready = fs && (loaded || mediaMeshRegionStoreMissing(fs));
+  _media_regions_retry_ms = millis() + 1000;
+  _radio_profiles.setMediaMeshScopeHandler(updateMediaMeshScope, this);
+}
+
+void CommonCLI::recoverMediaMeshRegions() {
+  if (_media_regions_ready || !_management_fs || !_region_map || !_callbacks
+      || (int32_t)(millis() - _media_regions_retry_ms) < 0) return;
+  _media_regions_retry_ms = millis() + 1000;
+  const bool loaded = _region_map->load(_management_fs);
+  if (!loaded && !mediaMeshRegionStoreMissing(_management_fs)) return;
+  _media_regions_ready = true;
+  if (loaded) _callbacks->onDefaultRegionChanged(_region_map->getDefaultRegion());
+  _radio_profiles.setMediaMeshScopeHandler(updateMediaMeshScope, this);
+}
+
 void CommonCLI::loop() {
 #if MESH_ENABLE_BATTERY_FORWARDING
   loopBatteryForwarding();
@@ -180,6 +232,7 @@ void CommonCLI::loop() {
   }
 #endif
   if (!mesh::morseTimingActive(_callbacks->getProfileRadio())) {
+    recoverMediaMeshRegions();
     servicePendingTxPower();
     servicePendingRxSettings();
     _radio_profiles.loop();

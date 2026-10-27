@@ -9,6 +9,56 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 class RadioProfileCLITest(unittest.TestCase):
+    def test_full_companion_keeps_rf_presets_without_unused_region_code(self):
+        compiler = shutil.which('g++') or shutil.which('clang++')
+        self.assertIsNotNone(compiler)
+        code = r'''
+#define main existing_cli_main
+#include "test/fixtures/radio_profiles/cli_test.cpp"
+#undef main
+int main() {
+  Fixture f;
+  MediaScope scope;
+  f.cli.setMediaMeshScopeHandler(MediaScope::update, &scope);
+  f.cmd("set radio2 mediamesh");
+  f.advance(2000);
+  assert(f.radio.p.enabled() && fabsf(f.radio.p.secondary.params.freq - 911.150f) < 0.0001f);
+#if defined(COMPANION_RADIO_FULL)
+  assert(!scope.commits && !scope.checks);
+#else
+  assert(scope.enabled && scope.durable && scope.commits);
+#endif
+  f.cmd("set radio2 off");
+  assert(!scope.enabled);
+  printf("%zu", sizeof(mesh::RadioProfileCLI));
+}
+'''
+        sizes = {}
+        with tempfile.TemporaryDirectory(prefix='profile-region-role-') as work:
+            source = Path(work)/'role.cpp'
+            source.write_text(code, encoding='ascii')
+            for full in (False, True):
+                binary = Path(work)/('companion' if full else 'infrastructure')
+                flags = ['-DCOMPANION_RADIO_FULL=1'] if full else []
+                compiled = subprocess.run([
+                    compiler, '-std=c++17', '-Os', '-ffunction-sections',
+                    '-fdata-sections', '-Wl,--gc-sections',
+                    '-DMESH_ENABLE_FLEET_CONTROL=0', '-DMESH_ENABLE_CARRIER_TOOLS=0',
+                    '-DMESH_ENABLE_MESHTEXT_CHAT=0', '-DMESH_ENABLE_HOST_KISS=0',
+                    '-DMESH_ENABLE_ETHERNET_TUNNEL=0', *flags,
+                    '-I', str(ROOT), '-I', str(ROOT/'test/fixtures/radio_profiles/mocks'),
+                    '-I', str(ROOT/'test/mocks'), '-I', str(ROOT/'src'),
+                    str(ROOT/'src/helpers/RadioProfileCLI.cpp'), str(source),
+                    '-o', str(binary)], capture_output=True, text=True, timeout=60)
+                self.assertEqual(compiled.returncode, 0, compiled.stderr)
+                run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
+                self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
+                sizes[full] = int(run.stdout)
+                image = binary.read_bytes()
+                for marker in (b'MediaMesh scope save pending', b'MediaMesh region unavailable or full'):
+                    self.assertEqual(marker in image, not full)
+        self.assertLess(sizes[True], sizes[False])
+
     def test_commands_persistence_and_timers(self):
         compiler = shutil.which('g++') or shutil.which('clang++')
         self.assertIsNotNone(compiler)
@@ -27,7 +77,7 @@ class RadioProfileCLITest(unittest.TestCase):
                     '-o', str(exe)], check=True, capture_output=True, text=True)
                 for scenario in (None, 'permanent_order', 'temporary_boundary', 'lease_creation',
                                  'save_failure', 'schedule_permutations', 'storage_isolation',
-                                 'relative_schedule', 'spectrum_overlap', 'mediamesh'):
+                                 'relative_schedule', 'spectrum_overlap', 'mediamesh', 'media_scope'):
                     with self.subTest(fleet=fleet_enabled, carrier=carrier_enabled,
                                       scenario=scenario or 'commands_persistence_and_timers'):
                         subprocess.run([str(exe)] + ([scenario] if scenario else []), check=True)

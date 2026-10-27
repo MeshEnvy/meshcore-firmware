@@ -89,6 +89,7 @@ public:
   CommonCLI() { callbacks.owner = this; }
   @PENDING_QUERY@
   void loopManagement() {}
+  void recoverMediaMeshRegions() {}
   void loop();
   void applyAndSaveTxPower(int8_t, char*);
   void servicePendingTxPower();
