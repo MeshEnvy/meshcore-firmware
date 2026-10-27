@@ -30,20 +30,34 @@ HARNESS = r'''
 #include <helpers/TempRadioReplyBarrier.h>
 #include "regulator_cli_stub.h"
 #include <helpers/CompanionFrameLimits.h>
+#include <helpers/HostKissCodec.h>
 #include <openssl/evp.h>
 
 struct RescueStream : Stream {
   std::string input, output;
-  size_t position = 0, reads = 0;
+  size_t position = 0, reads = 0, peeks = 0;
   int available() override { return position < input.size(); }
-  int read() override { ++reads; return input[position++]; }
+  int read() override { ++reads; return uint8_t(input[position++]); }
+  int peek() override { ++peeks; return available() ? uint8_t(input[position]) : -1; }
   size_t write(uint8_t value) override { output += char(value); return 1; }
 };
 static RescueStream rescue_input, rescue_output;
 
 namespace mesh {
+static bool usb_binary_owned = false;
+bool isUsbBinaryStreamOwned() { return usb_binary_owned; }
 Stream& usbTerminalPort() { return rescue_output; }
 Stream& usbCompanionPort() { return rescue_input; }
+namespace hostkiss {
+enum class Transport { Usb, Tcp };
+struct Selection { bool enabled = false; Transport transport = Transport::Usb; };
+struct Settings {
+  Selection value;
+  const Selection& selection() const { return value; }
+} settings;
+static bool usb_session = false;
+@USB_INPUT_RESERVED@
+}
 Identity::Identity() { memset(pub_key, 0, sizeof(pub_key)); }
 LocalIdentity::LocalIdentity() : Identity() {
   memset(prv_key, 0xAA, 32);
@@ -566,6 +580,41 @@ int main(int argc, char** argv) {
       compactBroadcast(trial, command.c_str());
       assert(trial.manager.freeCount() == free_before - 2);
     }
+  } else if (scenario == "rescue_binary_ownership") {
+    strcpy(node.cli_command, "fleet ");
+    rescue_input.input = "send 1 clock\r";
+    mesh::usb_binary_owned = true;
+    node.checkCLIRescueCmd();
+    assert(rescue_input.reads == 0 && rescue_input.peeks == 0);
+    assert(rescue_output.output.empty() && node.rescue_commands.empty());
+    assert(!strcmp(node.cli_command, "fleet "));
+    mesh::usb_binary_owned = false;
+    while (rescue_input.available()) node.checkCLIRescueCmd();
+    assert(node.rescue_commands == std::vector<std::string>{"fleet send 1 clock"});
+    assert(node.queued == 1);
+  } else if (scenario == "rescue_kiss_boundary") {
+    auto& selection = mesh::hostkiss::settings.value;
+    selection.enabled = true;
+    rescue_input.input = std::string(1, char(mesh::hostkiss::Codec::Fend)) + "fleet send 1 clock\r";
+    node.checkCLIRescueCmd();
+    assert(rescue_input.position == 0 && rescue_input.reads == 0 && rescue_input.peeks == 1);
+    assert(rescue_output.output.empty() && node.rescue_commands.empty() && !node.cli_command[0]);
+    // Model the binary owner taking its delimiter. Its active session must
+    // also reserve subsequent non-FEND bytes from the same production reader.
+    assert(rescue_input.read() == mesh::hostkiss::Codec::Fend);
+    mesh::hostkiss::usb_session = true;
+    node.checkCLIRescueCmd();
+    assert(rescue_input.reads == 1 && rescue_input.position == 1);
+    assert(rescue_output.output.empty() && node.rescue_commands.empty());
+    mesh::hostkiss::usb_session = false;
+    while (rescue_input.available()) node.checkCLIRescueCmd();
+    assert(node.rescue_commands == std::vector<std::string>{"fleet send 1 clock"});
+    assert(node.queued == 1);
+    assert(!mesh::hostkiss::usbInputReserved(-1));
+    selection.transport = mesh::hostkiss::Transport::Tcp;
+    assert(!mesh::hostkiss::usbInputReserved(mesh::hostkiss::Codec::Fend));
+    selection.transport = mesh::hostkiss::Transport::Usb; selection.enabled = false;
+    assert(!mesh::hostkiss::usbInputReserved(mesh::hostkiss::Codec::Fend));
   } else if (scenario == "rescue_overflow") {
     const std::string unsafe = "fleet send 1 set flood.rule.1 type=grp_txt drop hops=all in=any priority=00001 suspend=tempradio";
     assert(unsafe.size() > sizeof(node.cli_command));
@@ -1280,6 +1329,9 @@ class CompanionFleetControlTests(unittest.TestCase):
         enter = enter.replace(banner, 'mesh::usbTerminalPort().print("========= CLI Rescue =========\\n");')
         cls.fixture = fixture
         fixture.write_text(HARNESS.replace("@METHOD@", cls.production)
+                           .replace("@USB_INPUT_RESERVED@", body(
+                               (ROOT / "src/helpers/HostKiss.cpp").read_text(),
+                               "bool usbInputReserved("))
                            .replace("@SEND_HELPERS@", send_packet + "\n" + helpers)
                            .replace("@RESCUE_READER@", rescue + "\n" + reset + "\n" + enter))
         sanitizer_flags = (["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-no-pie"]
@@ -1337,6 +1389,12 @@ class CompanionFleetControlTests(unittest.TestCase):
 
     def test_rescue_overflow_discards_full_fleet_rule_and_preserves_next_crlf_command(self):
         self.scenario("rescue_overflow")
+
+    def test_rescue_does_not_read_or_echo_bytes_owned_by_binary_usb(self):
+        self.scenario("rescue_binary_ownership")
+
+    def test_rescue_leaves_kiss_delimiter_and_active_session_bytes_untouched(self):
+        self.scenario("rescue_kiss_boundary")
 
     def test_rescue_overflow_drains_bounded_chunks_and_never_executes_valid_suffix(self):
         self.scenario("rescue_split_overflow")
