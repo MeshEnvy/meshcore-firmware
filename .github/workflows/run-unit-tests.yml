@@ -992,7 +992,9 @@ jobs:
         run: python3 -B test/test_companion_bluetooth_control.py -v
 
       - name: Verify Companion Bluetooth reboot persistence
-        run: python3 -B test/test_companion_bluetooth_persistence.py -v
+        run: |
+          python3 -B test/test_companion_bluetooth_persistence.py -v
+          python3 -B test/test_companion_bluetooth_pin.py -v
 
       - name: Verify nRF52 SoftDevice LTO and persistent BLE subscriptions
         env:

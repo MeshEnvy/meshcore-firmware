@@ -6439,7 +6439,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     out_frame[i++] = FIRMWARE_VER_CODE;
     out_frame[i++] = MAX_CONTACTS / 2;   // v3+
     out_frame[i++] = MAX_GROUP_CHANNELS; // v3+
-    memcpy(&out_frame[i], &_active_ble_pin, 4);
+    // Device info reports the saved setting (0 = random/default). Pairing
+    // continues using _active_ble_pin until the requested reboot.
+    memcpy(&out_frame[i], &_prefs.ble_pin, 4);
     i += 4;
     memset(&out_frame[i], 0, 12);
     strcpy((char *)&out_frame[i], FIRMWARE_BUILD_DATE);

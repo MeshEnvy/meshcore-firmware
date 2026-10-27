@@ -18,7 +18,8 @@ struct { const char* getManufacturerName() const { return "Station G2"; } } boar
 struct ActualDeviceQuery {
   uint8_t app_target_ver = 0;
   uint32_t _active_ble_pin = 123456;
-  struct { bool isRepeatEn() const { return false; } uint8_t path_hash_mode = 2; } _prefs;
+  struct { bool isRepeatEn() const { return false; } uint8_t path_hash_mode = 2;
+           uint32_t ble_pin = 0; } _prefs;
   BaseSerialInterface* _serial;
   void dispatch(uint8_t* cmd_frame, size_t len) {
     uint8_t out_frame[MAX_FRAME_SIZE] = {};
@@ -60,6 +61,7 @@ int main() {
         if (reply_at < 0) reply_at = poll;
         assert(size == 82 && payload[1] == FIRMWARE_VER_CODE);
         assert(payload[2] == MAX_CONTACTS / 2 && payload[3] == MAX_GROUP_CHANNELS);
+        assert(payload[4] == 0 && payload[5] == 0 && payload[6] == 0 && payload[7] == 0);
         assert(strcmp(reinterpret_cast<const char*>(payload + 20), "Station G2") == 0);
         assert(payload[80] == 0 && payload[81] == 2);
       }

@@ -1038,6 +1038,12 @@ Byte values are authoritative; names are aliases. When reading firmware source, 
 | `0x1C` | `RESP_CODE_DEFAULT_FLOOD_SCOPE` | Default flood-scope data. |
 | `0x1D` | `RESP_CODE_CLI_REPLY` | Text returned by `CMD_RUN_CLI_COMMAND`. |
 
+In `RESP_CODE_DEVICE_INFO`, bytes 4–7 are the saved Bluetooth PIN setting
+as a little-endian `uint32`: `0` selects the default/random policy; a nonzero
+value is the saved custom PIN. After `CMD_SET_DEVICE_PIN` succeeds, querying
+device info returns that saved choice immediately. The active pairing PIN
+and the device's pairing screen change after reboot.
+
 ### Asynchronous push types
 
 | Value | Firmware name | Description |

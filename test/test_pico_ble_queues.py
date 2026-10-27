@@ -46,7 +46,8 @@ struct ActualDeviceQuery {
   BaseSerialInterface* _serial = nullptr;
   uint8_t app_target_ver = 0;
   uint32_t _active_ble_pin = 123456;
-  struct { bool isRepeatEn() const { return false; } uint8_t path_hash_mode = 2; } _prefs;
+  struct { bool isRepeatEn() const { return false; } uint8_t path_hash_mode = 2;
+           uint32_t ble_pin = 0; } _prefs;
   void dispatch(uint8_t* cmd_frame, size_t len) {
     uint8_t out_frame[MAX_FRAME_SIZE]{};
     @QUERY@
