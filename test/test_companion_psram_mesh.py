@@ -309,6 +309,7 @@ class CompanionPsramMeshTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         defines = dict(COMPANION_RADIO_FULL=1, DISPLAY_CLASS='SCIndicatorDisplay', UI_BUFFER_COLOR_DEPTH=4,
                        INDICATOR_TRANSPORT_RENDER_PROFILE=1, BOARD_HAS_PSRAM=1,
+                       MESH_PRIMARY_ESPNOW=1,  # Match the ESP-NOW-only Indicator variant.
                        COMPANION_EXCLUSIVE_WIFI_BLE=1, WIFI_SSID='placeholder', BLE_PIN_CODE=123456,
                        ENABLE_OTA=1, WIFI_OTA_SEEDER=1, COMPANION_FEATURE_NETWORK_TERMINAL=1,
                        MAX_CONTACTS=350, MAX_GROUP_CHANNELS=40, UI_MSG_PREVIEW_SIZE=161, OTA_SEEDER_ONLY=1)
