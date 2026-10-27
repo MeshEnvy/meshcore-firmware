@@ -109,6 +109,7 @@ bool profileIdleSleepAllowed() {
       && (!the_mesh.isDualRadioActive() || (profileIdleQueryAllowed() && the_mesh.profile_idle_allowed));
 }
 void serviceCommandInterfaces() { ++command_services; }
+bool serviceCompanionHostKissUsb() { return false; }
 void serviceUsbLoggingOnlySession() { ++usb_services; }
 void serviceUsbTerminalHostSessionReset() { ++usb_services; }
 void serviceUsbAsciiSessionDefault() { ++usb_services; }

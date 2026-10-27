@@ -269,9 +269,11 @@ namespace mesh { struct Utils {
             'flash.health',                          # Read-only flash health diagnostics
             'key.backup.transport',                  # Identity-backup transport capability
             'mqtt', 'mqtt.running',                  # MQTT connection status
+            'ota.direct',                            # Direct USB OTA session diagnostics
             'password', 'prv.key',                   # Local secret/identity reads
             'public.key',                            # Read-only public identity
             'pwrmgt.bootreason', 'role',             # Boot/build facts
+            'radio.apply',                           # Pending/applied radio diagnostics
             'radio.rxps.config',                     # Detail view of radio.rxps
             'tx.status',                             # HIL-only applied-power verification
             'wifi.status', 'wifi.ip',                # Live WiFi link state

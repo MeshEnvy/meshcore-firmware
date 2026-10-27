@@ -54,6 +54,7 @@ class T096MessageFooterProfileTest(unittest.TestCase):
         for display_class in (
             "SH1106Display",
             "SSD1306Display",
+            "HeltecV4Display",
             "ST7735Display",
             "U8g2Display",
         ):
@@ -103,6 +104,7 @@ class T096MessageFooterProfileTest(unittest.TestCase):
         for display_class in (
             "SH1106Display",
             "SSD1306Display",
+            "HeltecV4Display",
             "ST7735Display",
             "U8g2Display",
         ):
@@ -127,7 +129,7 @@ class T096MessageFooterProfileTest(unittest.TestCase):
         self.assertNotIn("MESHCORE_HAS_REAL_DISPLAY", null_macros)
         self.assertNotIn("MESHCORE_HAS_SMALL_DISPLAY", null_macros)
 
-    def test_v4_oled_is_compact_but_v4_tft_is_not(self):
+    def test_v4_display_aliases_share_the_unified_compact_driver(self):
         profile = V4_PROFILE.read_text(encoding="utf-8")
         usb = profile.split(
             "[env:heltec_v4_companion_radio_usb_femon]", 1
@@ -136,9 +138,9 @@ class T096MessageFooterProfileTest(unittest.TestCase):
             "[env:heltec_v4_tft_companion_radio_usb_femon]", 1
         )[1].split("[", 1)[0]
         self.assertIn("extends = heltec_v4_oled", usb)
-        self.assertIn("DISPLAY_CLASS=SSD1306Display", usb)
+        self.assertIn("DISPLAY_CLASS=HeltecV4Display", usb)
         self.assertIn("extends = heltec_v4_tft", tft_usb)
-        self.assertIn("DISPLAY_CLASS=ST7789LCDDisplay", tft_usb)
+        self.assertIn("DISPLAY_CLASS=HeltecV4Display", tft_usb)
 
 
 if __name__ == "__main__":

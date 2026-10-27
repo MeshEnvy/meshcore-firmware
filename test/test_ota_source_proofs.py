@@ -73,6 +73,8 @@ static_assert(OTA_PROOFGEN_SCRATCH / 4 == 4095, "odd byte limit lost usable leaf
 #include <helpers/ota/MotaSeederProto.h>
 #include <helpers/ota/OtaByteIO.h>
 using namespace mesh::ota;
+// This serial-source capacity test has no competing USB stream owner.
+namespace mesh { bool isUsbBinaryStreamOwned() { return false; } }
 @FAKE@
 class MtuSource : public SerialMotaSource {
 public:
@@ -110,7 +112,7 @@ int main() {
             built = subprocess.run([
                 os.environ.get("CXX", "g++"), "-std=c++17",
                 "-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-pie", "-no-pie",
-                "-DESP32_PLATFORM=1", "-DCOMPANION_RADIO_FULL=1",
+                "-DARDUINO=10819", "-DESP32_PLATFORM=1", "-DCOMPANION_RADIO_FULL=1",
                 "-I", str(ROOT / "src"), "-I", str(ROOT / "test/mocks"), str(source),
                 str(ROOT / "src/helpers/ota/MotaSourceSerial.cpp"), "-o", str(binary),
             ], capture_output=True, text=True, timeout=60)
