@@ -453,6 +453,149 @@ int main() {
         sensor = ram.requirements("NRF52_PLATFORM", {}, "t114_sensor")
         self.assertEqual(sensor["components"]["client_table"], 32 * 320 + 16)
 
+    def test_g3_psram_tables_reserve_full_internal_fallback_without_cutting_other_owners(self):
+        flags = {"STATION_G3_ESP32": 1, "BOARD_HAS_PSRAM": 1,
+                 "MESH_CLIENT_REPEATER_ONLY": 1, "WITH_MQTT_BRIDGE": 1,
+                 "DISPLAY_CLASS": "SH1106Display", "ADMIN_PASSWORD": "test",
+                 "ENABLE_OTA": 1, "WITH_UDP_BRIDGE": 1, "WITH_RS232_BRIDGE": "Serial2"}
+        target = "Station_G3_ESP32_repeater"
+        original = ram.requirements("ESP32_PLATFORM", {
+            **flags, "MESH_REPEATER_PSRAM_TABLES": 0}, target)
+        selected = ram.requirements("ESP32_PLATFORM", flags, target)
+        scope = 255 * 36 + 255 * 34 + 32 * 32 + 2 + 16
+        advert = 128 * 140 + 16
+        self.assertEqual(selected["components"], {
+            **original["components"], "repeater_scope_storage_fallback": scope,
+            "repeater_advert_storage_fallback": advert})
+        self.assertEqual(selected["required_heap_bytes"],
+                         original["required_heap_bytes"] + scope + advert)
+        self.assertEqual(selected["mqtt"], original["mqtt"])
+        self.assertEqual(selected["components"]["allocation_and_transient_margin"], 16384)
+        self.assertEqual(selected["components"]["wireless_stacks"], 49152)
+        self.assertEqual(ram.requirements("ESP32_PLATFORM", {
+            **flags, "MESH_REPEATER_PSRAM_TABLES": 1}, target), selected)
+
+    def test_g3_psram_table_defaults_follow_board_psram_platform_and_source_role_gates(self):
+        flags = {"STATION_G3_ESP32": 1, "BOARD_HAS_PSRAM": 1,
+                 "MESH_CLIENT_REPEATER_ONLY": 1}
+        cases = [
+            ("ESP32_PLATFORM", {k: v for k, v in flags.items() if k != "STATION_G3_ESP32"},
+             "other_s3_repeater"),
+            ("ESP32_PLATFORM", {k: v for k, v in flags.items() if k != "BOARD_HAS_PSRAM"},
+             "Station_G3_ESP32_repeater"),
+            ("ESP32_PLATFORM", {k: v for k, v in flags.items() if k != "MESH_CLIENT_REPEATER_ONLY"},
+             "Station_G3_ESP32_repeater"),
+            ("ESP32_PLATFORM", {**flags, "MESH_CLIENT_REPEATER_ONLY": 0},
+             "Station_G3_ESP32_repeater"),
+            ("ESP32_PLATFORM", {**flags, "MESH_CLIENT_REPEATER_ONLY": 0,
+                                "COMPANION_RADIO_FULL": 1},
+             "Station_G3_ESP32_companion_radio_full"),
+            ("ESP32_PLATFORM", {**flags, "MESH_CLIENT_REPEATER_ONLY": 0},
+             "Station_G3_ESP32_room_server"),
+        ]
+        for platform in ("NRF52_PLATFORM", "RP2040_PLATFORM", "STM32_PLATFORM"):
+            cases.extend((platform, {**flags, **extra}, "other_repeater")
+                         for extra in ({}, {"MESH_REPEATER_PSRAM_TABLES": 1}))
+        for platform, defines, target in cases:
+            with self.subTest(platform=platform, defines=defines, target=target):
+                policy = ram.requirements(platform, defines, target)
+                self.assertNotIn("repeater_scope_storage_fallback", policy["components"])
+                self.assertNotIn("repeater_advert_storage_fallback", policy["components"])
+                self.assertEqual(policy, ram.requirements(platform, {
+                    **defines, "MESH_REPEATER_PSRAM_TABLES": 0}, target))
+        # The source role, rather than a release filename, selects MyMesh.
+        renamed = ram.requirements("ESP32_PLATFORM", flags, "custom_board_forwarder")
+        self.assertIn("repeater_scope_storage_fallback", renamed["components"])
+        self.assertIn("repeater_advert_storage_fallback", renamed["components"])
+
+    def test_explicit_psram_repeater_table_opt_in_and_capacity_overrides_are_fully_budgeted(self):
+        flags = {"BOARD_HAS_PSRAM": 1, "MESH_CLIENT_REPEATER_ONLY": 1,
+                 "MESH_REPEATER_PSRAM_TABLES": 1}
+        cases = (
+            ({}, 255, 255, 32, 128),
+            ({"FLOOD_CHANNEL_SCOPE_SLOTS": 5, "MAX_REGION_ENTRIES": 2}, 5, 5, 2, 128),
+            ({"FLOOD_CHANNEL_SCOPE_SLOTS": 7, "FLOOD_CHANNEL_SCOPE_REQUIRE_SLOTS": 11,
+              "FLOOD_CHANNEL_DIRECT_SCOPE_SLOTS": 3, "FLOOD_ADVERT_SOURCE_SLOTS": 17},
+             7, 11, 3, 17),
+            ({"FLOOD_CHANNEL_SCOPE_SLOTS": 3, "MAX_REGION_ENTRIES": 2,
+              "FLOOD_CHANNEL_DIRECT_SCOPE_SLOTS": 9}, 3, 3, 9, 128),
+            ({"MAX_REGION_ENTRIES": 64, "FLOOD_ADVERT_SOURCE_SLOTS": 200},
+             255, 255, 64, 200),
+        )
+        for extra, scopes, required, direct, adverts in cases:
+            with self.subTest(extra=extra):
+                defines = {**flags, **extra}
+                selected = ram.requirements("ESP32_PLATFORM", defines, "other_s3_repeater")
+                original = ram.requirements("ESP32_PLATFORM", {
+                    **defines, "MESH_REPEATER_PSRAM_TABLES": 0}, "other_s3_repeater")
+                scope = scopes * 36 + required * 34 + direct * 32 + 2 + 16
+                advert = adverts * 140 + 16
+                self.assertEqual(selected["components"], {
+                    **original["components"], "repeater_scope_storage_fallback": scope,
+                    "repeater_advert_storage_fallback": advert})
+                self.assertEqual(selected["required_heap_bytes"],
+                                 original["required_heap_bytes"] + scope + advert)
+
+    def test_psram_advert_budget_excludes_portable_iram_and_rtc_storage_only(self):
+        flags = {"STATION_G3_ESP32": 1, "BOARD_HAS_PSRAM": 1,
+                 "MESH_CLIENT_REPEATER_ONLY": 1}
+        target = "Station_G3_ESP32_repeater"
+        original = ram.requirements("ESP32_PLATFORM", flags, target)
+        advert = original["components"]["repeater_advert_storage_fallback"]
+        for extra in ({"PORTABLE_MQTT_OBSERVER": 1}, {"PORTABLE_MQTT_OBSERVER": 0},
+                      {"FLOOD_ADVERT_IRAM_WORD_STORAGE": 1},
+                      {"FLOOD_ADVERT_RTC_FAST_SLOTS": 16},
+                      {"FLOOD_ADVERT_RTC_SLOW_SLOTS": 50},
+                      {"FLOOD_ADVERT_RTC_FAST_SLOTS": 50, "FLOOD_ADVERT_RTC_SLOW_SLOTS": 50}):
+            with self.subTest(extra=extra):
+                policy = ram.requirements("ESP32_PLATFORM", {**flags, **extra}, target)
+                self.assertEqual(policy["components"], {
+                    k: v for k, v in original["components"].items()
+                    if k != "repeater_advert_storage_fallback"})
+                self.assertEqual(policy["required_heap_bytes"],
+                                 original["required_heap_bytes"] - advert)
+        disabled_backends = {"FLOOD_ADVERT_IRAM_WORD_STORAGE": 0,
+                             "FLOOD_ADVERT_RTC_FAST_SLOTS": 0, "FLOOD_ADVERT_RTC_SLOW_SLOTS": 0}
+        self.assertEqual(ram.requirements("ESP32_PLATFORM", {
+            **flags, **disabled_backends}, target), original)
+
+    def test_each_psram_table_fallback_can_set_the_contiguous_allocation_bound(self):
+        flags = {"STATION_G3_ESP32": 1, "BOARD_HAS_PSRAM": 1,
+                 "MESH_CLIENT_REPEATER_ONLY": 1, "MAX_CLIENTS": 1,
+                 "FLOOD_PACKET_FILTER_SLOTS": 1, "MAX_RECENT_REPEATERS": 0}
+        for extra, name in (({}, "repeater_scope_storage_fallback"),
+                            ({"FLOOD_ADVERT_SOURCE_SLOTS": 200},
+                             "repeater_advert_storage_fallback")):
+            with self.subTest(extra=extra):
+                policy = ram.requirements("ESP32_PLATFORM", {**flags, **extra}, "g3_repeater")
+                self.assertEqual(policy["required_contiguous_bytes"], policy["components"][name])
+                self.assertGreater(policy["required_contiguous_bytes"], 16384)
+
+    def test_g3_psram_fallback_elf_gate_rejects_old_budget_and_enforces_exact_total(self):
+        flags = {"STATION_G3_ESP32": 1, "BOARD_HAS_PSRAM": 1,
+                 "MESH_CLIENT_REPEATER_ONLY": 1, "WITH_MQTT_BRIDGE": 1}
+        target = "Station_G3_ESP32_repeater"
+        previous = {**flags, "MESH_REPEATER_PSRAM_TABLES": 0}
+        old = ram.requirements("ESP32_PLATFORM", previous, target)["required_heap_bytes"]
+        required = ram.requirements("ESP32_PLATFORM", flags, target)["required_heap_bytes"]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "firmware.elf"
+            report = Path(temporary) / "firmware.memory.json"
+            for capacity, accepted in ((old, False), (required - 1, False), (required, True)):
+                with self.subTest(capacity=capacity), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    esp_fixture(path, modern=True, internal_length=capacity + 0x4000)
+                    self.assertEqual(ram.check_firmware(path, "ESP32_PLATFORM", "esp32s3",
+                                                       previous, target), 0)
+                    status = ram.check_firmware(path, "ESP32_PLATFORM", "esp32s3",
+                                                flags, target, report)
+                    result = json.loads(report.read_text())
+                    self.assertEqual(status == 0, accepted)
+                    self.assertEqual(result["passed"], accepted)
+                    self.assertEqual(result["available_internal_bytes"], capacity)
+                    self.assertEqual(result["required_heap_bytes"], required)
+                    self.assertEqual(result["components"]["repeater_scope_storage_fallback"], 18892)
+                    self.assertEqual(result["components"]["repeater_advert_storage_fallback"], 17936)
+
     def test_browser_terminal_reserves_internal_session_and_psram_aware_scrollback(self):
         defines = {"ENABLE_USB_INTERFACE": 1, "WIFI_SSID": "", "DISPLAY_CLASS": "SSD1306Display"}
         base = ram.requirements("ESP32_PLATFORM", {**defines, "WEBCONFIG_DISABLED": 1}, "v4_companion")

@@ -354,6 +354,27 @@ def requirements(platform, defines, target):
         engine = integer(defines, "MESH_ENABLE_FLOOD_RULE_ENGINE", int(platform != "STM32_PLATFORM"))
         slots = integer(defines, "FLOOD_PACKET_FILTER_SLOTS", 63 if engine else 16)
         parts["flood_filter_table"] = slots * (304 if engine else 40) + 16
+        psram_tables_default = int(platform == "ESP32_PLATFORM" and qualified_repeater
+                                   and "STATION_G3_ESP32" in defines
+                                   and "BOARD_HAS_PSRAM" in defines)
+        if platform == "ESP32_PLATFORM" and integer(
+                defines, "MESH_REPEATER_PSRAM_TABLES", psram_tables_default):
+            # The data normally lives in PSRAM, but all capacities also need
+            # safe internal fallback. Moving it out of BSS cannot erase that
+            # requirement or relax startup admission when PSRAM is missing.
+            scopes = integer(defines, "FLOOD_CHANNEL_SCOPE_SLOTS",
+                             31 if "CONFIG_IDF_TARGET_ESP32" in defines else 255)
+            required = integer(defines, "FLOOD_CHANNEL_SCOPE_REQUIRE_SLOTS", scopes)
+            direct = integer(defines, "FLOOD_CHANNEL_DIRECT_SCOPE_SLOTS",
+                             min(scopes, integer(defines, "MAX_REGION_ENTRIES", 32)))
+            parts["repeater_scope_storage_fallback"] = (
+                scopes * 36 + required * 34 + direct * 32 + 2 + 16)
+            if ("PORTABLE_MQTT_OBSERVER" not in defines
+                    and not integer(defines, "FLOOD_ADVERT_IRAM_WORD_STORAGE", 0)
+                    and not integer(defines, "FLOOD_ADVERT_RTC_FAST_SLOTS", 0)
+                    and not integer(defines, "FLOOD_ADVERT_RTC_SLOW_SLOTS", 0)):
+                parts["repeater_advert_storage_fallback"] = (
+                    integer(defines, "FLOOD_ADVERT_SOURCE_SLOTS", 128) * 140 + 16)
     if "room_server" in target.lower() and integer(
             defines, "MESH_ENABLE_ROOM_FLOOD_RULE_ENGINE", 0):
         # FloodRuleEngine keeps all 31 persisted rules in one startup heap
@@ -473,6 +494,7 @@ def requirements(platform, defines, target):
     if "expanded_message_previews" in parts:
         largest = max(largest, 8192 + parts["expanded_message_previews"])
     for name in ("client_table", "flood_filter_table", "room_flood_rule_table", "neighbor_history",
+                 "repeater_scope_storage_fallback", "repeater_advert_storage_fallback",
                  "solarxiao_voltage_history",
                  "ota_context", "screen_objects_and_history", "ota_encoder_workspace",
                  "ota_generic_source_buffers", "ethernet_or_external_ota_workspaces", "ota_target_name_lookup",

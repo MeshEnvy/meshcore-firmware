@@ -886,6 +886,12 @@ send retries only that broker every 30 seconds; successful brokers keep their
 normal status interval. Each slot has a stable, distinct client ID, including
 when two slots point at the same broker.
 
+G3 also places the SDK's two padded WebSocket buffers per initialized MQTT
+client in PSRAM, saving 2,050 internal bytes per client when PSRAM allocation
+succeeds. G3 repeaters move their complete scope tables and advert-limit
+history there too. Capacities, saved formats, task stacks and DMA reserves
+remain unchanged; safe internal fallback is retained.
+
 Outbox diagnostics are cached by the network owner, so `get mqtt.stats` does
 not wait for an SDK mutex held by a network write. `rec:N/write` records a
 failed-write recovery; `no errors` describes the current connected session,

@@ -3707,6 +3707,11 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
     : mesh::Mesh(radio, ms, rng, rtc, *createObserverPacketManager(32), tables),
       region_map(key_store), temp_map(key_store),
       _cli(board, rtc, sensors, region_map, acl, &_prefs, this),
+#if MESH_REPEATER_PSRAM_TABLES
+      flood_channel_scopes(flood_channel_storage.require("channel scope tables").scopes),
+      flood_channel_direct_scopes(flood_channel_storage.require("channel scope tables").direct),
+      flood_channel_scope_requirements(flood_channel_storage.require("channel scope tables").requirements),
+#endif
       telemetry(MAX_PACKET_PAYLOAD - 4),
       discover_limiter(4, 120),  // max 4 every 2 minutes
       anon_limiter(4, 180)   // max 4 every 3 minutes
