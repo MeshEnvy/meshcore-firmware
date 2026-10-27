@@ -38,11 +38,12 @@ struct MyMesh:BaseChatMesh {
   void dispatch(size_t len){
     response=-1;
 #if FULL
-    @BINARY@
+    if(handleDirectOtaFrame(len)) return;
 #else
     (void)len;
 #endif
   }
+  bool handleDirectOtaFrame(size_t len);
   void mode(int value){cmd_frame[0]=52;cmd_frame[1]=value;memcpy(cmd_frame+2,contact.id.pub_key,32);dispatch(34);}
   bool command(const char* command,uint32_t sender_timestamp,char* reply){
     const size_t reply_capacity=160;
@@ -65,6 +66,7 @@ struct MyMesh:BaseChatMesh {
   }
 };
 @CALLBACKS@
+@BINARY@
 int main(){
   MyMesh m;char reply[160]{};
   m.mode(1);
@@ -117,13 +119,14 @@ class CompanionDirectAdminGuardTest(unittest.TestCase):
         if compiler is None:
             self.skipTest("a host C++17 compiler is required")
         source = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text()
-        binary = extract_braced(source, "if (cmd_frame[0] == CMD_SEND_PATH_DISCOVERY_REQ\n             && len == 2 + PUB_KEY_SIZE").replace("#endif", "")
+        binary = extract_braced(source, "bool MyMesh::handleDirectOtaFrame(")
         getter = extract_braced(source, 'if (sender_timestamp == 0 && !strcmp(command, "get ota.direct"))')
         callbacks = "\n".join(extract_braced(source, signature) for signature in (
             "uint8_t MyMesh::getContactTxRadio(", "void MyMesh::onPeerDataRecv(", "bool MyMesh::onPeerPathRecv("))
         raw = extract_braced(source, "if (pkt->getPayloadType() == PAYLOAD_TYPE_OTA\n            && _ota_direct_admin.active")
         self.assertIn("_ota_direct_admin.beginLogin(recipient->id", source)
-        self.assertIn("&& len >= 2 + PUB_KEY_SIZE && cmd_frame[1] == 0)", source)
+        self.assertIn("if (handleDirectOtaFrame(len)) return;", source)
+        self.assertIn("&& (!COMPANION_FEATURE_DIRECT_OTA_ADMIN || cmd_frame[1] == 0))", source)
         mesh = (ROOT / "src/Mesh.cpp").read_text()
         start = mesh.index("Packet* Mesh::createPathReturn(const uint8_t* dest_hash,")
         end = mesh.index("\nPacket* Mesh::createDatagram(", start)
@@ -134,7 +137,7 @@ class CompanionDirectAdminGuardTest(unittest.TestCase):
             folder = Path(folder)
             (folder / "Mesh.h").write_text(stub)
             for full in (0, 1):
-                code = HARNESS.replace("@BINARY@", binary).replace("@GETTER@", getter)
+                code = HARNESS.replace("@BINARY@", binary if full else "").replace("@GETTER@", getter)
                 code = code.replace("@RAW_ROUTE@", raw)
                 code = code.replace("@CALLBACKS@", callbacks if full else "")
                 (folder / "test.cpp").write_text(code)
@@ -144,8 +147,33 @@ class CompanionDirectAdminGuardTest(unittest.TestCase):
                                          str(folder / "test.cpp"), "-o", str(executable)],
                                         capture_output=True, text=True, timeout=60)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
                 result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_direct_helper_defaults_preserve_existing_rak_full_features(self):
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        if compiler is None:
+            self.skipTest("a host C++ preprocessor is required")
+        full = ["COMPANION_RADIO_FULL=1", "ENABLE_OTA=1", "ENABLE_USB_INTERFACE=1", "BLE_PIN_CODE=123456"]
+        cases = (("esp32", full + ["ESP32_PLATFORM=1", "WIFI_SSID=fixture"], 1, 1),
+                 ("nrf52", full + ["NRF52_PLATFORM=1"], 1, 1),
+                 ("rak4631", full + ["NRF52_PLATFORM=1", "RAK_4631=1"], 0, 1),
+                 ("reduced", ["NRF52_PLATFORM=1", "RAK_4631=1"], 0, 0),
+                 ("rak override", full + ["NRF52_PLATFORM=1", "RAK_4631=1", "COMPANION_FEATURE_DIRECT_OTA_ADMIN=1"], 1, 1))
+        code = ('#include "examples/companion_radio/CompanionFeatures.h"\n'
+                'DIRECT_HELPER COMPANION_FEATURE_DIRECT_OTA_ADMIN\n'
+                'EXISTING_OTA COMPANION_FEATURE_OTA_CLI\n'
+                'EXISTING_TEMP COMPANION_FEATURE_TEMP_RADIO\n')
+        for name, flags, direct, existing in cases:
+            with self.subTest(profile=name):
+                result = subprocess.run([compiler, "-E", "-P", "-x", "c++", "-I" + str(ROOT),
+                                         "-I" + str(ROOT / "src"), *["-D" + flag for flag in flags], "-"],
+                                        input=code, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f"DIRECT_HELPER {direct}", result.stdout)
+                self.assertIn(f"EXISTING_OTA {existing}", result.stdout)
+                self.assertIn(f"EXISTING_TEMP {existing}", result.stdout)
 
 
 if __name__ == "__main__":

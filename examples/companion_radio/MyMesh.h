@@ -64,7 +64,7 @@ namespace mesh { class BeaconManager; }
 #endif
 #include <helpers/TrackerProtocol.h>
 #include <helpers/CompanionMotaControl.h>
-#if COMPANION_FEATURE_OTA_CLI
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
 #include <helpers/CompanionDirectAdminGuard.h>
 #endif
 #include <helpers/IdentityStore.h>
@@ -530,7 +530,7 @@ protected:
   bool onContactOverwrite(const ContactInfo& contact) override;
   void onContactReferenceChanged(const ContactInfo* previous, ContactInfo* replacement) override;
   bool onContactPathRecv(ContactInfo& from, uint8_t* in_path, uint8_t in_path_len, uint8_t* out_path, uint8_t out_path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) override;
-#if COMPANION_FEATURE_OTA_CLI
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
   uint8_t getContactTxRadio(const mesh::Identity& peer) const override;
   void onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_idx,
                       const uint8_t* secret, uint8_t* data, size_t len) override;
@@ -647,8 +647,9 @@ public:
   bool canRecoverUsbLogging() const;
 
 private:
-#if COMPANION_FEATURE_OTA_CLI
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
   mesh::CompanionDirectAdminGuard _ota_direct_admin;
+  bool handleDirectOtaFrame(size_t len);
 #endif
 #if MESH_ENABLE_FLEET_CONTROL
   // Exact ownership of the optional radio copy during two-part admission.

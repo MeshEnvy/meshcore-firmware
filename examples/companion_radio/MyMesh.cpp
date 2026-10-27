@@ -2526,7 +2526,7 @@ uint8_t MyMesh::handleTrackerStatusRequest(const ContactInfo& from, uint32_t tag
 }
 #endif
 
-#if COMPANION_FEATURE_OTA_CLI
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
 uint8_t MyMesh::getContactTxRadio(const mesh::Identity& peer) const {
   return _ota_direct_admin.selected(peer, _ms->getMillis())
       ? static_cast<uint8_t>(mesh::RADIO_TX_PRIMARY) : BaseChatMesh::getContactTxRadio(peer);
@@ -6239,6 +6239,30 @@ void MyMesh::resetUsbHostSessionInput() {
   }
 }
 
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
+// Keep the opt-in USB maintenance modes out of the large Binary dispatcher.
+__attribute__((noinline, cold)) bool MyMesh::handleDirectOtaFrame(size_t len) {
+  if (cmd_frame[0] != CMD_SEND_PATH_DISCOVERY_REQ || len != 2 + PUB_KEY_SIZE
+      || cmd_frame[1] < 1 || cmd_frame[1] > 3) return false;
+  // Mode 0 remains flood path discovery. Stock firmware rejects these reserved
+  // modes without transmitting; every maintenance frame here is DIRECT0.
+  ContactInfo* recipient = lookupContactByPubKey(&cmd_frame[2], PUB_KEY_SIZE);
+  if (!recipient) {
+    writeErrFrame(ERR_CODE_NOT_FOUND);
+  } else if (cmd_frame[1] == 1) {
+    _ota_direct_admin.arm(recipient->id, recipient->getSharedSecret(self_id), _ms->getMillis());
+    writeOKFrame();
+  } else if (cmd_frame[1] == 2) {
+    if (_ota_direct_admin.sendReturnPath(*this, recipient->id, _ms->getMillis())) writeOKFrame();
+    else writeErrFrame(ERR_CODE_BAD_STATE);
+  } else {
+    if (_ota_direct_admin.matches(recipient->id, _ms->getMillis())) _ota_direct_admin.clear();
+    writeOKFrame();
+  }
+  return true;
+}
+#endif
+
 void MyMesh::handleCmdFrame(size_t len) {
   if (len == 0) {
     writeErrFrame(ERR_CODE_ILLEGAL_ARG);
@@ -6259,12 +6283,16 @@ void MyMesh::handleCmdFrame(size_t len) {
 #endif
 
   servicePendingSerialReply();
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
+  if (handleDirectOtaFrame(len)) return;
+#endif
   const bool starts_long_lived_request =
       (cmd_frame[0] == CMD_SEND_LOGIN && len >= 1 + PUB_KEY_SIZE)
       || (cmd_frame[0] == CMD_SEND_ANON_REQ && len > 1 + PUB_KEY_SIZE)
       || (cmd_frame[0] == CMD_SEND_STATUS_REQ && len >= 1 + PUB_KEY_SIZE)
       || (cmd_frame[0] == CMD_SEND_PATH_DISCOVERY_REQ
-          && len >= 2 + PUB_KEY_SIZE && cmd_frame[1] == 0)
+          && len >= 2 + PUB_KEY_SIZE
+          && (!COMPANION_FEATURE_DIRECT_OTA_ADMIN || cmd_frame[1] == 0))
       || (cmd_frame[0] == CMD_SEND_TELEMETRY_REQ
           && len >= 4 + PUB_KEY_SIZE)
       || (cmd_frame[0] == CMD_SEND_BINARY_REQ
@@ -7054,7 +7082,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     char *password = (char *)&cmd_frame[1 + PUB_KEY_SIZE];
     cmd_frame[len] = 0; // ensure null terminator in password
     if (recipient) {
-#if COMPANION_FEATURE_OTA_CLI
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
       _ota_direct_admin.beginLogin(recipient->id, _ms->getMillis());
 #endif
       if (!beginPendingRequest(mesh::CompanionDelayedReplies::Login, *recipient)) {
@@ -7110,25 +7138,6 @@ void MyMesh::handleCmdFrame(size_t len) {
     } else {
       writeErrFrame(ERR_CODE_NOT_FOUND); // contact not found
     }
-#if COMPANION_FEATURE_OTA_CLI
-  } else if (cmd_frame[0] == CMD_SEND_PATH_DISCOVERY_REQ
-             && len == 2 + PUB_KEY_SIZE && cmd_frame[1] >= 1 && cmd_frame[1] <= 3) {
-    // Mode 0 remains the existing flood path discovery. These opt-in modes
-    // never emit flood RF and stock firmware rejects them without sending RF.
-    ContactInfo* recipient = lookupContactByPubKey(&cmd_frame[2], PUB_KEY_SIZE);
-    if (!recipient) {
-      writeErrFrame(ERR_CODE_NOT_FOUND);
-    } else if (cmd_frame[1] == 1) {
-      _ota_direct_admin.arm(recipient->id, recipient->getSharedSecret(self_id), _ms->getMillis());
-      writeOKFrame();
-    } else if (cmd_frame[1] == 2) {
-      if (_ota_direct_admin.sendReturnPath(*this, recipient->id, _ms->getMillis())) writeOKFrame();
-      else writeErrFrame(ERR_CODE_BAD_STATE);
-    } else {
-      if (_ota_direct_admin.matches(recipient->id, _ms->getMillis())) _ota_direct_admin.clear();
-      writeOKFrame();
-    }
-#endif
   } else if (cmd_frame[0] == CMD_SEND_PATH_DISCOVERY_REQ && len >= 2 + PUB_KEY_SIZE && cmd_frame[1] == 0) {
     uint8_t *pub_key = &cmd_frame[2];
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
@@ -7841,7 +7850,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     if (pkt) {
       uint8_t priority = cmd_frame[1];
       if (tryParsePacket(pkt, &cmd_frame[2], len - 2)) {
-#if COMPANION_FEATURE_OTA_CLI
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
         if (pkt->getPayloadType() == PAYLOAD_TYPE_OTA
             && _ota_direct_admin.active(_ms->getMillis())) {
           pkt->tx_radio = mesh::RADIO_TX_PRIMARY;
@@ -10827,7 +10836,7 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
   size_t reply_capacity = 160;
   while (*command == ' ' || *command == '\t') command++;
 
-#if COMPANION_FEATURE_OTA_CLI
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
   if (sender_timestamp == 0 && !strcmp(command, "get ota.direct")) {
     snprintf(reply, reply_capacity, "> ota.direct v=1 active=%u busy=%u",
              _ota_direct_admin.active(_ms->getMillis()) ? 1 : 0,

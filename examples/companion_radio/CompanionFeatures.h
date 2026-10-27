@@ -74,6 +74,15 @@
 #ifndef COMPANION_FEATURE_OTA_CLI
   #define COMPANION_FEATURE_OTA_CLI 0
 #endif
+// Keep RAK4631 Full's existing feature set inside its application boundary.
+// Other Full boards expose the new USB OTA admin helper by default.
+#ifndef COMPANION_FEATURE_DIRECT_OTA_ADMIN
+  #if defined(NRF52_PLATFORM) && defined(RAK_4631)
+    #define COMPANION_FEATURE_DIRECT_OTA_ADMIN 0
+  #else
+    #define COMPANION_FEATURE_DIRECT_OTA_ADMIN COMPANION_FEATURE_OTA_CLI
+  #endif
+#endif
 #ifndef COMPANION_FEATURE_NETWORK_TERMINAL
   #define COMPANION_FEATURE_NETWORK_TERMINAL 0
 #endif
@@ -92,6 +101,9 @@
 
 #if COMPANION_FEATURE_OTA_CLI && !defined(ENABLE_OTA)
   #error "COMPANION_FEATURE_OTA_CLI requires ENABLE_OTA"
+#endif
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN && !COMPANION_FEATURE_OTA_CLI
+  #error "COMPANION_FEATURE_DIRECT_OTA_ADMIN requires COMPANION_FEATURE_OTA_CLI"
 #endif
 
 #if COMPANION_FEATURE_NETWORK_TERMINAL && !defined(ENABLE_USB_INTERFACE)

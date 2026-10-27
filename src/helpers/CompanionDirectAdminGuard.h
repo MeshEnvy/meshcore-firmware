@@ -42,8 +42,11 @@ public:
   void beginLogin(const Identity& peer, uint32_t now) {
     if (matches(peer, now)) login_ = true;
   }
+  __attribute__((noinline)) bool matchesSecret(const uint8_t* secret, uint32_t now) {
+    return active(now) && secret && !memcmp(secret_, secret, sizeof(secret_));
+  }
   bool accepts(const Packet* packet, uint8_t type, const uint8_t* secret, uint32_t now) {
-    if (!active(now) || !secret || memcmp(secret_, secret, sizeof(secret_))) return true;
+    if (!matchesSecret(secret, now)) return true;
     if (!packet || packet->getPathHashCount() != 0) return false;
     if (packet->isRouteDirect()) return true;
     // Unknown ACL return paths cause old servers to flood the first login
@@ -51,8 +54,9 @@ public:
     return login_ && type == PAYLOAD_TYPE_RESPONSE && packet->isRouteFlood();
   }
   bool acceptsPath(const Packet* packet, const uint8_t* secret, uint8_t path_len, uint32_t now) {
-    if (!active(now) || !secret || memcmp(secret_, secret, sizeof(secret_))) return true;
-    return !(path_len & 63) && accepts(packet, PAYLOAD_TYPE_PATH, secret, now);
+    if (!matchesSecret(secret, now)) return true;
+    return !(path_len & 63) && packet && packet->getPathHashCount() == 0
+        && packet->isRouteDirect();
   }
   bool sendReturnPath(Mesh& mesh, const Identity& peer, uint32_t now) {
     if (!matches(peer, now)) return false;

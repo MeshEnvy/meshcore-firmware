@@ -30,6 +30,10 @@ direct admin guard. An older Full Companion may serve OTA files but cannot
 provide this guarded admin connection; the wizard will ask for a source
 firmware upgrade instead of proceeding with that connection.
 
+For this wizard, use an ESP32 source instead of RAK4631 Full. The RAK image's
+current flash limit prevents adding the new direct admin helper. RAK4631
+Repeaters and Room Servers remain supported destinations.
+
 The source and destination must already use the same main-channel settings
 and hear each other directly. The destination needs working LoRa OTA support
 and its admin password. A stock nRF52 bootloader may need a matching local

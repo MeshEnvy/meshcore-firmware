@@ -417,7 +417,9 @@ class CompanionTransport:
         try:
             await self._guard_mode(key, 1)
         except CompanionError as exc:
-            raise CompanionError("The USB radio needs current Full Companion firmware with the zero-hop OTA admin guard") from exc
+            raise CompanionError(
+                "The USB radio needs current Full Companion firmware with the zero-hop OTA admin guard. "
+                "RAK4631 Full cannot fit this helper; use an ESP32 Full Companion or USB Repeater.") from exc
         self._guarded_key = key
         if key not in self._authenticated:
             # The library's send_login_sync accepts any login-success
