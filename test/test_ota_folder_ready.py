@@ -21,6 +21,9 @@ class OtaFolderReadyTest(unittest.TestCase):
             self.assertIsNotNone(match)
             defines.append("#define " + name + " " + match[1])
         source = (ROOT / "test/fixtures/ota_folder_ready.cpp").read_text(encoding="ascii")
+        # This folder-readiness fixture has no competing raw USB host session.
+        # Keep the real Arduino declaration visible to MotaSourceSerial.cpp.
+        source += "\nnamespace mesh { bool isUsbBinaryStreamOwned() { return false; } }\n"
         source = source.replace("// @PRODUCTION_DEFINES@", "\n".join(defines))
         ready = extract_braced(production, "if (ota::ota_ctx().manager.takeSourceReadyAnnouncement())")
         source = source.replace("// @PRODUCTION_READY@", "" if missing_ready_trigger else ready)
@@ -38,7 +41,8 @@ class OtaFolderReadyTest(unittest.TestCase):
                 with self.subTest(definitions=definitions):
                     sources = ("OtaManager.cpp", "OtaProtocol.cpp", "MotaContainer.cpp", "MerkleTree.cpp", "MotaSourceSerial.cpp")
                     result = subprocess.run([compiler, "-std=c++17", "-O1", *sanitizers,
-                        "-DENABLE_OTA=1", "-DOTA_SEEDER_ONLY=1", *["-D" + value for value in definitions],
+                        "-DARDUINO=10819", "-DENABLE_OTA=1", "-DOTA_SEEDER_ONLY=1",
+                        *["-D" + value for value in definitions],
                         "-I", str(ROOT / "src"), "-I", str(ROOT / "test/mocks"), str(cpp),
                         *[str(ROOT / "src/helpers/ota" / name) for name in sources],
                         str(ROOT / "src/Utils.cpp"), "-o", str(executable)], capture_output=True, text=True, timeout=90)

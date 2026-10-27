@@ -17,7 +17,10 @@ class SharedMotaQueueTest(unittest.TestCase):
     def test_wireless_paper_wifi_listener_and_transfers_share_only_when_needed(self):
         self.run_transfer_test("ESP32_PLATFORM")
 
-    def run_transfer_test(self, platform):
+    def test_c3_rtc_retained_queue_preserves_real_ota_and_wifi_transfers(self):
+        self.run_transfer_test("ESP32_PLATFORM", rtc=True)
+
+    def run_transfer_test(self, platform, rtc=False):
         with tempfile.TemporaryDirectory(prefix="meshcore-mota-queue-") as temp:
             binary = Path(temp) / "transfer"
             tinf = Path(temp) / "tinf.o"
@@ -44,6 +47,30 @@ class SharedMotaQueueTest(unittest.TestCase):
                 sources += ["src/helpers/esp32/WiFiOtaSeeder.cpp",
                             "src/helpers/ota/MotaSourceSerial.cpp",
                             "src/helpers/ota/FolderMotaStore.cpp"]
+            if rtc:
+                fixture = ROOT / "test/fixtures/shared_mota_queue"
+                source = (fixture / "test_shared_mota_queue.cpp").read_text()
+                source = source[:source.index("  Queue full;")] + "}\n"
+                source = source.replace("256", "224")
+                source = source.replace("struct Queue {", (
+                    "#include <helpers/CompanionRtcQueue.h>\n"
+                    "alignas(4) RTC_FAST_ATTR Frame rtc_frames[32];\nstruct Queue {"))
+                source = source.replace(
+                    "mesh::BorrowableFrameBuffer<Frame, 224, 128, OtaContext> buffer;",
+                    "mesh::BorrowableFrameBuffer<Frame, 224, 128, OtaContext, "
+                    "mesh::CompanionRtcQueue<Frame, 128>> buffer;\n"
+                    "  Queue() : buffer(rtc_frames, nullptr) {}")
+                (Path(temp) / "test_shared_rtc.cpp").write_text(source)
+                (Path(temp) / "test_wifi_shared_queue.h").write_text(
+                    (fixture / "test_wifi_shared_queue.h").read_text().replace("256", "224"))
+                (Path(temp) / "sdkconfig.h").write_text("#pragma once\n")
+                (Path(temp) / "esp_attr.h").write_text(
+                    '#pragma once\n#define RTC_FAST_ATTR __attribute__((section(".rtc.force_fast.test")))\n')
+                sources[0] = str(Path(temp) / "test_shared_rtc.cpp")
+                flags += ["-DCOMPANION_RTC_FAST_OFFLINE_FRAMES=32",
+                          "-DCONFIG_IDF_TARGET_ESP32C3=1",
+                          "-DCONFIG_ESP_SYSTEM_ALLOW_RTC_FAST_MEM_AS_HEAP=1",
+                          "-I", str(fixture)]
             built = subprocess.run([
                 "c++", "-std=c++17", "-fsanitize=address,undefined", "-g",
                 *flags, "-DOTA_SEEDER_ONLY=1",

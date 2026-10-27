@@ -43,13 +43,24 @@ class HwcdcLoggingWatchdogTests(unittest.TestCase):
         cls.companion_methods = "\n".join(body(companion, signature) for signature in (
             "static void clearUsbTerminalLine()", "static void cancelUsbSerialOperations()",
             "static void resetUsbTerminalHostSession()", "static void serviceUsbTerminalHostSessionReset()"))
-        cls.ordinary_methods = ""
+        # There is no functional text backlog in the peripheral fake. Keep
+        # the actual role calls and subsequent session-completion gate below.
+        cls.ordinary_methods = "namespace mesh { void serviceUsbTerminalPort() {} }\n"
         for role in ("simple_repeater", "simple_room_server", "simple_sensor"):
             text = (ROOT / "examples" / role / "main.cpp").read_text()
-            start = text.index("  if (mesh::takeUsbTerminalSessionReset())")
+            # The reset body now contains nested feature guards. Extract the
+            # complete compound statement, preserving every guarded operation.
+            reset = body(text, "  if (mesh::takeUsbTerminalSessionReset())")
+            start = text.index("  if (usb_ready) mesh::serviceUsbTerminalPort();")
             stop = text.index("\n#endif", start)
+            completion = text[start:stop]
+            # This separate block follows optional KISS admission in the real
+            # loop. Do not silently truncate it if nested guards are added.
+            assert "#if" not in completion
+            assert "mesh::tryCompleteUsbTerminalSessionReset()" in completion
             cls.ordinary_methods += ("static void service_" + role + "() {\n"
-                "  bool usb_ready = true;\n" + text[start:stop] + "\n  (void)usb_ready;\n}\n")
+                "  bool usb_ready = true;\n" + reset + "\n" + completion
+                + "\n  (void)usb_ready;\n}\n")
         cls.binaries = {(backport, ota): cls.compile_backend(backport, ota)
                         for backport in (0, 1) for ota in (False, True)}
 

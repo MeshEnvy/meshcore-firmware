@@ -67,6 +67,9 @@ def mqtt_requirements(defines):
     # slots are lazy and each attempt must pass the production admission guard.
     startup = MQTT_STARTUP_ALLOWANCE + max(0, worker_stack - MQTT_WORKER_STACK_BYTES)
     active = min(slots, 5 if psram else 2)
+    # Match the pinned SDK's bounded QoS0 wire-buffer/DMA scratch floor.
+    # Larger QoS1 outbox records have a separate per-payload runtime guard.
+    publish_contiguous = 4096 if psram else 8000
     potential = startup + max(0, active - 2) * (MQTT_CLIENT_STACK_BYTES + MQTT_CLIENT_BUFFER_BYTES)
     return {
         "budget_scope": "startup minimum with runtime connection admission",
@@ -82,18 +85,33 @@ def mqtt_requirements(defines):
         "maximum_slot_stack_buffer_allowance_bytes": potential,
         "cold_start_allocation_allowance_bytes": 16384,
         "cold_start_dma_admission_free_bytes": 32768,
-        "cold_start_dma_admission_contiguous_bytes": 8192,
+        "cold_start_dma_admission_contiguous_bytes": max(publish_contiguous, 8192),
+        "additional_broker_cold_start_dma_admission_contiguous_bytes": publish_contiguous + 16384,
         "restart_allocation_allowance_bytes": 8192,
         "restart_dma_admission_free_bytes": 24576,
-        "restart_dma_admission_contiguous_bytes": 8192,
+        "restart_dma_admission_contiguous_bytes": max(publish_contiguous, 8192),
+        "additional_broker_restart_dma_admission_contiguous_bytes": publish_contiguous + 8192,
         "dma_admission_free_bytes": 16384,
-        "dma_admission_contiguous_bytes": 4096,
+        "dma_admission_contiguous_bytes": publish_contiguous,
+        "publish_contiguous_bytes": publish_contiguous,
+        "publish_contiguous_without_psram_bytes": 8000,
+        "publish_contiguous_with_psram_bytes": 4096,
+        # Incoming TLS records are independent of bounded outgoing QoS0 chunks.
+        "tls_psram_admission_contiguous_bytes": 16000,
+        "additional_broker_cold_start_tls_psram_admission_contiguous_bytes": 16000 + 16384,
+        "additional_broker_restart_tls_psram_admission_contiguous_bytes": 16000 + 8192,
+        "additional_broker_tls_psram_admission_contiguous_bytes": 16000,
         "tls_internal_admission_free_bytes": 61440,
+        "tls_record_allocation_bytes": 17408,
+        "additional_broker_cold_start_tls_internal_admission_contiguous_bytes": 8000 + 16384 + 17408,
+        "additional_broker_restart_tls_internal_admission_contiguous_bytes": 8000 + 8192 + 17408,
         "tls_internal_admission_contiguous_bytes": 17408,
+        "additional_broker_tls_internal_admission_contiguous_bytes": 8000 + 17408,
         "maximum_runtime_load_qualified": False,
         "physical_validation_performed": False,
         "limitations": "Maximum TLS/WSS/outbox workload is not covered by the startup allowance; "
-                       "runtime free DMA heap and fragmentation must satisfy connection admission.",
+                       "runtime free DMA heap and fragmentation must satisfy connection admission; "
+                       "additional brokers reserve publication headroom beside startup allocations.",
     }
 
 

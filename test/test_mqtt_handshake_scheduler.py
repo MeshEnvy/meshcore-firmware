@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 PREAMBLE = r'''
 #include <atomic>
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
@@ -32,6 +33,7 @@ PREAMBLE = r'''
 #include "helpers/MQTTTransportHealth.h"
 #include "helpers/MQTTStatusPublishPolicy.h"
 #include "helpers/WiFiPowerSave.h"
+namespace Admission = MQTTConnectionAdmission;
 #define ESP_PLATFORM 1
 #define MQTT_DEBUG_PRINTLN(...) ((void)0)
 using esp_err_t = int;
@@ -56,7 +58,7 @@ struct esp_mqtt_error_codes {
 constexpr uint32_t MALLOC_CAP_INTERNAL = 1, MALLOC_CAP_DMA = 2;
 static uint32_t clock_ms = 1000;
 static unsigned long wall_seconds = 1800000000;
-static size_t dma_free = 100000, dma_largest = 20000;
+static size_t dma_free = 100000, dma_largest = 100000;
 static unsigned long s_wifi_connected_at = 0;
 uint32_t millis() { return clock_ms; }
 unsigned long fake_time(void*) { return wall_seconds; }
@@ -157,7 +159,7 @@ struct PsychicMqttClient {
   void softDisconnect() {
     ++bounces; live = false;
     // Releasing the old internal TLS session creates room for its replacement.
-    dma_free += 44000; dma_largest = 20000;
+    dma_free += 44000; dma_largest = 50000;
   }
   void setCredentials(const char*, const char*) { ++credentials; }
   void serviceOutboxDiagnostics() {}
@@ -429,15 +431,19 @@ int main() {
         self.compile_run(r'''
 int main() {
   MQTTBridge bridge;
-  bridge.only(0); clock_ms = 1000; dma_free = 32767;
+  bridge.only(0); clock_ms = 1000;
+  const size_t cold_free = Admission::kDmaReserveBytes + Admission::kColdStartAllowanceBytes;
+  const size_t cold_largest = std::max(Admission::kPsramTlsLargestBytes,
+      std::max(Admission::publishLargestBytes(true), Admission::kColdStartLargestBytes));
+  dma_free = cold_free - 1;
   bridge.maintainSlotConnections();
   assert(bridge.setups.empty() && bridge._slots[0].last_reconnect_attempt == 0);
   assert(bridge._slots[0].enabled && bridge.activatedSlotCount() == 0);
-  dma_free = 32768; dma_largest = 8191;
+  dma_free = cold_free; dma_largest = cold_largest - 1;
   bridge.maintainSlotConnections();
   assert(bridge.setups.empty() && bridge._slots[0].last_reconnect_attempt == 0);
   assert(!bridge.hasPendingSlotConnection() && bridge.activatedSlotCount() == 0);
-  dma_largest = 8192;
+  dma_largest = cold_largest;
   bridge.maintainSlotConnections();
   assert(bridge.setups == std::vector<int>{0} && bridge.activatedSlotCount() == 1);
   assert(bridge.clients[0].starts == 1 && bridge.clients[0].reconnects == 0);
@@ -450,7 +456,8 @@ int main() {
   MQTTBridge bridge;
   for (int i = 2; i < RUNTIME_MQTT_SLOTS; ++i) bridge._slots[i].enabled = false;
   clock_ms = 70000;
-  dma_free = 16384; dma_largest = 4096;
+  const size_t floor = std::max(Admission::publishLargestBytes(true), Admission::kPsramTlsLargestBytes);
+  dma_free = Admission::kDmaReserveBytes; dma_largest = floor;
   auto& stopped = bridge._slots[0];
   auto& retained = bridge._slots[1];
   stopped.client = &bridge.clients[0];
@@ -474,7 +481,10 @@ int main() {
   // with no extra delay introduced by the earlier memory-only deferral.
   bridge.complete(1);
   clock_ms += 15000;
-  dma_free = 24576; dma_largest = 8192;
+  dma_free = Admission::kDmaReserveBytes + Admission::kRestartAllowanceBytes;
+  dma_largest = floor + Admission::kRestartAllowanceBytes - 1;
+  assert(!bridge.canStartSlotConnection(0));
+  ++dma_largest;
   bridge.maintainSlotConnections();
   assert(stopped.client->starts == 1 && stopped.client->reconnects == 0);
   assert(stopped.client->isStarted() && bridge._slot_attempt_pending[0]);
@@ -546,16 +556,19 @@ int main() {
   assert(!bridge.wifiOutage().down);
   // Restart admission still fails safely if either aggregate or contiguous
   // headroom is inadequate. Neither failure consumes retry/backoff state.
-  dma_free = 24575;
+  const size_t restart_free = Admission::kDmaReserveBytes + Admission::kRestartAllowanceBytes;
+  const size_t floor = std::max(Admission::publishLargestBytes(true), Admission::kPsramTlsLargestBytes);
+  const size_t bootstrap_largest = std::max(floor, Admission::kRestartLargestBytes);
+  dma_free = restart_free - 1;
   bridge.maintainSlotConnections();
-  dma_free = 24576; dma_largest = 8191;
+  dma_free = restart_free; dma_largest = bootstrap_largest - 1;
   bridge.maintainSlotConnections();
   for (int i = 0; i < 3; ++i) {
     assert(bridge.clients[i].starts == 0 && bridge._slots[i].last_reconnect_attempt == 0);
     assert(bridge._slots[i].reconnect_backoff == 0 && bridge._slots[i].start_failures == 0);
   }
 
-  dma_free = 42376; dma_largest = 22516;
+  dma_free = 42376; dma_largest = floor + Admission::kRestartAllowanceBytes;
   bridge.maintainSlotConnections();
   assert(bridge.clients[0].starts == 1 && dma_free == 35840);
   assert(bridge.hasPendingSlotConnection());
@@ -845,14 +858,17 @@ int main() {
   assert(slot.client->stops == 1 && slot.reconnect_backoff == 3);
   assert(slot.max_backoff_failures == 1 && slot.connect_failures == 0);
   clock_ms += 120000;
-  dma_free = 24575; dma_largest = 20000;
+  const size_t restart_free = Admission::kDmaReserveBytes + Admission::kRestartAllowanceBytes;
+  const size_t restart_largest = std::max(Admission::kPsramTlsLargestBytes,
+      std::max(Admission::publishLargestBytes(true), Admission::kRestartLargestBytes));
+  dma_free = restart_free - 1; dma_largest = 20000;
   bridge.maintainSlotConnections();
   assert(slot.client->starts == 0 && slot.reconnect_backoff == 3);
   assert(slot.last_reconnect_attempt == 70000 && slot.start_failures == 0);
-  dma_free = 24576; dma_largest = 8191;
+  dma_free = restart_free; dma_largest = restart_largest - 1;
   bridge.maintainSlotConnections();
   assert(slot.client->starts == 0 && slot.reconnect_backoff == 3);
-  dma_largest = 8192;
+  dma_largest = restart_largest;
   bridge.maintainSlotConnections();
   assert(slot.client->starts == 1 && bridge._slot_attempt_pending[0]);
   assert(slot.reconnect_backoff == 4 && slot.max_backoff_failures == 1);

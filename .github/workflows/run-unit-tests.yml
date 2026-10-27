@@ -529,6 +529,7 @@ jobs:
           python3 -B test/test_mqtt_disconnect.py -v
           python3 -B test/test_mqtt_connection_admission.py -v
           python3 -B test/test_mqtt_publish_admission.py -v
+          python3 -B test/test_mqtt_payload_oom.py -v
           python3 -B test/test_mqtt_reassembly_buffer.py -v
           python3 -B test/test_webconfig_json_allocator.py -v
           python3 -B test/test_mqtt_handshake_scheduler.py -v
@@ -1147,6 +1148,7 @@ jobs:
       - name: Verify nRF52 infrastructure trims and unchanged Companion scope
         run: |
           python3 -B test/test_nrf52_flash_trim.py -v
+          python3 -B test/test_nrf52_vl53l0x_const.py -v
           python3 -B test/test_nrf52_gnss_version_trim.py -v
           python3 -B test/test_nrf52_program_lifetime.py -v
           python3 -B test/test_nrf52_tft_font_trim.py -v

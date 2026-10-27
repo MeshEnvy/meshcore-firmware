@@ -16,8 +16,7 @@
 #if !defined(ESP32_PLATFORM) || !defined(COMPANION_RADIO_FULL)
 #error "RTC offline frames require a qualified ESP32 Full Companion recipe"
 #endif
-#if defined(BOARD_HAS_PSRAM) || defined(OTA_SHARED_COMPANION_QUEUE) \
-    || ONE_KEY_DM_SHARED_OFFLINE_QUEUE
+#if defined(BOARD_HAS_PSRAM) || ONE_KEY_DM_SHARED_OFFLINE_QUEUE
 #error "RTC offline frames require the independent fixed-capacity queue"
 #endif
 #include <sdkconfig.h>
@@ -35,6 +34,10 @@
 #endif
 #if COMPANION_RTC_SLOW_OFFLINE_FRAMES && !defined(CONFIG_IDF_TARGET_ESP32S3)
 #error "The separate RTC SLOW offline-frame bank requires ESP32-S3"
+#endif
+#if defined(OTA_SHARED_COMPANION_QUEUE) \
+    && (!defined(CONFIG_IDF_TARGET_ESP32C3) || COMPANION_RTC_SLOW_OFFLINE_FRAMES)
+#error "RTC retained shared-OTA frames are qualified only on ESP32-C3 FAST memory"
 #endif
 
 namespace mesh {
@@ -75,6 +78,7 @@ template<typename Frame, size_t Count> class CompanionRtcQueue {
   }
 
 public:
+  static constexpr size_t frame_count = Count;
   CompanionRtcQueue(Frame* fast, Frame* slow) : fast_frames(fast), slow_frames(slow) {
     if ((FastCount && (!fast || reinterpret_cast<uintptr_t>(fast) % 4))
         || (SlowCount && (!slow || reinterpret_cast<uintptr_t>(slow) % 4))) abort();

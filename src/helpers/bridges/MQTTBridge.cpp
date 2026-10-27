@@ -1681,10 +1681,10 @@ bool MQTTBridge::serviceNetworkPower(uint32_t now) {
         && acknowledgments != _network_publish_acks[i];
     _network_publish_acks[i] = acknowledgments;
     // A flapping CONNACK must not buy another full outage window forever.
-    // A PUBACK proves delivery immediately; a quiet connection must stay up
-    // for 30 seconds, leaving time to prove recovery within the probe window.
-    if (_slots[i].enabled && _slots[i].connected
-        && (broker_replied || (now - static_cast<uint32_t>(_slots[i].connected_at_ms)
+    // A PUBACK proves delivery even if DISCONNECTED arrives before this pass.
+    // Consume it once; a quiet connection must still stay up for 30 seconds.
+    if (_slots[i].enabled && (broker_replied || (_slots[i].connected
+        && now - static_cast<uint32_t>(_slots[i].connected_at_ms)
                 >= mesh::wifi::kNetworkHealthyMs))) {
       useful_network = true;
     }
@@ -2324,9 +2324,16 @@ bool MQTTBridge::canStartSlotConnection(int index) const {
       ? ClientMemoryState::Uninitialized
       : (slot.client->isStarted() ? ClientMemoryState::Started : ClientMemoryState::Stopped);
   const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA;
+  bool protect_publish = false;
+  for (int i = 0; i < RUNTIME_MQTT_SLOTS; ++i) {
+    if (i != index && _slots[i].enabled && _slots[i].connected) {
+      protect_publish = true;
+      break;
+    }
+  }
   return MQTTConnectionAdmission::canStart(
       ESP.getPsramSize() > 0, tls, memory_state, heap_caps_get_free_size(caps),
-      heap_caps_get_largest_free_block(caps));
+      heap_caps_get_largest_free_block(caps), protect_publish);
 #else
   return true;
 #endif
@@ -2735,6 +2742,7 @@ bool MQTTBridge::recoverSlotTransport(int index, uint32_t now) {
   slot.last_reconnect_attempt = now;
   _last_slot_reconnect_ms = now;
   health.recovered();
+  _publish_memory.invalidate();
   updateSlotTransportDiag(index, now);
   updateCachedConnectionStatus();
   return true;
@@ -2746,6 +2754,7 @@ void MQTTBridge::serviceSlotTransportHealth(uint32_t now) {
     MQTTSlot& slot = _slots[i];
     auto& health = slot.transport_health;
     if (_slot_health_reset_pending[i].exchange(false, std::memory_order_acq_rel)) {
+      _publish_memory.invalidate();
       // A late CONNACK does not release an already-required SDK stop. Its
       // session clocks may reset, but only proven cleanup clears recovery.
       health.resetSession();
@@ -3214,6 +3223,7 @@ bool MQTTBridge::publishToSlot(int index, const char* topic, const char* payload
   // session latch BEFORE enqueueing it, or maintenance would erase its ACK
   // watch immediately afterwards. Only this owner task mutates health state.
   if (_slot_health_reset_pending[index].exchange(false, std::memory_order_acq_rel)) {
+    _publish_memory.invalidate();
     slot.transport_health.resetSession();
   }
   if (slot.transport_health.recovery_reason != MQTTTransportHealth::RecoveryReason::None ||
@@ -3269,6 +3279,7 @@ bool MQTTBridge::publishToSlot(int index, const char* topic, const char* payload
   }
   if (qos > 0) {
     slot.transport_health.acceptedQos1(static_cast<uint32_t>(millis()), ack_before);
+    _publish_memory.invalidate();
     // Also reflect an ACK delivered during enqueue, not just on the next tick.
     slot.transport_health.observeAck(static_cast<uint32_t>(slot.client->getPublishAck()));
     updateSlotTransportDiag(index, static_cast<uint32_t>(millis()));

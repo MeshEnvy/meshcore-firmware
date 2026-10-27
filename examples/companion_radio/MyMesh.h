@@ -1003,18 +1003,7 @@ private:
   int offline_queue_head;
   // Local onboarding only: RAM-backed like the receive queue, not RF traffic.
   uint8_t pending_emergency_notices[(MAX_GROUP_CHANNELS + 7) / 8] = {};
-#if defined(OTA_SHARED_COMPANION_QUEUE)
-  static constexpr unsigned OTA_RETAINED_OFFLINE_FRAMES = 128;
-  static_assert(OFFLINE_QUEUE_SIZE > OTA_RETAINED_OFFLINE_FRAMES,
-                "Shared mOTA queue must retain 128 frames and provide workspace storage");
-  // The buffer also asserts that the complete context fits in the remaining
-  // frames. Constrained ESP32 recipes keep 224 normal slots; nRF52 and Paper keep 256.
-  mesh::BorrowableFrameBuffer<Frame, OFFLINE_QUEUE_SIZE,
-                             OTA_RETAINED_OFFLINE_FRAMES, mesh::ota::OtaContext> offline_queue;
-  static mesh::ota::OtaContext* acquireOfflineQueueForOta(void* owner);
-  static uint16_t drainOfflineQueueForOta(void* owner);
-  static void releaseOfflineQueueFromOta(void* owner);
-#elif COMPANION_RTC_FAST_OFFLINE_FRAMES || COMPANION_RTC_SLOW_OFFLINE_FRAMES
+#if COMPANION_RTC_FAST_OFFLINE_FRAMES || COMPANION_RTC_SLOW_OFFLINE_FRAMES
   // Concrete definitions in MyMesh.cpp keep GCC from moving template-local
   // statics back into ordinary .bss despite the requested RTC attribute.
 #if COMPANION_RTC_FAST_OFFLINE_FRAMES
@@ -1037,6 +1026,23 @@ private:
     return nullptr;
 #endif
   }
+#endif
+#if defined(OTA_SHARED_COMPANION_QUEUE)
+  static constexpr unsigned OTA_RETAINED_OFFLINE_FRAMES = 128;
+  static_assert(OFFLINE_QUEUE_SIZE > OTA_RETAINED_OFFLINE_FRAMES,
+                "Shared mOTA queue must retain 128 frames and provide workspace storage");
+  // The buffer also asserts that the complete context fits in the remaining
+  // frames. Constrained ESP32 recipes keep 224 normal slots; nRF52 and Paper keep 256.
+  mesh::BorrowableFrameBuffer<Frame, OFFLINE_QUEUE_SIZE,
+                             OTA_RETAINED_OFFLINE_FRAMES, mesh::ota::OtaContext
+#if COMPANION_RTC_FAST_OFFLINE_FRAMES || COMPANION_RTC_SLOW_OFFLINE_FRAMES
+                             , mesh::CompanionRtcQueue<Frame, OTA_RETAINED_OFFLINE_FRAMES>
+#endif
+                             > offline_queue;
+  static mesh::ota::OtaContext* acquireOfflineQueueForOta(void* owner);
+  static uint16_t drainOfflineQueueForOta(void* owner);
+  static void releaseOfflineQueueFromOta(void* owner);
+#elif COMPANION_RTC_FAST_OFFLINE_FRAMES || COMPANION_RTC_SLOW_OFFLINE_FRAMES
   mesh::CompanionRtcQueue<Frame, OFFLINE_QUEUE_SIZE> offline_queue;
 #elif defined(ESP32_PLATFORM) && defined(BOARD_HAS_PSRAM)
   enum {

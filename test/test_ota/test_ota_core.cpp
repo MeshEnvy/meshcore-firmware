@@ -4319,6 +4319,49 @@ TEST(OtaTransfer, RejectsShortNonFinalManifestFragment) {
   EXPECT_EQ(client.fetchState(), OtaManager::FETCHING);
 }
 
+TEST(OtaTransfer, FixedManifestStoragePreservesEveryValidShapeAndRejectsOtherShapes) {
+  MotaManifest manifest;
+  ASSERT_TRUE(mota_parse(SIM_MOTA, SIM_MOTA_LEN, manifest));
+  const uint8_t totals[] = {0,1,2,3,4,5,16,255};
+  const uint8_t indexes[] = {0,1,2,3,4,15,254,255};
+  for (uint8_t total : totals) for (uint8_t index : indexes) {
+    for (unsigned length = 0; length <= MAX_PACKET_PAYLOAD - 7; ++length) {
+      SCOPED_TRACE(::testing::Message() << "total=" << unsigned(total)
+                   << " index=" << unsigned(index) << " length=" << length);
+      g_q.clear();
+      OtaManager client;
+      OtaStoreRam<4096> store;
+      SendTo to_none{&client};
+      client.begin(SIM_TARGET_ID, sim_send, &to_none);
+      client.set_fetch_store(&store);
+      ASSERT_EQ(client.pull(manifest.merkle_root, manifest.target_id), OtaManager::PULL_STARTED);
+      g_q.clear();
+      const uint16_t final_length = MOTA_MFL - OTA_MF_FRAG;
+      const uint8_t other = index == 0 ? 1 : 0;
+      deliver_manifest_fragment(client, manifest.merkle_root, other,
+          manifest.manifest_start + (other ? OTA_MF_FRAG : 0),
+          other ? final_length : OTA_MF_FRAG);
+      ASSERT_EQ(client.fetchState(), OtaManager::WANT_MANIFEST);
+      uint8_t bytes[MAX_PACKET_PAYLOAD] = {};
+      if (index == 0) memcpy(bytes, manifest.manifest_start, OTA_MF_FRAG);
+      else if (index == 1) memcpy(bytes, manifest.manifest_start + OTA_MF_FRAG, final_length);
+      ManifestMsg fragment{};
+      memcpy(fragment.manifest_id, manifest.merkle_root, 4);
+      fragment.frag_idx = index; fragment.frag_total = total;
+      fragment.bytes = bytes; fragment.len = uint16_t(length);
+      uint8_t wire[MAX_PACKET_PAYLOAD];
+      const auto wire_length = encode_manifest(wire, sizeof(wire), fragment);
+      ASSERT_GT(wire_length, 0);
+      client.on_message(wire, wire_length);
+      const bool valid = total == 2 && ((index == 0 && length == OTA_MF_FRAG)
+          || (index == 1 && length == final_length));
+      EXPECT_EQ(client.fetchState(), valid ? OtaManager::FETCHING : OtaManager::WANT_MANIFEST);
+      if (!valid) EXPECT_EQ(store.staged_size(), 0u);
+    }
+  }
+  g_q.clear();
+}
+
 TEST(OtaTransfer, RejectsManifestBlockExponentBeforeShift) {
   g_q.clear();
   MotaManifest manifest;

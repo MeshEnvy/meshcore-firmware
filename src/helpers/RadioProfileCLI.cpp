@@ -92,7 +92,7 @@ bool secondaryOverlaps(uint32_t primary_hz, float secondary_mhz, uint32_t cleara
   return (primary_hz > secondary_hz ? primary_hz - secondary_hz : secondary_hz - primary_hz)
          <= clearance_hz;
 }
-#if !defined(COMPANION_RADIO_FULL)
+#if !defined(COMPANION_RADIO_FULL) && !MESH_ROLE_COMPANION
 bool isMediaMeshProfile(const RadioProfileConfig& config) {
   return config.mode != RadioProfileMode::Off
       && config.params.freq >= 911.1495f && config.params.freq <= 911.1505f
@@ -102,7 +102,7 @@ bool isMediaMeshProfile(const RadioProfileConfig& config) {
 #endif
 }
 
-#if !defined(COMPANION_RADIO_FULL)
+#if !defined(COMPANION_RADIO_FULL) && !MESH_ROLE_COMPANION
 void RadioProfileCLI::setMediaMeshScopeHandler(MediaMeshScopeHandler handler, void* context) {
   media_scope_handler_ = handler;
   media_scope_context_ = context;

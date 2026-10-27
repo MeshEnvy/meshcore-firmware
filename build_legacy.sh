@@ -4120,6 +4120,12 @@ apply_lora_ota_no_external_sensors_profile() {
     for flag in $voltage_monitor_flags; do
       retain_overrides+=" -D${flag}=1"
     done
+    # Keep only this image's readable OTA name in the reduced RAK profiles.
+    # A non-OTA-prefixed marker is deliberately not copied from a reduced
+    # logical recipe into the Full sensor pass by apply_logical_ota_tuning_flags.
+    retain_overrides+=" -DMESH_OTA_LOCAL_TARGET_NAME_ONLY=1"
+    record_build_reduction \
+      "ota target-name catalog omitted; local target name and numeric OTA matching retained"
     export PLATFORMIO_BUILD_FLAGS="${PLATFORMIO_BUILD_FLAGS}${omit_overrides}${retain_overrides}"
     if is_rak_gps_retaining_ota_target "$env_name"; then
       record_build_reduction \
@@ -4587,6 +4593,11 @@ apply_companion_radio_full_profile() {
       # Reuse idle queue storage during explicit OTA; retain all 224 normal slots.
       if [[ "${env_name,,}" != generic_espnow_companion_radio_full ]]; then
         export PLATFORMIO_BUILD_FLAGS="${PLATFORMIO_BUILD_FLAGS} -DOTA_SHARED_COMPANION_QUEUE=1 -DONE_KEY_DM_COMPACT_HELD=1"
+        if [[ "${env_name,,}" == xiao_c3_companion_radio_full ]]; then
+          # Move 32 of the existing 128 retained slots into byte-accessible
+          # RTC FAST. Both the 224 normal and 128 active-OTA limits stay intact.
+          export PLATFORMIO_BUILD_FLAGS="${PLATFORMIO_BUILD_FLAGS} -DCOMPANION_RTC_FAST_OFFLINE_FRAMES=32"
+        fi
       else
         # Keep all 224 frames during OTA too; RTC FAST holds 32 existing
         # slots without borrowing the queue or shrinking held-DM storage.

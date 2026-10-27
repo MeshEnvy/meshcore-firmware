@@ -171,6 +171,7 @@ class RP2040ApplicationCapabilityTests(unittest.TestCase):
 set -euo pipefail
 source build.sh
 pio() { echo 'PlatformIO must not run' >&2; return 99; }
+PIO_CONFIG_JSON='[]'
 PIO_BUILD_DIR_OVERRIDE=@BUILD@
 OUTPUT_DIR=@OUTPUT@
 BUILD_PROFILE_FOR_TARGET=auto

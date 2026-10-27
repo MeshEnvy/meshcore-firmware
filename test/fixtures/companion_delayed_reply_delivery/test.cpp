@@ -17,6 +17,9 @@
 #include <helpers/TracePathHelpers.h>
 #include <helpers/TxtDataHelpers.h>
 
+// This fixture models correlated RF replies. Direct USB OTA administration
+// has a separate fixture and is disabled for every consumer of this harness.
+#define COMPANION_FEATURE_DIRECT_OTA_ADMIN 0
 #define MESH_DEBUG_PRINTLN(...) ((void)0)
 #include "production_constants.inc"
 #include "production_stream.inc"

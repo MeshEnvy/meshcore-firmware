@@ -1900,11 +1900,17 @@ verify_reduced_sensor_flags() {
   [[ "$PLATFORMIO_BUILD_FLAGS" == *-UENV_INCLUDE_BME280* ]] \
     || fail "$env_name did not omit environmental sensors"
   if [ "$expect_ina" = 1 ]; then
+    [[ "$PLATFORMIO_BUILD_FLAGS" == *-DMESH_OTA_LOCAL_TARGET_NAME_ONLY=1* ]] \
+      || fail "$env_name retained the all-board OTA name catalog"
+    [[ " ${BUILD_REDUCTIONS[*]} " == *"ota target-name catalog omitted"* ]] \
+      || fail "$env_name did not declare its OTA name reduction"
     [[ "$PLATFORMIO_BUILD_FLAGS" == *-DENV_INCLUDE_INA219=1* ]] \
       || fail "$env_name did not retain INA monitor support"
     [[ "$PLATFORMIO_BUILD_FLAGS" != *-UENV_INCLUDE_INA219* ]] \
       || fail "$env_name both retained and omitted INA monitor support"
   else
+    [[ "$PLATFORMIO_BUILD_FLAGS" != *MESH_OTA_LOCAL_TARGET_NAME_ONLY* ]] \
+      || fail "$env_name lost OTA names outside the reduced RAK profile"
     [[ "$PLATFORMIO_BUILD_FLAGS" == *-UENV_INCLUDE_INA219* ]] \
       || fail "$env_name incorrectly retained INA monitor support"
   fi
@@ -1914,6 +1920,10 @@ verify_reduced_sensor_flags \
   RAK_3401_repeater_lora_ota_no_external_sensors 1
 verify_reduced_sensor_flags \
   RAK_3401_room_server_lora_ota_no_external_sensors 1
+verify_reduced_sensor_flags \
+  RAK_4631_repeater_lora_ota_no_external_sensors 1
+verify_reduced_sensor_flags \
+  RAK_4631_sensor_lora_ota_no_external_sensors 1
 verify_reduced_sensor_flags \
   Heltec_t114_repeater_lora_ota_no_external_sensors 0
 

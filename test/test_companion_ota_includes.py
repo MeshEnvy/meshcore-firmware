@@ -54,6 +54,14 @@ class CompanionOtaIncludeTest(unittest.TestCase):
             (directory / "MyMesh.h").write_text(
                 '#pragma once\n#include "CompanionFeatures.h"\n'
             )
+            # Host KISS declares its filesystem boundary in Full images. Keep
+            # that SDK type visible without pulling a board filesystem into
+            # this include-only test of the real OTA headers.
+            identity = directory / "helpers/IdentityStore.h"
+            identity.write_text(
+                "#pragma once\nclass IncludeTestFilesystem;\n"
+                "#define FILESYSTEM IncludeTestFilesystem\n"
+            )
             if not (usb or ble):
                 # Prove that small/non-OTA images do not gain these dependencies.
                 for header in ("MotaSourceSerial.h", "OtaContext.h"):

@@ -7,8 +7,13 @@
 
 namespace {
 
-static int serializeComplete(JsonObject root, char* buffer, size_t buffer_size) {
+static int serializeComplete(JsonDocument& doc, char* buffer, size_t buffer_size) {
   if (!buffer || buffer_size == 0) return 0;
+  buffer[0] = '\0';
+  JsonObject root = doc.as<JsonObject>();
+  // A document can serialize successfully after some allocations failed.
+  // Never publish that incomplete object as a complete status or packet.
+  if (doc.overflowed() || root.isNull()) return 0;
 
   size_t written = serializeJson(root, buffer, buffer_size);
   // Preserve MQTTMessageBuilder's existing success criterion while clearing
@@ -97,7 +102,7 @@ int MQTTPayloadBuilder::buildStatusMessage(
     if (conn_health.slots_breaker > 0) stats["mqtt_slots_breaker"] = conn_health.slots_breaker;
   }
 
-  return serializeComplete(root, buffer, buffer_size);
+  return serializeComplete(doc, buffer, buffer_size);
 }
 
 int MQTTPayloadBuilder::buildPacketMessage(
@@ -182,7 +187,7 @@ int MQTTPayloadBuilder::buildPacketMessage(
     }
   }
 
-  return serializeComplete(root, buffer, buffer_size);
+  return serializeComplete(doc, buffer, buffer_size);
 }
 
 int MQTTPayloadBuilder::buildRawMessage(
@@ -203,7 +208,7 @@ int MQTTPayloadBuilder::buildRawMessage(
   root["type"] = "RAW";
   root["data"] = raw;
 
-  return serializeComplete(root, buffer, buffer_size);
+  return serializeComplete(doc, buffer, buffer_size);
 }
 
 static JsonArray buildNeighborsMessageBase(
@@ -294,6 +299,7 @@ int MQTTPayloadBuilder::buildNeighborsMessage(
   bool truncated
 ) {
   if (!buffer || buffer_size == 0) return 0;
+  buffer[0] = '\0';
 
   JsonArray arr = buildNeighborsMessageBase(
     doc, origin, origin_id, timestamp, self_scopes, self_default_scope,
@@ -314,5 +320,5 @@ int MQTTPayloadBuilder::buildNeighborsMessage(
     }
   }
 
-  return serializeComplete(doc.as<JsonObject>(), buffer, buffer_size);
+  return serializeComplete(doc, buffer, buffer_size);
 }

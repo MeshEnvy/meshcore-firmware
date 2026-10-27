@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -17,6 +18,23 @@ struct RejectAllJsonAllocations : ArduinoJson::Allocator {
   void* allocate(size_t) override { return nullptr; }
   void deallocate(void*) override {}
   void* reallocate(void*, size_t) override { return nullptr; }
+};
+
+struct FailAfterJsonAllocations : ArduinoJson::Allocator {
+  size_t remaining;
+  size_t denied = 0;
+  explicit FailAfterJsonAllocations(size_t allowed) : remaining(allowed) {}
+  void* allocate(size_t size) override {
+    if (!remaining) { ++denied; return nullptr; }
+    --remaining;
+    return std::malloc(size);
+  }
+  void deallocate(void* pointer) override { std::free(pointer); }
+  void* reallocate(void* pointer, size_t size) override {
+    if (!remaining) { ++denied; return nullptr; }
+    --remaining;
+    return std::realloc(pointer, size);
+  }
 };
 
 static int buildMinimalStatus(JsonDocument& scratch, char* buffer, size_t buffer_size) {
@@ -35,6 +53,51 @@ static int buildRepresentativePacket(JsonDocument& scratch, const char* directio
       "12:34:56", "18/07/2026", 42, 4, "D", 20, raw,
       10.26f, -87, score, "89ABCDEF01234567", path, path_hops,
       path_hash_size, 64, buffer, buffer_size);
+}
+
+static int buildMinimalPacket(JsonDocument& doc, char* buffer, size_t capacity) {
+  return buildRepresentativePacket(doc, "rx", 0.125f, nullptr, 0, 0, "AABB", buffer, capacity);
+}
+
+static int buildMinimalRaw(JsonDocument& doc, char* buffer, size_t capacity) {
+  return MQTTPayloadBuilder::buildRawMessage(doc, "node", "id", kTimestamp, "AABB", buffer, capacity);
+}
+
+TEST(MQTTPayloadBuilder, StatusPacketAndRawRejectAllAllocationFailures) {
+  for (auto build : {buildMinimalStatus, buildMinimalPacket, buildMinimalRaw}) {
+    RejectAllJsonAllocations allocator;
+    JsonDocument doc(&allocator);
+    char buffer[2048];
+    memset(buffer, 'x', sizeof(buffer));
+    EXPECT_EQ(0, build(doc, buffer, sizeof(buffer)));
+    EXPECT_TRUE(doc.overflowed());
+    EXPECT_EQ('\0', buffer[0]);
+  }
+}
+
+TEST(MQTTPayloadBuilder, StatusPacketAndRawRejectPartiallyPopulatedDocuments) {
+  for (auto build : {buildMinimalStatus, buildMinimalPacket, buildMinimalRaw}) {
+    bool found_partial_failure = false;
+    for (size_t allowed = 1; allowed < 32; ++allowed) {
+      FailAfterJsonAllocations allocator(allowed);
+      JsonDocument doc(&allocator);
+      char buffer[2048];
+      memset(buffer, 'x', sizeof(buffer));
+      const int result = build(doc, buffer, sizeof(buffer));
+      if (allocator.denied && doc.size() > 0) {
+        found_partial_failure = true;
+        EXPECT_TRUE(doc.overflowed());
+        EXPECT_EQ(0, result);
+        EXPECT_EQ('\0', buffer[0]);
+        // A document is reusable after memory becomes available again.
+        allocator.remaining = 64;
+        EXPECT_GT(build(doc, buffer, sizeof(buffer)), 0);
+        EXPECT_FALSE(doc.overflowed());
+        break;
+      }
+    }
+    EXPECT_TRUE(found_partial_failure);
+  }
 }
 
 TEST(MQTTPayloadBuilder, MinimalStatusHasExactRequiredContract) {
@@ -523,11 +586,13 @@ TEST(MQTTPayloadBuilder, NeighborsMessageFailsCleanlyOnAllocationFailure) {
   RejectAllJsonAllocations allocator;
   JsonDocument scratch(&allocator);
   char buffer[512];
+  memset(buffer, 'x', sizeof(buffer));
 
   EXPECT_EQ(0, MQTTPayloadBuilder::buildNeighborsMessage(
       scratch, "node", "id", kTimestamp, "DEN", "*",
       &neighbor, 1, buffer, sizeof(buffer),
       1, 1, false));
+  EXPECT_EQ('\0', buffer[0]);
 }
 
 TEST(MQTTPayloadBuilder, NeighborsMessageHandlesEmptyTableAndNullScopes) {

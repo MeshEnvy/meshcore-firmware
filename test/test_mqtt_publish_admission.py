@@ -79,11 +79,15 @@ int main(){
   heap.dma_free+=5*897; // The five CPU-only reassembly buffers move to PSRAM.
   assert(canPublish(heap)); // No new 16K internal allocation is needed to write.
   heap.dma_free=16384;heap.dma_largest=4096;
-  assert(canPublish(heap,2048,128,0)&&canPublish(heap,1024,128,1));
+  assert(canPublish(heap,2048,128,0));
+  assert(!canPublish(heap,1024,128,1)); // Enqueue must also retain the reserve.
   --heap.dma_free;assert(!canPublish(heap));++heap.dma_free;
   --heap.dma_largest;assert(!canPublish(heap));++heap.dma_largest;
+  heap.dma_free=16384+1024+128+128;
+  assert(canPublish(heap,1024,128,1));
+  --heap.dma_free;assert(!canPublish(heap,1024,128,1));
   assert(!canPublish(heap,10240,128,1)); // Large outbox records need more space.
-  heap.dma_free=24000;heap.dma_largest=11000;
+  heap.dma_free=40000;heap.dma_largest=11000;
   assert(canPublish(heap,10240,128,1));
   assert(!canPublish(heap,SIZE_MAX,1,1)&&!canPublish(heap,1,SIZE_MAX,0));
   heap.psram=false;heap.internal_largest=7999;assert(!canPublish(heap));

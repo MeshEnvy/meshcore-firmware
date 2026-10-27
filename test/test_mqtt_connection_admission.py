@@ -14,6 +14,8 @@ POLICY_PREAMBLE = r'''
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
+#include <algorithm>
 #include "helpers/MQTTConnectionAdmission.h"
 #include "helpers/MQTTTransportHealth.h"
 namespace Admission = MQTTConnectionAdmission;
@@ -62,6 +64,7 @@ struct Client {
 };
 struct MQTTBridge {
   struct MQTTSlot {
+    bool enabled = true, connected = false;
     Client* client = nullptr;
     const Preset* preset = nullptr;
     char broker_uri[128] = {}, host[64] = "broker";
@@ -96,46 +99,133 @@ class MqttConnectionAdmissionTest(unittest.TestCase):
     def test_connection_admission_checks_both_total_and_contiguous_dma_heap(self):
         self.compile_run(POLICY_PREAMBLE + r'''
 int main() {
-  // A large aggregate heap cannot compensate for a fragmented DMA region.
-  assert(!Admission::canStart(true, true, MemoryState::Started, 100000, 4095));
-  assert(!Admission::canStart(true, true, MemoryState::Started, 16383, 20000));
-  assert(Admission::canStart(true, true, MemoryState::Started, 16384, 4096));
-  assert(Admission::canStart(false, false, MemoryState::Started, 16384, 4096));
-  assert(!Admission::canStart(false, false, MemoryState::Started, 16383, 4096));
-  assert(!Admission::canStart(false, false, MemoryState::Started, 16384, 4095));
-
-  // Without PSRAM, TLS also needs a full record allocation and session budget.
-  const MemoryState states[] = {MemoryState::Uninitialized, MemoryState::Stopped,
-                                MemoryState::Started};
-  for (MemoryState state : states) {
-    assert(!Admission::canStart(false, true, state, 61439, 20000));
-    assert(!Admission::canStart(false, true, state, 100000, 17407));
-    assert(Admission::canStart(false, true, state, 61440, 17408));
-  }
-  assert(Admission::canStart(true, false, MemoryState::Started, 16384, 4096));
-  assert(!Admission::canStart(true, false, static_cast<MemoryState>(255), SIZE_MAX, SIZE_MAX));
-
-  // A new SDK task needs its stack and ordinary startup allocations in
-  // addition to the DMA reserve, including plaintext and PSRAM-backed TLS.
+  assert(Admission::kPsramPublishLargestBytes == 4096);
+  assert(Admission::kPsramPublishLargestBytes == Admission::kDmaLargestBytes);
+  assert(Admission::kPsramTlsLargestBytes == 16000);
+  assert(Admission::kInternalPublishLargestBytes == 8000);
+  assert(Admission::kDmaReserveBytes == 16384);
   assert(Admission::kClientTaskStackBytes == 6144);
   assert(Admission::kClientTaskPriority == 5);
   assert(Admission::kColdStartAllowanceBytes == 16384);
-  assert(Admission::kColdStartLargestBytes == 8192);
   assert(Admission::kRestartAllowanceBytes == 8192);
-  assert(Admission::kRestartLargestBytes == 8192);
-  for (int psram = 0; psram <= 1; ++psram) {
-    for (int tls = 0; tls <= 1; ++tls) {
-      if (!psram && tls) continue;  // Larger TLS thresholds checked above.
-      assert(!Admission::canStart(psram, tls, MemoryState::Uninitialized, 32767, 20000));
-      assert(!Admission::canStart(psram, tls, MemoryState::Uninitialized, 100000, 8191));
-      assert(Admission::canStart(psram, tls, MemoryState::Uninitialized, 32768, 8192));
-      // An initialized handle retains its ordinary SDK buffers across a stop.
-      // Only the replacement task/TCB is charged beside the DMA reserve.
-      assert(!Admission::canStart(psram, tls, MemoryState::Stopped, 24575, 20000));
-      assert(!Admission::canStart(psram, tls, MemoryState::Stopped, 100000, 8191));
-      assert(Admission::canStart(psram, tls, MemoryState::Stopped, 24576, 8192));
+  assert(Admission::kTlsInternalFreeBytes == 61440);
+  assert(Admission::kClientBufferBytes == 896);
+  const MemoryState states[] = {MemoryState::Uninitialized, MemoryState::Stopped,
+                                MemoryState::Started};
+  const size_t allowances[] = {Admission::kColdStartAllowanceBytes,
+                               Admission::kRestartAllowanceBytes, 0};
+  const size_t sdk_blocks[] = {Admission::kColdStartLargestBytes,
+                               Admission::kRestartLargestBytes, Admission::kDmaLargestBytes};
+  for (bool psram : {false, true}) {
+    const size_t floor = Admission::publishLargestBytes(psram);
+    for (bool tls : {false, true}) {
+      const size_t record = tls
+          ? (psram ? Admission::kPsramTlsLargestBytes : Admission::kTlsRecordAllocationBytes) : 0;
+      for (bool protect : {false, true}) {
+        for (size_t i = 0; i < 3; ++i) {
+          const size_t free = std::max(Admission::kDmaReserveBytes + allowances[i],
+              tls && !psram ? Admission::kTlsInternalFreeBytes : size_t(0));
+          const size_t protected_largest = psram ? std::max(floor, record) + allowances[i]
+              : floor + allowances[i] + record;
+          const size_t largest = protect ? protected_largest
+              : std::max(std::max(floor, sdk_blocks[i]), record);
+          // Total and contiguous headroom are independent requirements, for
+          // bootstrap, stopped-task restart, and retained-task reconnect.
+          assert(!Admission::canStart(psram, tls, states[i], free - 1, 100000, protect));
+          assert(!Admission::canStart(psram, tls, states[i], 100000, largest - 1, protect));
+          assert(Admission::canStart(psram, tls, states[i], free, largest, protect));
+          assert(Admission::canStart(psram, tls, states[i], free + 1, largest + 1, protect));
+        }
+        assert(!Admission::canStart(psram, tls, static_cast<MemoryState>(255),
+                                    SIZE_MAX, SIZE_MAX, protect));
+      }
     }
   }
+}
+''')
+
+    def test_additional_broker_cannot_spend_live_packet_publishing_headroom(self):
+        self.compile_run(POLICY_PREAMBLE + r'''
+int main() {
+  for (bool psram : {false, true}) {
+    const size_t floor = Admission::publishLargestBytes(psram);
+    assert(!Admission::hasPublishHeadroom(psram, floor - 1));
+    assert(Admission::hasPublishHeadroom(psram, floor));
+    // Previously admitted: 8 KiB largest was enough to start another client,
+    // even though publishing on a PSRAM board was already suppressed there.
+    assert(!Admission::canStart(psram, false, MemoryState::Uninitialized, 100000, 8192, true));
+    assert(!Admission::canStart(psram, true, MemoryState::Stopped, 100000, 8192, true));
+    const size_t allowances[] = {16384, 8192, 0};
+    const MemoryState states[] = {MemoryState::Uninitialized, MemoryState::Stopped,
+                                  MemoryState::Started};
+    for (size_t i = 0; i < 3; ++i) {
+      const size_t minimum = floor + allowances[i];
+      assert(!Admission::canStart(psram, false, states[i], 100000, minimum - 1, true));
+      assert(Admission::canStart(psram, false, states[i], 100000, minimum, true));
+      // Spending the complete bounded SDK startup allowance still leaves a
+      // block accepted by the exact production packet-publishing policy.
+      assert(Admission::hasPublishHeadroom(psram, minimum - allowances[i]));
+    }
+  }
+}
+''')
+
+    def test_actual_packet_publish_guard_uses_detected_psram_and_throttles_sampling(self):
+        self.compile_run(POLICY_PREAMBLE + r'''
+#include "helpers/MQTTPublishAdmission.h"
+#define ESP_PLATFORM 1
+#define BOARD_HAS_PSRAM 1
+static unsigned long now_ms = 0;
+unsigned long millis() { return now_ms; }
+constexpr uint32_t MALLOC_CAP_DMA = 2;
+static size_t dma_free = Admission::kDmaReserveBytes;
+static size_t dma_largest = Admission::kPsramPublishLargestBytes;
+static size_t dma_queries = 0;
+size_t heap_caps_get_free_size(uint32_t caps) {
+  assert(caps == MALLOC_CAP_DMA); ++dma_queries; return dma_free;
+}
+size_t heap_caps_get_largest_free_block(uint32_t caps) {
+  assert(caps == MALLOC_CAP_DMA); ++dma_queries; return dma_largest;
+}
+struct {
+  size_t psram = 2097152, largest = Admission::kInternalPublishLargestBytes, queries = 0;
+  size_t getPsramSize() const { return psram; }
+  size_t getMaxAllocHeap() { ++queries; return largest; }
+} ESP;
+struct MQTTBridge {
+  MQTTPublishAdmission::State _publish_memory;
+  int _skipped_publishes = 0;
+  bool hasPublishHeadroom(size_t = 0, size_t = 0, uint8_t = 0);
+};
+''' + method("src/helpers/bridges/MQTTBridge.cpp",
+             "bool MQTTBridge::hasPublishHeadroom(") + r'''
+int main() {
+  MQTTBridge bridge;
+  const uint32_t interval = MQTTPublishAdmission::kSampleIntervalMs;
+  assert(bridge.hasPublishHeadroom() && dma_queries == 2 && ESP.queries == 0);
+  --dma_free;
+  // Admission uses one captured snapshot, including its detected PSRAM flag.
+  // A later allocator/PSRAM change does not splice fresh fields into that snapshot.
+  ESP.psram = 0;
+  assert(bridge.hasPublishHeadroom() && dma_queries == 2 && ESP.queries == 0);
+  ESP.psram = 2097152;
+  now_ms += interval;
+  assert(!bridge.hasPublishHeadroom() && bridge._skipped_publishes == 1 && dma_queries == 4);
+  assert(!bridge.hasPublishHeadroom() && bridge._skipped_publishes == 2 && dma_queries == 4);
+  ++dma_free; --dma_largest; now_ms += interval;
+  assert(!bridge.hasPublishHeadroom() && bridge._skipped_publishes == 3 && dma_queries == 6);
+  ++dma_largest; now_ms += interval;
+  assert(bridge.hasPublishHeadroom() && dma_queries == 8);
+  assert(!bridge.hasPublishHeadroom(10240, 128, 1)); // Whole QoS1 outbox record.
+  assert(bridge.hasPublishHeadroom(10240, 128, 0));  // QoS0 uses fixed SDK chunks.
+  assert(dma_queries == 8);
+  // Compiling BOARD_HAS_PSRAM does not establish that PSRAM initialized.
+  ESP.psram = 0; now_ms += interval;
+  assert(bridge.hasPublishHeadroom() && ESP.queries == 1 && dma_queries == 8);
+  --ESP.largest; now_ms += interval;
+  assert(!bridge.hasPublishHeadroom() && ESP.queries == 2);
+  ++ESP.largest; now_ms += interval;
+  assert(bridge.hasPublishHeadroom() && ESP.queries == 3);
 }
 ''')
 
@@ -289,35 +379,49 @@ int main() {
   assert(!bridge.canStartSlotConnection(0));
   dma_free = 100000; dma_largest = 17407;
   assert(!bridge.canStartSlotConnection(0));
-  ESP.size = 2097152; dma_free = 16384; dma_largest = 4096;
+  const size_t floor = std::max(Admission::publishLargestBytes(true), Admission::kPsramTlsLargestBytes);
+  const size_t bootstrap_cold = std::max(floor, Admission::kColdStartLargestBytes);
+  const size_t bootstrap_restart = std::max(floor, Admission::kRestartLargestBytes);
+  ESP.size = 2097152; dma_free = Admission::kDmaReserveBytes; dma_largest = bootstrap_cold;
   assert(!bridge.canStartSlotConnection(0));
   Client client;
   bridge._slots[0].client = &client;
   assert(!bridge.canStartSlotConnection(0));  // Wrapper allocated; SDK not initialized.
-  dma_free = 32767; dma_largest = 20000;
+  dma_free = Admission::kDmaReserveBytes + Admission::kColdStartAllowanceBytes - 1;
   assert(!bridge.canStartSlotConnection(0));
-  dma_free = 32768; dma_largest = 8191;
+  dma_free = Admission::kDmaReserveBytes + Admission::kColdStartAllowanceBytes;
+  dma_largest = bootstrap_cold - 1;
   assert(!bridge.canStartSlotConnection(0));
-  dma_largest = 8192;
+  dma_largest = bootstrap_cold;
   assert(bridge.canStartSlotConnection(0));
+  // An existing connected peer must keep its publication block beside the
+  // additional client's cold SDK allocations.
+  bridge._slots[1].connected = true;
+  dma_largest = floor + Admission::kColdStartAllowanceBytes - 1;
+  assert(!bridge.canStartSlotConnection(0));
+  ++dma_largest;
+  assert(bridge.canStartSlotConnection(0));
+  bridge._slots[1].connected = false;
 
   // An initialized but stopped handle needs its task again, not new SDK buffers.
   client.initialized = true; dma_free = 24575; dma_largest = 20000;
   assert(!bridge.canStartSlotConnection(0));
-  dma_free = 24576; dma_largest = 8191;
+  dma_free = Admission::kDmaReserveBytes + Admission::kRestartAllowanceBytes;
+  dma_largest = bootstrap_restart - 1;
   assert(!bridge.canStartSlotConnection(0));
-  dma_largest = 8192;
+  dma_largest = bootstrap_restart;
   assert(bridge.canStartSlotConnection(0));
 
   // A warm reconnect retains the SDK task/buffers and uses the smaller floor.
-  client.started = true; dma_free = 16384; dma_largest = 4096;
+  client.started = true; dma_free = Admission::kDmaReserveBytes; dma_largest = floor;
   assert(bridge.canStartSlotConnection(0));
-  dma_largest = 4095;
+  --dma_largest;
   assert(!bridge.canStartSlotConnection(0));
 
   // An explicit plaintext URI overrides a TLS port. The effective URI wins
   // over the raw host; a preset's URI wins over both custom fields.
-  ESP.size = 0; dma_free = 16384; dma_largest = 4096;
+  ESP.size = 0; dma_free = Admission::kDmaReserveBytes;
+  dma_largest = Admission::kInternalPublishLargestBytes;
   strcpy(bridge._slots[0].host, "mqtt://broker:8883");
   assert(bridge.canStartSlotConnection(0));
   strcpy(bridge._slots[0].broker_uri, "wss://broker/mqtt");
@@ -329,7 +433,36 @@ int main() {
   bridge._slots[0].preset = &tls;
   assert(!bridge.canStartSlotConnection(0));
   ESP.size = 2097152;
+  assert(!bridge.canStartSlotConnection(0)); // TLS still needs its incoming-record floor.
+  dma_largest = floor;
   assert(bridge.canStartSlotConnection(0));
+
+  // Reproduce the reporter's failed-state heap after all SDK tasks stopped.
+  // One broker must be able to recover instead of waiting forever for a
+  // contiguous 24,192-byte block pinned apart by retained SDK buffers.
+  client.started = false;
+  dma_free = 93024; dma_largest = 20468;
+  assert(bridge.canStartSlotConnection(0));
+  // Outgoing QoS0 chunks do not bound incoming TLS records. Keep the original
+  // additional TLS admission beside a live peer, even though packet publishing
+  // itself now uses a separate four-KiB DMA scratch floor.
+  bridge._slots[1].connected = true;
+  assert(!bridge.canStartSlotConnection(0));
+  dma_largest = floor + Admission::kRestartAllowanceBytes - 1;
+  assert(!bridge.canStartSlotConnection(0));
+  ++dma_largest;
+  assert(bridge.canStartSlotConnection(0));
+  // Health reconciliation removing the other failed connection restores
+  // bootstrap admission. The target never counts itself as a live peer.
+  dma_largest = bootstrap_restart;
+  bridge._slots[1].connected = false;
+  bridge._slots[0].connected = true;
+  assert(bridge.canStartSlotConnection(0));
+  bridge._slots[0].connected = false;
+  bridge._slots[1].enabled = false;
+  bridge._slots[1].connected = true;
+  assert(bridge.canStartSlotConnection(0));
+  bridge._slots[1].connected = false;
 
   // Every pending TLS attempt, including the target's own attempt, blocks all
   // other starts until an event callback clears it. No heap walk is needed.

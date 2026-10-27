@@ -334,10 +334,8 @@ void OtaManager::refresh_sources() {
           (uint64_t)d.payload_off + d.payload_size + 5 != d.total_size) continue;
       if (serveEntryIndex(d.mid) >= 0) continue;             // already offered (e.g. our own fw in the folder)
       ServeEntry& e = _serve[_n_serve++];
-      memcpy(e.mid, d.mid, 4);
-      e.target_id = d.target_id; e.fw_version = d.fw_version;
-      e.codec_id = d.codec_id; e.flags = d.flags; e.have_count = d.block_count;   // a folder mota is fully held
-      e.is_self = false; e.src = src; e.src_idx = i; e.desc = d;
+      e.cacheDescriptor(d);
+      e.is_self = false; e.src = src; e.src_idx = i;
       _src_advertised[s]++;
     }
   }
@@ -409,7 +407,7 @@ OtaManager::ServeView* OtaManager::resolve(const uint8_t* mid) {
 // builds also cache leaves here; bounded builds acquire proof metadata through
 // cooperative egress steps, without delaying request admission on a full table.
 bool OtaManager::loadSource(const ServeEntry& e) {
-  const MotaDesc& d = e.desc;
+  const MotaDesc d = e.descriptor();
   if (d.leaves_off < 8) return false;
   if (!e.src) return false;
   uint16_t mfl = (uint16_t)(d.leaves_off - 8);

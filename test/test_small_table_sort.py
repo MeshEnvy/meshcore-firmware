@@ -8,6 +8,8 @@ import sys
 import tempfile
 import unittest
 
+from cpp_source import body
+
 ROOT = Path(__file__).resolve().parents[1]
 
 HARNESS = r'''
@@ -140,8 +142,125 @@ void sortElsewhere(void* items, size_t count, size_t width,
 }
 '''
 
+NEIGHBOUR_HARNESS = r'''
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <numeric>
+#include <random>
+#include <vector>
+#include <helpers/SmallTableSort.h>
+struct NeighbourInfo {
+  uint32_t heard_timestamp;
+  int8_t snr;
+  uint16_t identity;
+};
+@COMPARATORS@
+static void rpcSort(NeighbourInfo** sorted_neighbours, int16_t neighbours_count,
+                    uint8_t order_by) {
+  @RPC_SORT@
+}
+static void cliSort(NeighbourInfo** sorted_neighbours, int16_t neighbours_count) {
+  @CLI_SORT@
+}
+static bool before(const NeighbourInfo* a, const NeighbourInfo* b, unsigned order) {
+  if (order == 0) return a->heard_timestamp > b->heard_timestamp;
+  if (order == 1) return a->heard_timestamp < b->heard_timestamp;
+  if (order == 2) return a->snr > b->snr;
+  return a->snr < b->snr;
+}
+int main() {
+  std::mt19937 random(0x18180002);
+  const uint32_t timestamps[] = {1, 42, 42, UINT32_MAX, 1, UINT32_MAX - 1};
+  const int8_t snrs[] = {INT8_MIN, -16, -1, 0, 0, 7, 7, INT8_MAX};
+  int (*const compare[])(const void*, const void*) = {
+    cmp_neighbours_newest_to_oldest, cmp_neighbours_oldest_to_newest,
+    cmp_neighbours_strongest_to_weakest, cmp_neighbours_weakest_to_strongest
+  };
+  for (size_t count : {0U, 1U, 2U, 16U, 50U, 100U}) {
+    std::vector<NeighbourInfo> records(count);
+    for (size_t i = 0; i < count; ++i) {
+      records[i].heard_timestamp = timestamps[i % 6];
+      records[i].snr = snrs[i % 8];
+      records[i].identity = static_cast<uint16_t>(i);
+    }
+    const auto original = records;
+    for (unsigned order = 0; order < 4; ++order) {
+      std::vector<NeighbourInfo*> actual(count), expected(count);
+      for (size_t i = 0; i < count; ++i) actual[i] = &records[i];
+      std::shuffle(actual.begin(), actual.end(), random);
+      expected = actual;
+      std::sort(expected.begin(), expected.end(), [order](const NeighbourInfo* a,
+                                                         const NeighbourInfo* b) {
+        return before(a, b, order);
+      });
+      rpcSort(actual.data(), static_cast<int16_t>(count), order);
+      std::vector<bool> seen(count);
+      for (size_t i = 0; i < count; ++i) {
+        const auto index = actual[i]->identity;
+        assert(index < count && !seen[index] && actual[i] == &records[index]);
+        seen[index] = true;
+        assert(!before(actual[i], expected[i], order));
+        assert(!before(expected[i], actual[i], order));
+        assert(compare[order](&actual[i], &expected[i]) == 0);
+        if (i) assert(!before(actual[i], actual[i - 1], order));
+      }
+      // Unsupported order values retain the caller's original pointer order.
+      const auto unchanged = actual;
+      rpcSort(actual.data(), static_cast<int16_t>(count), 4);
+      assert(actual == unchanged);
+      cliSort(actual.data(), static_cast<int16_t>(count));
+      for (size_t i = 1; i < count; ++i) {
+        assert(actual[i - 1]->heard_timestamp >= actual[i]->heard_timestamp);
+      }
+      for (size_t i = 0; i < count; ++i) {
+        assert(records[i].heard_timestamp == original[i].heard_timestamp);
+        assert(records[i].snr == original[i].snr);
+        assert(records[i].identity == original[i].identity);
+      }
+    }
+  }
+  puts("PASS: real neighbour RPC orders and CLI, duplicate keys, negative SNR and pointer records");
+}
+'''
+
 
 class SmallTableSortTests(unittest.TestCase):
+    def test_real_neighbour_rpc_and_cli_orderings(self):
+        compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
+        self.assertIsNotNone(compiler, "a host C++17 compiler is required")
+        production = (ROOT / "examples/simple_repeater/MyMesh.cpp").read_text()
+        names = ("newest_to_oldest", "oldest_to_newest",
+                 "strongest_to_weakest", "weakest_to_strongest")
+        comparators = "\n".join(body(production, "static int cmp_neighbours_" + name + "(")
+                                for name in names)
+        start = production.index("if (order_by == 0) {")
+        rpc_sort = production[start:production.index("// build results buffer", start)]
+        formatter = body(production, "void MyMesh::formatNeighborsReply(")
+        start = formatter.index("// sort neighbours newest to oldest")
+        cli_sort = formatter[start:formatter.index("for (int i = 0;", start)]
+        source = NEIGHBOUR_HARNESS.replace("@COMPARATORS@", comparators)
+        source = source.replace("@RPC_SORT@", rpc_sort).replace("@CLI_SORT@", cli_sort)
+        for platform in ("STM32_PLATFORM", "NRF52_PLATFORM", "ESP32_PLATFORM", "RP2040_PLATFORM"):
+            with self.subTest(platform=platform), tempfile.TemporaryDirectory(
+                    prefix="neighbour-sort-") as directory:
+                work = Path(directory)
+                (work / "test.cpp").write_text(source)
+                binary = work / "sort"
+                command = [compiler, "-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror",
+                           "-D" + platform + "=1", "-I" + str(ROOT / "src"),
+                           str(work / "test.cpp"), "-o", str(binary)]
+                if sys.platform.startswith("linux"):
+                    command[1:1] = ["-fsanitize=address,undefined", "-fno-sanitize-recover=all",
+                                    "-fno-pie", "-no-pie"]
+                built = subprocess.run(command, capture_output=True, text=True, timeout=60)
+                self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+                tested = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
+                self.assertEqual(tested.returncode, 0, tested.stdout + tested.stderr)
+                self.assertIn("negative SNR and pointer records", tested.stdout)
+
     def test_sort_on_all_platforms(self):
         compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
         self.assertIsNotNone(compiler, "a host C++17 compiler is required")

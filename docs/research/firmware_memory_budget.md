@@ -119,19 +119,34 @@ qualification of five simultaneous PSRAM connections or two internal TLS
 connections.
 
 The `mqtt` report also names the production runtime admission thresholds.
-A cold SDK start requires at least 32 KiB of DMA-capable internal free heap
-and an 8 KiB contiguous DMA block. This includes a separate 16 KiB allowance
-for its SDK task stack/TCB, receive/transmit/reassembly buffers and transport
-or configuration objects, alongside the 16 KiB AES reserve. Those ordinary
-SDK allocations occur after admission and do not use the TLS allocation guard.
-A retained initialized SDK handle with a stopped task requires 24 KiB free and
-an 8 KiB contiguous DMA block. Its separate 8 KiB restart allowance covers the
-pinned 6 KiB task stack plus TCB and allocator overhead. SDK stop retains its
-receive/transmit buffers, configuration, transport objects and wrapper
-reassembly buffer, so restarting that handle does not need to reserve their
-first-initialization allocation again. A wrapper whose SDK initialization has
-not completed still receives the full cold allowance. This distinction also
-applies after WiFi loss stops the SDK tasks but keeps their handles.
+Connection admission and the packet-publishing guard share a contiguous-block
+floor: 4,096 DMA-capable bytes with detected PSRAM, or 8,000 internal bytes without it. Admitting
+another broker while one is connected reserves its startup allocations beside
+that floor, protecting existing packet forwarding. The first connection after
+boot or an outage can bootstrap without that extra reservation, so the
+additional-broker reserve cannot block every disconnected slot's recovery.
+
+A cold SDK start requires at least 32 KiB of DMA-capable internal free heap.
+The separate 16 KiB allowance covers its SDK task stack/TCB,
+receive/transmit/reassembly buffers and transport or configuration objects,
+alongside the 16 KiB AES reserve. Those ordinary allocations occur after
+admission and do not use the TLS allocation guard. Bootstrap needs a contiguous
+8,192-byte block for plain MQTT. With another connected
+broker, the contiguous minimum includes its publication floor plus the startup
+allowance: 20,480 bytes with PSRAM or 24,384 without it, before the additional
+internal TLS requirement below.
+
+A retained initialized SDK handle with a stopped task requires 24 KiB free.
+Its separate 8 KiB restart allowance covers the pinned 6 KiB task stack plus
+TCB and allocator overhead. Bootstrap uses the same 8,192-byte block
+minimum as a cold plain-MQTT start. With another connected broker, its contiguous minimum
+is 12,288 bytes with PSRAM or 16,192 without it, before the internal TLS
+requirement below. SDK stop retains its receive/transmit buffers,
+configuration, transport objects and wrapper reassembly buffer, so restarting
+that handle does not need their first-initialization allocation again. A
+wrapper whose SDK initialization has not completed still receives the full
+cold allowance. This distinction also applies after WiFi loss stops SDK tasks
+but keeps their handles.
 
 All ESP32 clients use 896-byte receive, transmit and wrapper reassembly buffers
 from first initialization. Applying configuration cannot grow the retained SDK
@@ -143,15 +158,37 @@ and cold admission covers the ordinary allocations. WiFi recovery and explicit
 reconfiguration continue to retain clients.
 
 A warm reconnect keeps its running task and buffers; it requires at least
-16 KiB free and a 4 KiB contiguous DMA block. The per-client SDK stack is
-independent of `MQTT_TASK_STACK_SIZE`, which sizes the existing bridge worker.
-A TLS attempt without PSRAM requires at least
-60 KiB free and a 17,408-byte contiguous block. PSRAM allocation fallback must
-leave the 16 KiB DMA reserve available. These thresholds describe free heap at
-the time of admission; they are not additional linked capacity and the TLS
-contiguous threshold is not a startup allocation requirement. Available linked
-internal heap cannot establish how much DMA-capable heap remains or how it is
-fragmented after boot. Only runtime observations can establish that.
+16 KiB free and the same 4,096/8,000-byte publication block. The per-client SDK
+stack is independent of `MQTT_TASK_STACK_SIZE`, which sizes the existing bridge
+worker. TLS with detected PSRAM retains its separate 16,000-byte
+connection block: incoming handshake records are not bounded by the outgoing
+MQTT buffer. With another connected broker this remains 32,384 bytes for a cold
+start, 24,192 for a stopped task, and 16,000 for a warm reconnect. TLS without
+detected PSRAM retains its 60 KiB free-heap and 17,408-byte
+record-block floors for bootstrap. With another connected broker, admission
+reserves that record beside the publication block and ordinary startup
+allocations: 41,792 contiguous bytes for a cold start, 33,600 for a stopped
+task, or 25,408 for a warm reconnect. Both admission and publication use
+detected PSRAM, including a board whose compiled-in PSRAM support failed to
+initialize.
+
+PSRAM builds allocate WebConfig JSON workspaces and the MQTT wrapper's receive
+reassembly bytes in PSRAM. Task stacks and SDK/DMA owners remain internal.
+The shared packet, raw and status publish check preserves 16 KiB free DMA
+memory and a 4 KiB DMA block. ESP-MQTT fragments synchronous QoS 0 writes into
+its pinned 896-byte SDK buffer; the JSON scratch is already in PSRAM or on the
+worker stack. Queued QoS 1 records can be written whole, so larger records
+raise the required DMA block and total reserve by their size. Admission also
+charges the queued record itself before enqueue, then resamples before the
+next slot because small SDK outbox allocations can consume internal RAM. These bounds
+follow the [pinned ESP-MQTT implementation](https://github.com/espressif/esp-mqtt/blob/bb9c8af9d552b608dd3aabf9617bde757a538ebe/mqtt_client.c).
+
+PSRAM allocation fallback must leave the 16 KiB DMA reserve available. These
+conservative thresholds describe free heap at admission; they are not extra
+linked capacity or a guarantee against later fragmentation or allocations by
+other tasks. Available linked internal heap cannot establish how much
+DMA-capable heap remains or how it is fragmented after boot. Only runtime
+observations can establish that.
 
 Maximum-load qualification still needs physical boot and sustained reconnect,
 publish and configuration-change tests with the selected number of brokers,

@@ -1,6 +1,8 @@
 """All OTA names survive front coding; original Companion API stays unchanged."""
 import re
 import os
+import configparser
+import importlib.util
 import shutil
 import subprocess
 import sys
@@ -236,6 +238,29 @@ class OtaTargetNameTest(unittest.TestCase):
                     f"-DOTA_LOCAL_TARGET_ID=0x{local_id:08x}",
                     f'-DOTA_LOCAL_TARGET_NAME="{local_name}"',
                 ], ids), [local_name, "?", "?"])
+
+    def test_reduced_rak_policy_compiles_with_exact_local_names_and_ids(self):
+        spec = importlib.util.spec_from_file_location("ota_name_trim", ROOT / "scripts/nrf52_flash_trim.py")
+        trim = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(trim)
+        for board, suffix in (("3401", ""), ("4631", ""),
+                              ("4631", "_bridge_rs232_serial1"), ("4631", "_bridge_rs232_serial2")):
+            target = f"RAK_{board}_repeater{suffix}_lora_ota_no_external_sensors"
+            config = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=(";",))
+            config.read(ROOT / f"variants/rak{board}/platformio.ini")
+            flags = config["env:" + target]["build_flags"]
+            # Interpolated hardware flags do not influence the name policy.
+            flags = re.sub(r"\$\{[^}]+\}", "", flags)
+            target_id = gen_targets.ml.target_id_for_env(target)
+            definitions = trim.flag_defines(flags)
+            definitions.update(trim.trim_policy("nordicnrf52", "nrf52840", target,
+                               "+<../examples/simple_repeater>", flags))
+            name_flags = [f"-D{name}={value}" for name, value in definitions.items()
+                          if name in ("OTA_TARGET_NAME_TABLE", "OTA_TARGET_NAME_FRONT_CODED",
+                                      "OTA_LOCAL_TARGET_ID", "OTA_LOCAL_TARGET_NAME")]
+            with self.subTest(target=target):
+                self.assertEqual(self.compile_and_lookup(name_flags,
+                                 [target_id, self.rows[0][0], 0]), [target, "?", "?"])
 
     def test_cpp_decoder_fails_closed_on_invalid_records_and_trailing_bytes(self):
         from zopfli_compress import raw_deflate_compress

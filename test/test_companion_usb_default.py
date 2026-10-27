@@ -68,6 +68,7 @@ static constexpr unsigned USB_HOST_LOSS_EDGE_MS = 100, USB_HOST_LOSS_GRACE_MS = 
 struct Stream {
   int pending = 0;
   int available() const { return pending; }
+  int peek() const { return pending > 0 ? 'x' : -1; }
   int read() { return pending-- > 0 ? 'x' : -1; }
   void print(const char*) {}
 } usb_stream;

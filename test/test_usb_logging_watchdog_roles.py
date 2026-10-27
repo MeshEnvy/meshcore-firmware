@@ -30,6 +30,10 @@ namespace mesh {
  struct Status {bool reader_connected=true, stalled=false;};
  static Status status;
  Status usbLoggingStatus(){return status;}
+ namespace hostkiss {
+  static bool usb_active=false;
+  bool usbActive(){return usb_active;}
+ }
 }
 struct Store {
  bool dirty=false;
@@ -91,6 +95,7 @@ bool isUsbTerminalDataConnected(){return usb_connected;}
 
 void reset(){
  board=Board{};radio_driver=RadioDriver{};mesh::status=mesh::Status{};
+ mesh::hostkiss::usb_active=false;
  the_mesh=RoleMesh{};
  // Assignment copies the fixture's dependency pointers; point them back at
  // the live fixture objects, not the temporary used to reset scalar state.
@@ -243,6 +248,13 @@ class UsbLoggingWatchdogRoleTests(unittest.TestCase):
    the_mesh._serial=&the_mesh.serial;
 '''
         companion_checks = r'''
+ // A host KISS session owns the same physical USB transport regardless of
+ // the logging reader, terminal feature or ordinary Companion USB mode.
+ for(unsigned state=0;state<3;++state){
+   reset();mesh::status.reader_connected=state!=1;mesh::status.stalled=state==2;
+   mesh::hostkiss::usb_active=true;assert(!usbLoggingRecoverySafe(nullptr));
+   mesh::hostkiss::usb_active=false;assert(usbLoggingRecoverySafe(nullptr));
+ }
 #if defined(ENABLE_USB_INTERFACE)
  // A live binary client or buffered protocol transaction is always protected,
  // even if the dedicated logging CDC is disconnected or its output is stuck.

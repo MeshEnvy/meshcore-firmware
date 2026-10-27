@@ -8,7 +8,7 @@ namespace MQTTPublishAdmission {
 
 // QoS0 writes use the SDK's fixed buffer; QoS1 can resend an entire outbox
 // record. Keep the existing DMA reserve and account for larger queued records.
-static const size_t kLegacyLargestBytes = 8000;
+static const size_t kLegacyLargestBytes = MQTTConnectionAdmission::kInternalPublishLargestBytes;
 static const size_t kFramingAllowanceBytes = 128;
 static const uint32_t kSampleIntervalMs = 5000;
 
@@ -23,7 +23,8 @@ inline bool canPublish(const Heap& heap, size_t payload_size = 0,
                        size_t topic_size = 0, uint8_t qos = 0) {
   if (payload_size > SIZE_MAX - kFramingAllowanceBytes ||
       topic_size > SIZE_MAX - kFramingAllowanceBytes - payload_size) return false;
-  size_t record = qos ? payload_size + topic_size + kFramingAllowanceBytes : 0;
+  const size_t queued_bytes = qos ? payload_size + topic_size + kFramingAllowanceBytes : 0;
+  size_t record = queued_bytes;
   if (record > MQTTConnectionAdmission::kTlsRecordAllocationBytes)
     record = MQTTConnectionAdmission::kTlsRecordAllocationBytes;
   if (!heap.psram) {
@@ -34,7 +35,10 @@ inline bool canPublish(const Heap& heap, size_t payload_size = 0,
       ? record : MQTTConnectionAdmission::kDmaLargestBytes;
   const size_t free = MQTTConnectionAdmission::kDmaReserveBytes
       + largest - MQTTConnectionAdmission::kDmaLargestBytes;
-  return heap.dma_free >= free && heap.dma_largest >= largest;
+  // Small SDK outbox records prefer internal RAM. Leave the reserve after
+  // enqueue as well as room for the subsequent TLS/DMA write.
+  if (queued_bytes > SIZE_MAX - free) return false;
+  return heap.dma_free >= free + queued_bytes && heap.dma_largest >= largest;
 }
 
 struct State {

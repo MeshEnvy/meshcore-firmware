@@ -67,6 +67,26 @@ class Nrf52FlashTrimTest(unittest.TestCase):
         self.assertNotIn("SSD1306_NO_SPLASH", defines)
         self.assertEqual(TRIM.flag_defines("-DMESH_NRF52_FLASH_TRIM=1 -UMESH_NRF52_FLASH_TRIM")["MESH_NRF52_FLASH_TRIM"], None)
 
+    def test_local_names_honor_overlay_identity_and_explicit_defines(self):
+        flags = ('-DMESH_OTA_LOCAL_TARGET_NAME_ONLY=1 '
+                 '-DMOTA_TARGET_ID=0x29a0da19 '
+                 '-DOTA_VARIANT=\'"RAK_4631_repeater_lora_ota_no_external_sensors"\'')
+        defines = self.policy(flags=flags)
+        self.assertEqual(defines["OTA_TARGET_NAME_TABLE"], 0)
+        self.assertEqual(defines["OTA_LOCAL_TARGET_ID"], "0x29a0da19")
+        self.assertEqual(defines["OTA_LOCAL_TARGET_NAME"], "OTA_VARIANT")
+        explicit = self.policy(flags=flags + ' -DOTA_TARGET_NAME_TABLE=1 '
+                               '-DOTA_LOCAL_TARGET_ID=7 -DOTA_LOCAL_TARGET_NAME=custom_name')
+        for name in ("OTA_TARGET_NAME_TABLE", "OTA_LOCAL_TARGET_ID", "OTA_LOCAL_TARGET_NAME"):
+            self.assertNotIn(name, explicit)
+        for flags in ("", "-DMESH_OTA_LOCAL_TARGET_NAME_ONLY=0"):
+            self.assertNotIn("OTA_TARGET_NAME_TABLE", self.policy(flags=flags))
+
+    def test_local_names_do_not_change_companion_or_unqualified_roles(self):
+        for options in (dict(name="RAK_4631_companion_radio_full"),
+                        dict(role="custom"), dict(platform="espressif32", mcu="esp32")):
+            self.assertEqual(self.policy(flags="-DMESH_OTA_LOCAL_TARGET_NAME_ONLY=1", **options), {})
+
     def test_cc310_archive_is_exact_and_requires_supported_mcu_and_enabled_crypto(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             archive = Path(temp_dir) / "libraries/Adafruit_nRFCrypto" / TRIM.CC310_ARCHIVE
@@ -134,6 +154,12 @@ class Nrf52FlashTrimTest(unittest.TestCase):
             def BuildSources(self, *args):
                 self.setdefault("BUILT_SOURCES", []).append(args)
 
+            def subst(self, value):
+                return value.replace("$PROJECT_DIR", str(ROOT))
+
+            def AddBuildMiddleware(self, callback, pattern):
+                self.setdefault("MIDDLEWARE", []).append((callback, pattern))
+
         base = dict(BUILD_FLAGS=["-DUSE_CC310_HW_CRYPTO=1"],
                     SRC_FILTER=["+<../examples/simple_repeater>"], CPPDEFINES=[])
         excluded = BuildEnvironment(**base, PIOENV="RAK_4631_companion_radio_full")
@@ -148,6 +174,7 @@ class Nrf52FlashTrimTest(unittest.TestCase):
         self.assertTrue(active["MESH_NRF52_FLASH_TRIM_ACTIVE"])
         self.assertIn("-Wl,--wrap=CRYS_ECPKI_GetEcDomain", active["LINKFLAGS"])
         self.assertEqual(active["BUILT_SOURCES"][0][-1], "+<Cc310DomainTrim.c>")
+        self.assertEqual(active["MIDDLEWARE"][0][1], "*Adafruit_VL53L0X*/*.cpp")
 
     @unittest.skipUnless(shutil.which("cc"), "a native C compiler is required")
     def test_wrapped_domain_preserves_p256_and_rejects_unused_curves(self):

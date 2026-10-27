@@ -112,7 +112,7 @@ void* heap_caps_malloc(size_t bytes, uint32_t caps) {
   return std::malloc(bytes);
 }
 void heap_caps_free(void* memory) { std::free(memory); }
-static size_t dma_free = 100000, dma_largest = 20000;
+static size_t dma_free = 100000, dma_largest = 100000;
 size_t heap_caps_get_free_size(uint32_t caps) {
   assert(caps == (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA)); return dma_free;
 }
@@ -232,11 +232,21 @@ int main() {
   assert(init_calls == 1 && destroy_calls == 0);
   // Reconfiguration retains the initialized client on both board profiles.
   // It needs the stopped-task floor and never silently shrinks its buffers.
-  dma_free = 24575; dma_largest = 20000;
+  dma_free = MQTTConnectionAdmission::kDmaReserveBytes
+      + MQTTConnectionAdmission::kRestartAllowanceBytes - 1;
+  dma_largest = 100000;
   bridge.applySlotPreset(0, "plain");
   assert(slot.client && !slot.client->isStarted() && !slot.initial_connect_done);
   assert(init_calls == 1 && destroy_calls == 0);
-  dma_free = 24576;
+  dma_free = MQTTConnectionAdmission::kDmaReserveBytes
+      + MQTTConnectionAdmission::kRestartAllowanceBytes;
+  const bool psram = ESP.getPsramSize() > 0;
+  const size_t floor = MQTTConnectionAdmission::publishLargestBytes(psram);
+  const size_t bootstrap_largest = floor > MQTTConnectionAdmission::kRestartLargestBytes
+      ? floor : MQTTConnectionAdmission::kRestartLargestBytes;
+  dma_largest = bootstrap_largest - 1;
+  assert(!bridge.setupSlot(0));
+  dma_largest = bootstrap_largest;
   assert(bridge.setupSlot(0));
   assert(slot.client->_buffer_capacity == 896 && init_calls == 1);
   const int destructions_before_guard = destroy_calls;

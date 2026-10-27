@@ -9,7 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 class RadioProfileCLITest(unittest.TestCase):
-    def test_full_companion_keeps_rf_presets_without_unused_region_code(self):
+    def test_all_companions_keep_rf_presets_without_unused_region_code(self):
         compiler = shutil.which('g++') or shutil.which('clang++')
         self.assertIsNotNone(compiler)
         code = r'''
@@ -23,7 +23,7 @@ int main() {
   f.cmd("set radio2 mediamesh");
   f.advance(2000);
   assert(f.radio.p.enabled() && fabsf(f.radio.p.secondary.params.freq - 911.150f) < 0.0001f);
-#if defined(COMPANION_RADIO_FULL)
+#if defined(COMPANION_RADIO_FULL) || MESH_ROLE_COMPANION
   assert(!scope.commits && !scope.checks);
 #else
   assert(scope.enabled && scope.durable && scope.commits);
@@ -37,9 +37,11 @@ int main() {
         with tempfile.TemporaryDirectory(prefix='profile-region-role-') as work:
             source = Path(work)/'role.cpp'
             source.write_text(code, encoding='ascii')
-            for full in (False, True):
-                binary = Path(work)/('companion' if full else 'infrastructure')
-                flags = ['-DCOMPANION_RADIO_FULL=1'] if full else []
+            roles = {'infrastructure': [], 'full': ['-DCOMPANION_RADIO_FULL=1'],
+                     'ordinary': ['-DMESH_ROLE_COMPANION=1']}
+            for role, flags in roles.items():
+                companion = role != 'infrastructure'
+                binary = Path(work)/role
                 compiled = subprocess.run([
                     compiler, '-std=c++17', '-Os', '-ffunction-sections',
                     '-fdata-sections', '-Wl,--gc-sections',
@@ -53,11 +55,12 @@ int main() {
                 self.assertEqual(compiled.returncode, 0, compiled.stderr)
                 run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
                 self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
-                sizes[full] = int(run.stdout)
+                sizes[role] = int(run.stdout)
                 image = binary.read_bytes()
                 for marker in (b'MediaMesh scope save pending', b'MediaMesh region unavailable or full'):
-                    self.assertEqual(marker in image, not full)
-        self.assertLess(sizes[True], sizes[False])
+                    self.assertEqual(marker in image, not companion)
+        for role in ('full', 'ordinary'):
+            self.assertLess(sizes[role], sizes['infrastructure'])
 
     def test_commands_persistence_and_timers(self):
         compiler = shutil.which('g++') or shutil.which('clang++')
