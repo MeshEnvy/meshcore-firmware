@@ -1,3 +1,7 @@
+<!-- meshcore-hosted-doc-link:start -->
+<p class="meshcore-hosted-doc-link"><a href="https://mikecarper.github.io/MeshCore/test-results/rak_compact_crypto_2026-10-27/">View this page on MeshCore Docs</a>.</p>
+<!-- meshcore-hosted-doc-link:end -->
+
 # RAK repeater flash and crypto timing, 27 October 2026
 
 Selected: **compact scalar arithmetic with the existing fast field arithmetic**.

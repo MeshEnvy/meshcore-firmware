@@ -109,8 +109,10 @@ class MqttPayloadOomTests(unittest.TestCase):
                 production = folder / "MQTTPayloadBuilder.cpp"
                 production.write_text(source)
             flags = [] if os.name == "nt" else ["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-pie", "-no-pie"]
+            # Keep -Werror for our harness/firmware without promoting warnings
+            # inside the pinned third-party ArduinoJson headers to failures.
             built = subprocess.run([compiler, "-std=c++17", "-O1", "-Wall", "-Wextra", "-Werror",
-                "-DARDUINOJSON_POOL_CAPACITY=4", *flags, "-I" + str(header.parent),
+                "-DARDUINOJSON_POOL_CAPACITY=4", *flags, "-isystem", str(header.parent),
                 "-I" + str(ROOT / "src"), "-I" + str(ROOT / "src/helpers"),
                 "-isystem", str(ROOT / "test/mocks"),
                 str(harness), str(production), str(ROOT / "src/helpers/TxtDataHelpers.cpp"), "-o", str(binary)],
