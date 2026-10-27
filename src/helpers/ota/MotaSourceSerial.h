@@ -40,6 +40,11 @@ public:
   int availableControlBytes();
   int readControlByte();
   bool hasPendingResponse() const { return _response_pending; }
+  // KISS may claim the physical port only between complete response and CLI
+  // records, after the console has consumed every retained text byte.
+  bool canReleaseControlInput() const {
+    return !_response_pending && !_control_in_line && _control_len == 0;
+  }
   void resetSessionState();
 
 protected:
