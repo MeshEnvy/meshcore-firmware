@@ -263,6 +263,12 @@ struct Fixture {
     for (unsigned i = 0; i != 20; ++i) { manager.loop(); manager.checkRecvFrame(command); service(); }
     mesh.checkGuards();
   }
+  void drainTransportOnly() {
+    usb_stream.write_capacity = other_stream.write_capacity = 4096;
+    if (socket) socket->write_limit = 4096;
+    uint8_t command[MAX_FRAME_SIZE];
+    for (unsigned i = 0; i != 20; ++i) { manager.loop(); manager.checkRecvFrame(command); }
+  }
   void disconnect() { if (socket) socket->connected = false; else usb_connected = false; manager.loop(); }
   const Bytes& wire() const { return socket ? socket->sent : usb_stream.output; }
   void arm(Kind kind, uint32_t tag = 17, uint32_t timeout = 5000) {
@@ -275,7 +281,8 @@ struct Fixture {
       mesh.armPendingRequest(tag, timeout, false);
     }
   }
-  void command(Kind kind, bool anonymous = false, uint32_t trace_tag = 17) {
+  void command(Kind kind, bool anonymous = false, uint32_t trace_tag = 17,
+               uint32_t trace_auth = 23, uint8_t trace_flags = 0) {
     memset(mesh.cmd_frame, 0, sizeof(mesh.cmd_frame));
     unsigned offset = 1, len = 33;
     switch (kind) {
@@ -285,8 +292,9 @@ struct Fixture {
       case Tracker::Discovery: mesh.cmd_frame[0] = CMD_SEND_PATH_DISCOVERY_REQ; offset = 2; len = 34; break;
       case Tracker::Binary: mesh.cmd_frame[0] = anonymous ? CMD_SEND_ANON_REQ : CMD_SEND_BINARY_REQ; len = 34; break;
       case Tracker::Trace: {
-        mesh.cmd_frame[0] = CMD_SEND_TRACE_PATH; const uint32_t tag = trace_tag, auth = 23;
+        mesh.cmd_frame[0] = CMD_SEND_TRACE_PATH; const uint32_t tag = trace_tag, auth = trace_auth;
         memcpy(mesh.cmd_frame + 1, &tag, 4); memcpy(mesh.cmd_frame + 5, &auth, 4);
+        mesh.cmd_frame[9] = trace_flags;
         mesh.cmd_frame[10] = 0x12; mesh.handleRequestFrame(11); return;
       }
       default: assert(false);
@@ -334,12 +342,13 @@ static Bytes frameWith(const Bytes& wire, uint8_t expected) {
   return {};
 }
 static void reply(Fixture& fixture, Kind kind, const ContactInfo* from = nullptr,
-                   uint32_t tag = 17, uint8_t marker = 0x65, unsigned length = 64) {
+                   uint32_t tag = 17, uint8_t marker = 0x65, unsigned length = 64,
+                   uint32_t trace_auth = 23) {
   const ContactInfo& contact = from ? *from : fixture.mesh.recipient;
   uint8_t data[256] = {}; memcpy(data, &tag, 4); data[4] = marker;
   if (kind == Tracker::Trace) {
     uint8_t path[] = {marker}; mesh::Packet packet;
-    fixture.mesh.onTraceRecv(&packet, tag, 23, 0, path, path, 1);
+    fixture.mesh.onTraceRecv(&packet, tag, trace_auth, 0, path, path, 1);
   } else if (kind == Tracker::Discovery) {
     uint8_t path[] = {marker}; ContactInfo mutable_contact = contact;
     fixture.mesh.onContactPathRecv(mutable_contact, path, 1, path, 1,
@@ -475,6 +484,123 @@ static void testReservedHistorySurvivesIdle(bool request_service, uint32_t start
 
 int main() {
   unsigned checks = 0;
+  // An unreplaced trace retains the longer radio window even after the app's
+  // advertised estimate, allowing a late result to remain useful.
+  for (bool tcp : {false, true}) for (uint32_t start : {100U, 0xfffffff0U})
+      for (uint32_t estimate : {2000U, 60000U}) {
+    Fixture f(tcp); g_mock_millis = start; f.mesh.direct_timeout = estimate;
+    f.command(Tracker::Trace); f.drain();
+    assert(slot(f, Tracker::Trace).radio_deadline == start + std::max(estimate + estimate / 5U, estimate + 5000U));
+    g_mock_millis = start + estimate + 1U;
+    reply(f, Tracker::Trace); f.drain();
+    assertSentBeforeFinal(f.wire(), Tracker::Trace);
+    assert(count(f.wire(), RESP_CODE_ERR) == 0); ++checks;
+  }
+  // A fresh trace from the same route supersedes its predecessor immediately,
+  // including just before the longer deadline and after delayed SENT admission.
+  for (bool tcp : {false, true}) for (uint32_t start : {100U, 0xfffffff0U})
+      for (uint32_t estimate : {2000U, 60000U}) for (bool delayed_sent : {false, true})
+      for (bool near_deadline : {false, true}) for (bool fresh_auth : {false, true}) {
+    Fixture f(tcp); g_mock_millis = start; f.mesh.direct_timeout = estimate;
+    if (delayed_sent) assert(f.fill() == 4);
+    f.command(Tracker::Trace, false, 17);
+    if (delayed_sent) {
+      assert(slot(f, Tracker::Trace).sent_pending);
+      g_mock_millis += 9000U;
+    }
+    f.drain();
+    assert(f.mesh.transmissions == 1 && !slot(f, Tracker::Trace).sent_pending);
+    const Bytes sent = frameWith(f.wire(), RESP_CODE_SENT);
+    uint32_t advertised; memcpy(&advertised, sent.data() + 6, 4);
+    assert(advertised == estimate);
+    g_mock_millis = near_deadline ? slot(f, Tracker::Trace).radio_deadline - 1U : uint32_t(millis()) + 1U;
+    const size_t retry_start = f.wire().size();
+    const uint32_t tag = fresh_auth ? 17U : 18U, auth = fresh_auth ? 24U : 23U;
+    f.command(Tracker::Trace, false, tag, auth);
+    assert(f.mesh.transmissions == 2 && f.mesh.allocations == 2
+        && "same-route fresh trace must supersede a pending trace");
+    assert(slot(f, Tracker::Trace).tag == tag && slot(f, Tracker::Trace).auth == auth
+        && slot(f, Tracker::Trace).phase == Tracker::AwaitRadio);
+    // A late first attempt cannot complete or emit an error for this retry.
+    reply(f, Tracker::Trace, nullptr, 17);
+    assert(slot(f, Tracker::Trace).tag == tag && slot(f, Tracker::Trace).auth == auth
+        && slot(f, Tracker::Trace).phase == Tracker::AwaitRadio);
+    reply(f, Tracker::Trace, nullptr, tag, 0x65, 64, auth); f.drain();
+    const Bytes retry_wire(f.wire().begin() + retry_start, f.wire().end());
+    assert(count(retry_wire, RESP_CODE_ERR) == 0);
+    assertSentBeforeFinal(retry_wire, Tracker::Trace, tag);
+    // Supersession still quarantines the old tuple; an indistinguishable late
+    // response cannot become another attempt's successful result.
+    f.command(Tracker::Trace, false, 17); f.drain();
+    assert(f.mesh.transmissions == 2 && f.mesh.allocations == 2);
+    assert(count(f.wire(), RESP_CODE_ERR) == 1); ++checks;
+  }
+  for (bool tcp : {false, true}) for (unsigned refusal : {0U, 1U, 2U, 3U}) {
+    Fixture f(tcp); f.mesh.direct_timeout = 2000;
+    f.command(Tracker::Trace); f.drain();
+    const uint32_t deadline = slot(f, Tracker::Trace).radio_deadline;
+    const uint8_t history = slot(f, Tracker::Trace).history;
+    if (refusal == 0) f.otherRequest(); // A different route cannot cancel the owner.
+    if (refusal == 3) {
+      for (unsigned i = 0; i < Tracker::HISTORY_SIZE - 1; ++i) {
+        const auto held = f.mesh._delayed_replies.reserveTrace(100 + i, 23, millis());
+        assert(held != Tracker::NO_HISTORY);
+        f.mesh._delayed_replies.retireTrace(held, millis(), millis() + 6000U);
+      }
+    }
+    f.command(Tracker::Trace, false, refusal == 1 ? 17U : 18U, 23, refusal == 2 ? 1 : 0);
+    f.drain();
+    assert(f.mesh.transmissions == 1 && f.mesh.allocations == 1);
+    assert(slot(f, Tracker::Trace).tag == 17 && slot(f, Tracker::Trace).auth == 23
+        && slot(f, Tracker::Trace).route == f.owner && slot(f, Tracker::Trace).history == history
+        && slot(f, Tracker::Trace).radio_deadline == deadline);
+    const Bytes& error_wire = refusal == 0 ? f.other_stream.output : f.wire();
+    assert(frameWith(error_wire, RESP_CODE_ERR) == Bytes({RESP_CODE_ERR,
+        uint8_t(refusal == 2 ? ERR_CODE_ILLEGAL_ARG : ERR_CODE_BAD_STATE)}));
+    g_mock_millis += 2001U; reply(f, Tracker::Trace); f.drain();
+    assertSentBeforeFinal(f.wire(), Tracker::Trace);
+    assert(count(f.other_stream.output, PUSH_CODE_TRACE_DATA) == 0); ++checks;
+  }
+  // Replacement must not flush the superseded producer's retained SENT or
+  // result merely because transport capacity returned just before CMD36.
+  for (bool tcp : {false, true}) for (unsigned held : {0U, 1U, 2U}) {
+    Fixture f(tcp);
+    if (held < 2) assert(f.fill() == 4);
+    f.command(Tracker::Trace);
+    if (held == 2) {
+      f.drain(); f.usb_stream.write_capacity = f.other_stream.write_capacity = 0;
+      if (f.socket) f.socket->write_limit = 0;
+      assert(f.fill() == 4);
+    }
+    if (held != 0) reply(f, Tracker::Trace);
+    assert(slot(f, Tracker::Trace).sent_pending == (held < 2));
+    assert(slot(f, Tracker::Trace).phase == (held == 0 ? Tracker::AwaitRadio : Tracker::AwaitAdmission));
+    f.drainTransportOnly(); // Free capacity without servicing the old producer.
+    const size_t retry_start = f.wire().size();
+    f.command(Tracker::Trace, false, 18);
+    assert(f.mesh.transmissions == 2 && slot(f, Tracker::Trace).tag == 18);
+    reply(f, Tracker::Trace, nullptr, 17);
+    assert(slot(f, Tracker::Trace).phase == Tracker::AwaitRadio);
+    reply(f, Tracker::Trace, nullptr, 18); f.drain();
+    const Bytes retry_wire(f.wire().begin() + retry_start, f.wire().end());
+    assert(count(retry_wire, RESP_CODE_SENT) == 1);
+    assert(count(retry_wire, RESP_CODE_ERR) == 0);
+    assertSentBeforeFinal(retry_wire, Tracker::Trace, 18); ++checks;
+  }
+  // A dead owner loses exclusivity at expiry, without admitting its old frame.
+  for (bool tcp : {false, true}) for (uint32_t start : {100U, 0xfffffff0U}) {
+    Fixture f(tcp); g_mock_millis = start;
+    f.command(Tracker::Trace); f.drain();
+    g_mock_millis = slot(f, Tracker::Trace).radio_deadline;
+    f.otherRequest(); f.command(Tracker::Trace, false, 18);
+    assert(f.mesh.transmissions == 2 && slot(f, Tracker::Trace).route == &f.other);
+    reply(f, Tracker::Trace, nullptr, 17);
+    assert(slot(f, Tracker::Trace).tag == 18 && slot(f, Tracker::Trace).phase == Tracker::AwaitRadio);
+    reply(f, Tracker::Trace, nullptr, 18); f.drain();
+    assertSentBeforeFinal(f.other_stream.output, Tracker::Trace, 18);
+    assert(count(f.wire(), PUSH_CODE_TRACE_DATA) == 0);
+    assert(count(f.other_stream.output, RESP_CODE_ERR) == 0); ++checks;
+  }
   // Exercise the real CMD50 producer and callback with a legacy one-admin ACL
   // reply after the old estimate + 20% cutoff but inside the app's +5s window.
   for (bool tcp : {false, true}) for (uint32_t start : {100U, 0xfffffff0U}) {

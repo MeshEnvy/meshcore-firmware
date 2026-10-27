@@ -39,7 +39,8 @@ uint32_t CompanionDelayedReplies::radioBudget(const Reply& reply) {
   uint32_t budget = reply.timeout > maximum - extra
       ? maximum : reply.timeout + extra;
   if (!reply.terminal) {
-    // Official apps start an estimate + 5s timer when they receive SENT.
+    // Request clients add five seconds to SENT's estimate. Keep this longer
+    // radio window for traces too; their owner may replace one sooner.
     const uint32_t host_budget = reply.timeout > maximum - HOST_EXTRA_TIMEOUT_MS
         ? maximum : reply.timeout + HOST_EXTRA_TIMEOUT_MS;
     if (host_budget > budget) budget = host_budget;
@@ -77,14 +78,18 @@ bool CompanionDelayedReplies::store(Reply& reply, const uint8_t* frame,
   return true;
 }
 
+bool CompanionDelayedReplies::expired(const Reply& reply, uint32_t now) {
+  return due(now, reply.phase == AwaitAdmission
+      ? reply.delivery_deadline : reply.radio_deadline)
+      || (reply.sent_pending && due(now, reply.sent_deadline));
+}
+
 bool CompanionDelayedReplies::service(Reply& reply,
                                      BaseSerialInterface* serial, uint32_t now) {
   if (reply.phase == Empty || reply.phase == Reserved) return false;
   if (reply.terminal) return due(now, reply.radio_deadline);
   if (serial == nullptr || !serial->isReplyRouteAvailable(reply.route)
-      || due(now, reply.phase == AwaitAdmission
-                     ? reply.delivery_deadline : reply.radio_deadline)
-      || (reply.sent_pending && due(now, reply.sent_deadline))) return true;
+      || expired(reply, now)) return true;
   if (reply.sent_pending) {
     uint8_t sent[10];
     sent[0] = 6;  // RESP_CODE_SENT, unchanged Companion wire format.
@@ -257,9 +262,14 @@ void CompanionDelayedReplies::retireTrace(uint8_t history, uint32_t now,
 
 bool CompanionDelayedReplies::reserveBinaryTrace(uint32_t tag, uint32_t auth,
     BaseSerialInterface* route, uint32_t now) {
-  if (hasBinaryTrace() || route == nullptr) return false;
+  if (route == nullptr) return false;
+  if (trace.phase >= AwaitRadio && expired(trace, now)) retireBinaryTrace(now);
+  if (hasBinaryTrace() && trace.route != route) return false;
+  // Reserve the replacement first. A duplicate/quarantined tuple or full
+  // history must not cancel the current trace. Retired replies stay isolated.
   uint8_t history = reserveTrace(tag, auth, now);
   if (history == NO_HISTORY) return false;
+  if (hasBinaryTrace()) retireBinaryTrace(now);
   trace.route = route;
   trace.tag = tag;
   trace.auth = auth;
@@ -309,9 +319,7 @@ bool CompanionDelayedReplies::hasReplyForRoute(BaseSerialInterface* route, uint3
   const Reply* slots[] = { &request, &trace };
   for (const Reply* reply : slots) {
     if (reply->phase >= AwaitRadio && reply->route == route
-        && !due(now, reply->phase == AwaitAdmission
-                       ? reply->delivery_deadline : reply->radio_deadline)
-        && !(reply->sent_pending && due(now, reply->sent_deadline))) return true;
+        && !expired(*reply, now)) return true;
   }
   return false;
 }

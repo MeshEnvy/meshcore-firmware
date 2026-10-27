@@ -119,14 +119,23 @@ def production_delayed_reply_inputs(work):
 
 
 class CompanionDelayedReplyDeliveryTests(unittest.TestCase):
-    def test_actual_producers_routes_deadlines_and_required_admission(self):
+    def run_fixture(self, legacy_trace_slot=False):
         compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
         if compiler is None:
             self.skipTest("a host C++17 compiler is required")
         with tempfile.TemporaryDirectory(prefix="meshcore-delayed-replies-") as directory:
             work = Path(directory)
             production_delayed_reply_inputs(work)
-            for terminal in (0, 1):
+            tracker = ROOT / "src/helpers/CompanionDelayedReplies.cpp"
+            if legacy_trace_slot:
+                source = tracker.read_text()
+                reservation = extract_braced(source, "bool CompanionDelayedReplies::reserveBinaryTrace(")
+                refusing = reservation.replace("{", "{\n  if (hasBinaryTrace()) return false;", 1)
+                source = source.replace(reservation, refusing, 1).replace(
+                    '#include "CompanionDelayedReplies.h"', '#include <helpers/CompanionDelayedReplies.h>')
+                tracker = work / "legacy_trace_slot.cpp"
+                tracker.write_text(source, encoding="ascii")
+            for terminal in ((0,) if legacy_trace_slot else (0, 1)):
                 with self.subTest(terminal=terminal):
                     binary = work / f"delayed-{terminal}.exe"
                     compiled = subprocess.run([
@@ -135,15 +144,25 @@ class CompanionDelayedReplyDeliveryTests(unittest.TestCase):
                         f"-DCOMPANION_FEATURE_TEXT_TERMINAL={terminal}", "-DMESH_ENABLE_ONE_KEY_DM=0",
                         f"-I{work}", f"-I{ROOT / 'test/mocks'}",
                         f"-I{ROOT / 'test/fixtures/serial_wifi_sessions/mocks'}", f"-I{ROOT / 'src'}",
-                        str(FIXTURE), str(ROOT / "src/helpers/CompanionDelayedReplies.cpp"),
+                        str(FIXTURE), str(tracker),
                         str(ROOT / "src/helpers/ArduinoSerialInterface.cpp"),
                         str(ROOT / "src/helpers/wifi/SerialWifiInterface.cpp"), "-o", str(binary),
                         str(ROOT / "src/helpers/TxtDataHelpers.cpp"),
                     ], capture_output=True, text=True, timeout=60)
                     self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
                     checked = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20)
-                    self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
-                    self.assertIn("PASS: delayed production reply delivery", checked.stdout)
+                    if legacy_trace_slot:
+                        self.assertNotEqual(checked.returncode, 0, "The old active-trace refusal unexpectedly passed")
+                        self.assertIn("same-route fresh trace must supersede a pending trace", checked.stderr)
+                    else:
+                        self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+                        self.assertIn("PASS: delayed production reply delivery", checked.stdout)
+
+    def test_actual_producers_routes_deadlines_and_required_admission(self):
+        self.run_fixture()
+
+    def test_old_active_slot_refusal_blocks_same_route_fresh_trace(self):
+        self.run_fixture(legacy_trace_slot=True)
 
 
 if __name__ == "__main__":

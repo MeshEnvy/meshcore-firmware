@@ -52,6 +52,7 @@ private:
   static uint32_t retirementDeadline(uint32_t now, uint32_t radio_deadline,
                                      uint32_t floor);
   static uint32_t radioBudget(const Reply& reply);
+  static bool expired(const Reply& reply, uint32_t now);
   static void reset(Reply& reply);
   static void arm(Reply& reply, uint32_t timeout, bool flood, uint32_t now);
   static bool store(Reply& reply, const uint8_t* frame, size_t len, uint32_t now);
@@ -78,6 +79,8 @@ public:
   uint8_t reserveTrace(uint32_t tag, uint32_t auth, uint32_t now);
   void abandonTrace(uint8_t history);
   void retireTrace(uint8_t history, uint32_t now, uint32_t radio_deadline);
+  // A fresh tuple on the same route replaces its current binary trace.
+  // Refused reservations leave the current operation intact.
   bool reserveBinaryTrace(uint32_t tag, uint32_t auth,
                           BaseSerialInterface* route, uint32_t now);
   void armBinaryTrace(uint32_t timeout, uint32_t now);

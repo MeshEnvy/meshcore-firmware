@@ -7515,11 +7515,6 @@ void MyMesh::handleCmdFrame(size_t len) {
       writeErrFrame(ERR_CODE_BAD_STATE);
     }
   } else if (cmd_frame[0] == CMD_SEND_TRACE_PATH && len > 10 && len - 10 <= MAX_PACKET_PAYLOAD - 9) {
-    serviceBinaryTraceReply();
-    if (_delayed_replies.hasBinaryTrace()) {
-      writeErrFrame(ERR_CODE_BAD_STATE);
-      return;
-    }
     uint8_t path_len = len - 10;
     uint8_t flags = cmd_frame[9];
     uint8_t path_sz = flags & 0x03;  // NEW v1.11+
