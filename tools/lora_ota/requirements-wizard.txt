@@ -1,0 +1,4 @@
+# USB control and signed bootloader verification; wheels only in the private setup.
+meshcore==2.3.9.1
+pyserial==3.5
+cryptography==50.0.1

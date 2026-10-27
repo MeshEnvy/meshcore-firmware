@@ -4,6 +4,9 @@
 
 # LoRa OTA example: Station G2 on a Pi to an Ikoka Stick
 
+For the automatic version using only the Pi's USB-connected source radio,
+start with the [guided LoRa updater](ota_wizard.md).
+
 Update the Ikoka Stick's bootloader to **OTAFIX 2.4.12**, then install
 **1.18.0.1 Full Repeater** firmware. The Station G2 stays connected to the Pi
 by USB and serves the files. Use the app's authenticated Repeater Admin console for the Ikoka

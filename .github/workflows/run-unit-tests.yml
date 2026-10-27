@@ -324,6 +324,14 @@ jobs:
       - name: Verify OTA orchestration and automatic relay policy cleanup
         run: python3 -B -m unittest discover -s tools/lora_ota -p 'test_lora_ota*.py' -v
 
+      - name: Verify guided direct USB updates and source firmware controls
+        run: |
+          python3 -B -m unittest discover -s tools/lora_ota -p 'test_ota_wizard*.py' -v
+          python3 -B test/test_direct_ota_admin_client.py -v
+          python3 -B test/test_companion_direct_admin_guard.py -v
+          python3 -B test/test_repeater_ota_serial_control.py -v
+          python3 -B test/test_ota_zero_hop_route.py -v
+
       - name: Verify all signed OTAFIX 2.4.6 release images
         env:
           MESHCORE_BOOTLOADER_MOTA_ZIP: ${{ runner.temp }}/OTAFIX-2.4.6-bootloader-mota.zip

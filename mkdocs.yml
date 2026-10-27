@@ -64,6 +64,7 @@ nav:
           - upgrading_1.17.1.8_to_1.17.1.9.md
           - ota_user_guide.md
           - ota_easy.md
+          - ota_wizard.md
           - lora_ota_automation.md
           - ota_station_g2_to_ikoka_stick.md
           - ota_nrf52_bootloader_update.md

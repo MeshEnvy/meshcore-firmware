@@ -4,6 +4,9 @@
 
 # Scripted LoRa OTA from start to finish
 
+For a guided zero-hop update through one USB Repeater or Full Companion,
+use the [Python updater](ota_wizard.md).
+
 For a manual example using a Pi-connected repeater and the app's admin console,
 see [Station G2 to Ikoka Stick](ota_station_g2_to_ikoka_stick.md).
 

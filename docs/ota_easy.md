@@ -4,6 +4,9 @@
 
 # Easy firmware updates over LoRa
 
+For automatic board detection, firmware preparation, installation, and
+settings recovery through one USB radio, use the [guided Python updater](ota_wizard.md).
+
 For **[1.18.0.1 USA Cascade](releases/1.18.0.1.md)**, choose the exact board,
 role and storage layout in the [firmware picker](firmware_picker.md).
 For a new nRF52 installation, use the matching
