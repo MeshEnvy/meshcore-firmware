@@ -209,11 +209,12 @@ apply_policy() {
             with self.subTest(enabled=enabled, cooperative=cooperative, lose_owner=lose_owner):
                 candidate = pump
                 if lose_owner == "late":
-                    candidate = candidate.replace("    if (mesh::hostkiss::usbInputReserved(console.peek())) break;\n", "")
+                    candidate = candidate.replace(
+                        "    if (kiss_can_read() && mesh::hostkiss::usbInputReserved(console.peek())) break;\n", "")
                     self.assertNotEqual(candidate, pump)
                 elif lose_owner:
-                    candidate = candidate.replace("if (mesh::hostkiss::serviceUsb())",
-                                                  "if (false && mesh::hostkiss::serviceUsb())")
+                    candidate = candidate.replace("if (kiss_can_read() && mesh::hostkiss::serviceUsb())",
+                                                  "if (false && kiss_can_read() && mesh::hostkiss::serviceUsb())")
                     self.assertNotEqual(candidate, pump)
                 with tempfile.TemporaryDirectory(prefix="host-kiss-infra-") as directory:
                     directory = Path(directory)
