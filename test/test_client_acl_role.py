@@ -19,6 +19,33 @@ FIXTURE = ROOT / "test/fixtures/client_acl_spiffs"
 
 
 class ClientAclRoleTests(unittest.TestCase):
+    def test_complete_exclusive_companion_role_uses_one_global_definition(self):
+        definition = POLICY.COMPANION_DEFINITION
+        for role in ("+<../examples/companion_radio>",
+                     "+<../examples/companion_radio/*.cpp>",
+                     ["+<*.cpp>", "+<..\\examples\\companion_radio\\*.cpp>"]):
+            self.assertEqual(POLICY.companion_role_policy(role), {definition: 1})
+        for source in ("", "+<*>", "+<../examples/companion_radio/main.cpp>",
+                       "+<../examples/companion_radio> -<../examples/companion_radio/MyMesh.cpp>",
+                       "+<../examples/companion_radio> +<../examples/custom_role>",
+                       "+<../examples/simple_repeater>"):
+            self.assertEqual(POLICY.companion_role_policy(source), {})
+        for other in ("simple_repeater", *POLICY.OTHER_ROLES):
+            if other == "companion_radio":
+                continue
+            self.assertEqual(POLICY.companion_role_policy(
+                "+<../examples/companion_radio> +<../examples/" + other + ">"), {})
+        role = "+<../examples/companion_radio>"
+        for flag in ("-D" + definition + "=0", "-D" + definition + "=1", "-U" + definition):
+            self.assertEqual(POLICY.companion_role_policy(role, flag), {})
+        self.assertEqual(POLICY.companion_role_policy(role, cppdefines=[(definition, 1)]), {})
+        for value in ("true", "2", "-1"):
+            with self.assertRaises(ValueError):
+                POLICY.companion_role_policy(role, "-D" + definition + "=" + value)
+        with self.assertRaises(ValueError):
+            POLICY.companion_role_policy("+<../examples/simple_repeater>",
+                                         "-D" + definition + "=1")
+
     def test_only_complete_repeater_role_qualifies(self):
         for value in ("+<../examples/simple_repeater>", "+<../examples/simple_repeater/*.cpp>",
                       ["+<*.cpp>", "+<..\\examples\\simple_repeater\\*.cpp>"]):
@@ -57,6 +84,9 @@ class ClientAclRoleTests(unittest.TestCase):
         del env["appended"]
         POLICY.install(env)
         self.assertNotIn("appended", env)
+        env["SRC_FILTER"] = "+<../examples/companion_radio/*.cpp>"
+        POLICY.install(env)
+        self.assertEqual(env["appended"], {"CPPDEFINES": [(POLICY.COMPANION_DEFINITION, 1)]})
 
     def test_every_platform_base_installs_role_hook(self):
         ini = (ROOT / "platformio.ini").read_text()

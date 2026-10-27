@@ -60,9 +60,10 @@ mesh::FloodAdvertLimiter::Entry* repeaterRtcAdvertSlowBank() {
 #endif
 #include <helpers/radiolib/RadioPowerLimits.h>
 #include <helpers/radiolib/RxBoostedGainDefaults.h>
+#include <helpers/SmallTableSort.h>
 #include <algorithm>
 #include <new>       // std::nothrow (heap-allocated flood rule table)
-#include <stdlib.h>  // for qsort()
+#include <stdlib.h>
 #include <helpers/CLICommandUtils.h>
 #include <helpers/FloodCommandAliases.h>
 #if defined(NRF52_POWER_MANAGEMENT)
@@ -707,7 +708,7 @@ void MyMesh::sendDefaultPasswordWarning(ClientInfo* client,
   }
 }
 
-// Comparison functions for qsort() - defined at file scope to avoid heap allocations
+// Shared neighbour ordering; equally ranked entries have no guaranteed tie order.
 static int cmp_neighbours_newest_to_oldest(const void* a, const void* b) {
   const NeighbourInfo* na = *(const NeighbourInfo**)a;
   const NeighbourInfo* nb = *(const NeighbourInfo**)b;
@@ -942,21 +943,20 @@ int MyMesh::handleRequest(ClientInfo *sender, uint32_t sender_timestamp, uint8_t
         }
       }
 
-      // Sort neighbours based on order using qsort() - standard C library function
-      // qsort() doesn't allocate heap memory (uses stack-based recursion) and is O(n log n)
-      // This matches the pattern used elsewhere in the codebase (e.g., BaseChatMesh)
+      // Share the bounded O(n log n) sorter instead of retaining separate C
+      // and C++ sort implementations on flash-constrained boards.
       if (order_by == 0) {
         // sort by newest to oldest
-        qsort(sorted_neighbours, neighbours_count, sizeof(NeighbourInfo*), cmp_neighbours_newest_to_oldest);
+        mesh::sortSmallTable(sorted_neighbours, neighbours_count, sizeof(NeighbourInfo*), cmp_neighbours_newest_to_oldest);
       } else if (order_by == 1) {
         // sort by oldest to newest
-        qsort(sorted_neighbours, neighbours_count, sizeof(NeighbourInfo*), cmp_neighbours_oldest_to_newest);
+        mesh::sortSmallTable(sorted_neighbours, neighbours_count, sizeof(NeighbourInfo*), cmp_neighbours_oldest_to_newest);
       } else if (order_by == 2) {
         // sort by strongest to weakest
-        qsort(sorted_neighbours, neighbours_count, sizeof(NeighbourInfo*), cmp_neighbours_strongest_to_weakest);
+        mesh::sortSmallTable(sorted_neighbours, neighbours_count, sizeof(NeighbourInfo*), cmp_neighbours_strongest_to_weakest);
       } else if (order_by == 3) {
         // sort by weakest to strongest
-        qsort(sorted_neighbours, neighbours_count, sizeof(NeighbourInfo*), cmp_neighbours_weakest_to_strongest);
+        mesh::sortSmallTable(sorted_neighbours, neighbours_count, sizeof(NeighbourInfo*), cmp_neighbours_weakest_to_strongest);
       }
 
       // build results buffer
@@ -6023,9 +6023,8 @@ void MyMesh::formatNeighborsReply(char *reply) {
   }
 
   // sort neighbours newest to oldest
-  std::sort(sorted_neighbours, sorted_neighbours + neighbours_count, [](const NeighbourInfo* a, const NeighbourInfo* b) {
-    return a->heard_timestamp > b->heard_timestamp; // desc
-  });
+  mesh::sortSmallTable(sorted_neighbours, neighbours_count, sizeof(NeighbourInfo*),
+                       cmp_neighbours_newest_to_oldest);
 
   for (int i = 0; i < neighbours_count && dp - reply < 134; i++) {
     NeighbourInfo *neighbour = sorted_neighbours[i];
