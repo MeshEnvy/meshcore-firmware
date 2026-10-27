@@ -133,13 +133,17 @@ public:
   bool on = false;
   bool eink = false;
   int frames = 0;
+  int clears = 0;
+  int text_writes = 0;
+  uint32_t refresh_ms = 0;
   using TestDisplay::TestDisplay;
   bool isOn() override { return on; }
   bool isEink() override { return eink; }
   void turnOn() override { on = true; }
   void turnOff() override { on = false; }
-  void startFrame(ColorVal) override { rows.clear(); fills.clear(); }
-  void endFrame() override { ++frames; }
+  void startFrame(ColorVal) override { ++clears; rows.clear(); fills.clear(); }
+  void print(const char* text) override { ++text_writes; TestDisplay::print(text); }
+  void endFrame() override { ++frames; g_mock_millis += refresh_ms; }
 };
 
 }  // namespace
@@ -162,14 +166,14 @@ TEST(StartupScreen, StartsImmediatelyAndAnimatesInsideOneGeneratorCall) {
         mesh::ui::StartupScreen::progress, &screen);
     EXPECT_TRUE(mesh::generateUsableLocalIdentity(identity, [&]() {
       // Simulate entropy collection: the key generator has not returned yet.
-      g_mock_millis += 149;
+      g_mock_millis += 499;
       mesh::serviceIdentityGenerationProgress();
       EXPECT_EQ(2, display.frames);
       g_mock_millis += 1;
       mesh::serviceIdentityGenerationProgress();
       EXPECT_EQ(3, display.frames);
       EXPECT_NE(first[0].x, display.fills[0].x);
-      g_mock_millis += 150;
+      g_mock_millis += 500;
       mesh::serviceIdentityGenerationProgress();
       EXPECT_EQ(4, display.frames);
       mesh::LocalIdentity key;
@@ -194,7 +198,7 @@ TEST(StartupScreen, StartsImmediatelyAndAnimatesInsideOneGeneratorCall) {
   EXPECT_FALSE(policy.on());
 }
 
-TEST(StartupScreen, SavedModesAndSelectedPowerSourceAreRespected) {
+TEST(StartupScreen, FirstKeyTemporarilyOverridesQuietModesWithoutChangingPrefs) {
   for (bool usb : {false, true}) for (auto mode : {
       mesh::ui::DisplayMode::Off, mesh::ui::DisplayMode::On,
       mesh::ui::DisplayMode::Button, mesh::ui::DisplayMode::Pairing,
@@ -207,16 +211,32 @@ TEST(StartupScreen, SavedModesAndSelectedPowerSourceAreRespected) {
     display.on = true; // Some drivers power the panel as part of begin().
     mesh::ui::StartupScreen screen;
     screen.begin(&display, usb);
-    screen.generatingKey();
     const bool visible = mode != mesh::ui::DisplayMode::Off
         && mode != mesh::ui::DisplayMode::Pairing;
     EXPECT_EQ(visible, display.on);
+    EXPECT_EQ(visible ? 1 : 0, display.frames);
+    // Loading an existing identity must never override the saved quiet mode.
+    screen.loadingIdentity();
+    EXPECT_EQ(visible, display.on);
     EXPECT_EQ(visible ? 2 : 0, display.frames);
+    screen.generatingKey();
+    EXPECT_TRUE(display.on);
+    EXPECT_EQ("Generating key", display.rows[0].text);
+    screen.savingIdentity();
+    EXPECT_TRUE(display.on);
+    EXPECT_EQ("Saving identity", display.rows[0].text);
+    const int saved_frames = display.frames;
+    screen.starting();
+    EXPECT_EQ(visible, display.on);
+    EXPECT_EQ(saved_frames + (visible ? 1 : 0), display.frames);
+    EXPECT_EQ(mode, (usb ? prefs.usb : prefs.battery).mode);
+    EXPECT_EQ(mesh::ui::DisplayMode::Off, (usb ? prefs.battery : prefs.usb).mode);
   }
   mesh::ui::StartupScreen missing;
   missing.begin(nullptr, true);
   missing.generatingKey();
   missing.service();
+  missing.savingIdentity();
   missing.starting();
   mesh::ui::StartupScreen::progress(nullptr);
 }
@@ -291,12 +311,146 @@ TEST(StartupScreen, EpaperIsThrottledAndMillisWrapIsSafe) {
   mesh::ui::StartupScreen screen;
   screen.begin(&display, true);
   screen.generatingKey();
-  g_mock_millis += 999;
+  const auto initial_rows = display.rows.size();
+  const int initial_writes = display.text_writes;
+  ASSERT_EQ(1U, display.fills.size());
+  g_mock_millis += 4999;
   screen.service();
   EXPECT_EQ(2, display.frames);
   ++g_mock_millis;
   screen.service();
   EXPECT_EQ(3, display.frames);
+  ASSERT_EQ(2U, display.fills.size());
+  EXPECT_EQ(2, display.clears); // Starting + Generating; progress never clears.
+  EXPECT_EQ(initial_rows, display.rows.size());
+  EXPECT_EQ(initial_writes, display.text_writes);
+  g_mock_millis += 5000;
+  screen.service();
+  ASSERT_EQ(3U, display.fills.size());
+  EXPECT_EQ(display.fills[0].x + 8, display.fills[1].x);
+  EXPECT_EQ(display.fills[0].y, display.fills[1].y);
+  EXPECT_EQ(2, display.clears);
+}
+
+TEST(StartupScreen, EpaperAccumulatesRowsAndStopsWhenGridIsFull) {
+  mesh::ui::displayPowerPrefs() = mesh::ui::DisplayPowerPrefs();
+  mesh::ui::displayPowerPrefs().usb.mode = mesh::ui::DisplayMode::Off;
+  StartupTestDisplay display(40, 72, 6);
+  display.eink = true;
+  mesh::ui::StartupScreen screen;
+  screen.begin(&display, true);
+  screen.generatingKey();
+  EXPECT_TRUE(display.on);
+  EXPECT_EQ(1, display.clears);
+  const int text_writes = display.text_writes;
+  for (int i = 0; i < 100; ++i) {
+    g_mock_millis += 5000;
+    screen.service();
+  }
+  // Four columns, five rows below the two-line label; every dot remains.
+  ASSERT_EQ(20U, display.fills.size());
+  EXPECT_EQ(20, display.frames);
+  EXPECT_EQ(1, display.clears);
+  EXPECT_EQ(text_writes, display.text_writes);
+  for (size_t i = 0; i < display.fills.size(); ++i) {
+    const auto& dot = display.fills[i];
+    EXPECT_EQ(4 + int(i % 4) * 8, dot.x);
+    EXPECT_EQ(display.fills[0].y + int(i / 4) * 8, dot.y);
+    EXPECT_LE(dot.x + dot.width, display.width());
+    EXPECT_LE(dot.y + dot.height, display.height());
+    EXPECT_GE(dot.y, display.rows.back().y + display.textLineHeight());
+  }
+  screen.savingIdentity();
+  EXPECT_EQ("Saving", display.rows[0].text);
+  EXPECT_TRUE(display.fills.empty());
+  EXPECT_EQ(2, display.clears);
+  screen.starting();
+  EXPECT_FALSE(display.on);
+  EXPECT_EQ(2, display.clears);
+}
+
+TEST(StartupScreen, EpaperWithoutDotSpaceDoesNotRefreshProgress) {
+  mesh::ui::displayPowerPrefs() = mesh::ui::DisplayPowerPrefs();
+  StartupTestDisplay display(128, 16, 6);
+  display.eink = true;
+  mesh::ui::StartupScreen screen;
+  screen.begin(&display, true);
+  screen.generatingKey();
+  const int frames = display.frames;
+  for (int i = 0; i < 10; ++i) {
+    g_mock_millis += 5000;
+    screen.service();
+  }
+  EXPECT_EQ(frames, display.frames);
+  EXPECT_TRUE(display.fills.empty());
+}
+
+TEST(StartupScreen, EpaperBacksOffForMeasuredDotRefreshAcrossMillisWrap) {
+  mesh::ui::displayPowerPrefs() = mesh::ui::DisplayPowerPrefs();
+  g_mock_millis = UINT32_MAX - 11100;
+  StartupTestDisplay display(250, 122, 12);
+  display.eink = true;
+  display.refresh_ms = 3000; // Initial full-screen refresh is deliberately slow.
+  mesh::ui::StartupScreen screen;
+  screen.begin(&display, true);
+  screen.generatingKey();
+  display.refresh_ms = 800;
+  g_mock_millis += 4999;
+  screen.service();
+  EXPECT_EQ(2, display.frames);
+  ++g_mock_millis;
+  screen.service(); // This append's 800 ms refresh crosses millis wrap.
+  EXPECT_EQ(3, display.frames);
+  ASSERT_EQ(2U, display.fills.size());
+  g_mock_millis += 7999;
+  screen.service();
+  EXPECT_EQ(3, display.frames);
+  ++g_mock_millis;
+  display.refresh_ms = UINT32_MAX / 10 + 100;
+  screen.service();
+  EXPECT_EQ(4, display.frames);
+  // Even an extreme measured duration saturates before multiplication.
+  g_mock_millis += 59999;
+  screen.service();
+  EXPECT_EQ(4, display.frames);
+  ++g_mock_millis;
+  display.refresh_ms = 0;
+  screen.service();
+  EXPECT_EQ(5, display.frames);
+  g_mock_millis += 4999;
+  screen.service();
+  EXPECT_EQ(5, display.frames);
+  ++g_mock_millis;
+  screen.service();
+  EXPECT_EQ(6, display.frames); // Fast refreshes return to the five-second floor.
+  EXPECT_EQ(2, display.clears);
+}
+
+TEST(StartupScreen, ElapsedSecondsAreWrapSafeAndOmittedOnShortScreens) {
+  mesh::ui::displayPowerPrefs() = mesh::ui::DisplayPowerPrefs();
+  g_mock_millis = UINT32_MAX - 100;
+  StartupTestDisplay display(128, 64, 6);
+  mesh::ui::StartupScreen screen;
+  screen.begin(&display, true);
+  screen.generatingKey();
+  ASSERT_EQ(2U, display.rows.size());
+  EXPECT_EQ("0s", display.rows.back().text);
+  g_mock_millis += 1500;
+  screen.service();
+  EXPECT_EQ("1s", display.rows.back().text);
+  g_mock_millis += 2500;
+  screen.service();
+  EXPECT_EQ("4s", display.rows.back().text);
+
+  StartupTestDisplay short_display(128, 32, 6);
+  screen.begin(&short_display, true);
+  screen.generatingKey();
+  ASSERT_EQ(1U, short_display.rows.size());
+  EXPECT_EQ("Generating key", short_display.rows[0].text);
+  EXPECT_EQ(2U, short_display.fills.size());
+  g_mock_millis += 2000;
+  screen.service();
+  EXPECT_EQ(1U, short_display.rows.size());
 }
 
 TEST(DisplayDriver, EllipsizesOnlyAtUTF8CodepointBoundaries) {

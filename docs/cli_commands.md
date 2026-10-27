@@ -1430,11 +1430,18 @@ and sensors do not gain this Companion-only normal-UI boot wake.
 On display-equipped Companions, repeaters, room servers, and sensors, a small
 `Starting...` screen appears as soon as the board, primary filesystem, and
 display are initialized, before radio initialization and serial-settle delays.
-If a new identity is needed, it changes to `Generating key` with an animated
-spinner during radio entropy collection. OLED/TFT updates are paced at 150 ms;
-e-paper uses a slower one-second cadence. Saved `off` and pairing-only modes
-still suppress this startup screen. The normal UI's boot timeout starts only
-when that UI is ready, so key generation does not consume it. Filesystem
+If a new identity is needed, it changes to `Generating key`. OLED/TFT screens
+show a spinner and elapsed seconds, updating at most twice a second; very
+small screens omit the elapsed time. E-paper adds dots from left to right,
+row by row, preserving the text and earlier dots. New dots are at least five
+seconds apart, slowing further when refreshes are expensive, and stop when
+the grid is full. These indicators show activity rather than a percentage.
+
+First-boot key generation and saving temporarily appear even in saved `off`
+or pairing-only modes. The selected mode resumes afterward without changing
+preferences. Normal startup with an existing key still respects those modes.
+The normal UI's boot timeout starts only when that UI is ready, so key
+generation does not consume it. Filesystem
 recovery and the display driver's own initialization can still delay the first
 visible frame; the firmware cannot draw before those operations finish.
 
@@ -1451,7 +1458,8 @@ An actual phone pairing request wakes pairing-enabled display modes and keeps
 the banner visible until completion or its two-minute expiry. Bluetooth
 scanning alone is not a pairing request.
 
-- `off`: stays dark, including boot and pairing.
+- `off`: stays dark during normal boot and pairing; first-boot key generation
+  has the temporary exception described above.
 - `on`: stays on while the device is awake.
 - `button`: a physical button, keyboard/navigation input, or supported touch
   wakes the display and restarts the timeout.
