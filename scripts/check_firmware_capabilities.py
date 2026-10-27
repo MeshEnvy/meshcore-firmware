@@ -12,6 +12,10 @@ import struct
 import zipfile
 import zlib
 from rp2040_application import read_application as read_rp2040_application
+from host_kiss_capabilities import (CAPABILITY as HOST_KISS_CAPABILITY,
+    USB_CAPABILITY as HOST_KISS_USB_CAPABILITY, TCP_CAPABILITY as HOST_KISS_TCP_CAPABILITY,
+    COMMAND_MARKERS as HOST_KISS_COMMAND_MARKERS, TCP_MARKER as HOST_KISS_TCP_MARKER,
+    evidence as host_kiss_evidence)
 from package_meshtext_license import (CAPABILITY as MESHTEXT_CAPABILITY,
     meshtext_evidence, notice_bytes as meshtext_notice_bytes,
     notice_record as meshtext_notice_record)
@@ -80,6 +84,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--require-meshtext", action="store_true",
         help="Require linked Meshtext encode/decode and Companion raw-frame transport implementations.",
+    )
+    parser.add_argument(
+        "--require-host-kiss", action="store_true",
+        help="Require linked KISS framing/Dispatcher transport and packaged USB/TCP service commands.",
     )
     parser.add_argument("--firmware-bin", type=Path)
     parser.add_argument("--partitions", type=Path)
@@ -231,12 +239,34 @@ def main() -> int:
                        "evidence": "Meshtext encode/decode, Companion send/receive, and Dispatcher raw-frame queue implementations",
                        "present": False, "source": "linked ELF symbols"})
     application = b""
-    if args.expect_application:
+    if args.expect_application or args.require_host_kiss:
         try:
             application = read_application(args)
         except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
             print(f"capability check: cannot read packaged application: {exc}", file=sys.stderr)
             malformed = True
+    host_kiss_symbols = []
+    host_kiss_verified = False
+    if args.require_host_kiss:
+        try:
+            host_kiss_symbols = host_kiss_evidence(args.image)
+        except (OSError, ValueError) as exc:
+            print(f"capability check: cannot qualify linked host KISS code: {exc}", file=sys.stderr)
+            malformed = True
+        checks.append({"capability": HOST_KISS_CAPABILITY,
+                       "evidence": "; ".join(host_kiss_symbols) if host_kiss_symbols else
+                           "executable KISS frame decoder/encoder and Dispatcher raw-frame queue",
+                       "present": bool(host_kiss_symbols), "source": "linked ELF symbols"})
+        usb_present = all(marker in application for marker in HOST_KISS_COMMAND_MARKERS)
+        checks.append({"capability": HOST_KISS_USB_CAPABILITY,
+                       "evidence": "; ".join(marker.decode("ascii") for marker in HOST_KISS_COMMAND_MARKERS),
+                       "present": usb_present, "source": "packaged application"})
+        tcp_present = args.platform != "ESP32_PLATFORM" or HOST_KISS_TCP_MARKER in application
+        if args.platform == "ESP32_PLATFORM":
+            checks.append({"capability": HOST_KISS_TCP_CAPABILITY,
+                           "evidence": HOST_KISS_TCP_MARKER.decode("ascii"),
+                           "present": tcp_present, "source": "packaged application"})
+        host_kiss_verified = bool(host_kiss_symbols) and usb_present and tcp_present
     expectations = [(value, image, "linked image") for value in args.expect]
     expectations += [(value, application, "packaged application") for value in args.expect_application]
     gzip_assets = linked_gzip_assets(image) if args.expect_gzip else []
@@ -269,6 +299,11 @@ def main() -> int:
         # Neither a requested capability nor CLI strings prove the optional
         # codec and its complete Companion transport survived linking.
         capabilities = [value for value in capabilities if value != MESHTEXT_CAPABILITY]
+    if not host_kiss_verified:
+        capabilities = [value for value in capabilities if value not in
+                        (HOST_KISS_CAPABILITY, HOST_KISS_USB_CAPABILITY, HOST_KISS_TCP_CAPABILITY)]
+    if args.platform != "ESP32_PLATFORM":
+        capabilities = [value for value in capabilities if value != HOST_KISS_TCP_CAPABILITY]
     missing = [check for check in checks if not check["present"]]
     ota_methods = stable_unique([
         check["capability"].removeprefix("ota.update.")

@@ -392,6 +392,10 @@ void loop() {
     len = 0;
   }
   while (usb_ready && console.available() && len < sizeof(command)-1) {
+#if MESH_ENABLE_HOST_KISS
+    // Bytes may arrive after the loop-top KISS poll. Preserve its first FEND.
+    if (mesh::hostkiss::usbInputReserved(console.peek())) break;
+#endif
     char c = console.read();
     if (c != '\n') {
       command[len++] = c;

@@ -113,7 +113,8 @@ static unsigned ascii_calls=0,usb_binary_calls=0,network_calls=0,kiss_resets=0;
 static std::deque<uint8_t> input;
 struct Port {} terminal_port;
 struct Usb {
-  bool enabled=true,passthrough=false;
+  bool enabled=true,passthrough=false,receiving=false;
+  bool isReceivingFrame()const{return receiving;}
   unsigned resets=0,frames=19,enables=0,disables=0;
   bool isEnabled() const { return enabled; }
   void enable(){enabled=true;++enables;}
@@ -150,7 +151,7 @@ void cancelReaderCommand(Port* p){assert(p==&terminal_port);++reader_cancels;}
 void discardUsbTerminalOutput(){++text_discards;}
 void setUsbBinaryStreamOwned(bool value){binary_owned=value;}
 namespace ota {
-struct Source {void resetSessionState(){++mota_resets;}} source;
+struct Source {bool pending=false;bool hasPendingResponse()const{return pending;}void resetSessionState(){++mota_resets;}} source;
 struct OtaContext {static Source& serialFolderSource(){return source;}};
 }
 namespace hostkiss {
@@ -179,7 +180,17 @@ static bool poll(){
 int main(){
   input={'v','e','r','\r'};assert(!poll() && ascii_calls==1 && !serial_cancels);
 #if MESH_ENABLE_HOST_KISS
-  terminal_mode=true;usb_mota_mode=true;usb_terminal_discard_line=usb_logging_terminal_mode=true;
+  // Existing binary ownership cannot be stolen by a FEND payload byte.
+  usb_serial_interface.receiving=true; input={0xc0};
+  assert(!serviceCompanionHostKissUsb() && !kiss_active && input.size()==1);
+  usb_serial_interface.receiving=false;
+#if COMPANION_FEATURE_USB_MOTA_SOURCE
+  usb_mota_mode=true;assert(!serviceCompanionHostKissUsb() && !kiss_active && input.size()==1);
+  usb_mota_mode=false;mesh::ota::source.pending=true;
+  assert(!serviceCompanionHostKissUsb() && !kiss_active && input.size()==1);
+  mesh::ota::source.pending=false;
+#endif
+  terminal_mode=true;usb_terminal_discard_line=usb_logging_terminal_mode=true;
   input={0xc0,0x00,0x41};assert(poll());
   assert(kiss_active && host_kiss_usb_parked && host_kiss_usb_restore_enabled && !usb_serial_interface.enabled);
   assert(serial_cancels==1 && route_cancels==1 && forgotten_routes==1);

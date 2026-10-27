@@ -50,7 +50,7 @@ class MeshtextLicenseTest(unittest.TestCase):
             build = root / "build/base"
             build.mkdir(parents=True)
             elf32(build / "firmware.elf", symbols=symbols)
-            config = [["env:base", [["build_flags", ["-DCOMPANION_RADIO_FULL=1", *flags]],
+            config = [["env:base", [["build_flags", ["-DCOMPANION_RADIO_FULL=1", "-DMESH_ENABLE_HOST_KISS=0", *flags]],
                                     ["build_unflags", list(config_unflags)]]]]
             script = r'''
 set -euo pipefail

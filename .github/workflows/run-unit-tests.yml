@@ -582,6 +582,8 @@ jobs:
           python3 -B test/test_host_kiss_infrastructure.py -v
           python3 -B test/test_host_kiss.py -v
           python3 -B test/test_host_kiss_usb.py -v
+          python3 -B test/test_host_kiss_ingress.py -v
+          python3 -B test/test_host_kiss_capabilities.py -v
           python3 -B test/test_ethernet_kiss.py -v
           python3 -B test/test_ethernet_radio.py -v
           python3 -B test/test_companion_ethernet.py -v

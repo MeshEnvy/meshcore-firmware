@@ -11182,6 +11182,7 @@ void MyMesh::checkCLIRescueCmd() {
   }
   unsigned budget = sizeof(cli_command);
   while (budget-- && input.available()) {
+    if (mesh::hostkiss::usbInputReserved(input.peek())) return;
     char c = input.read();
     output.print(c);  // echo
     if (c == '\r' || c == '\n') {

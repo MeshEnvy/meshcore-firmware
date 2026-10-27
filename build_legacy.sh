@@ -4809,6 +4809,25 @@ sys.exit(0 if required else 3)
   esac
 }
 
+requires_host_kiss_code() {
+  local env_name=$1
+  local pio_env_name=$2
+  local env_platform=$3
+  local decision_status=0
+  local -a arguments=(--required --env "$pio_env_name" --platform "$env_platform")
+  is_kiss_modem_target "$env_name" && return 1
+  if is_companion_radio_full_target "$env_name"; then
+    arguments+=(--full-companion)
+  fi
+  python3 scripts/host_kiss_capabilities.py "${arguments[@]}" \
+    <<<"$PIO_CONFIG_JSON" || decision_status=$?
+  case "$decision_status" in
+    0) return 0 ;;
+    3) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
 write_build_capability_manifest() {
   local env_name=$1
   local env_platform=$2
@@ -4845,6 +4864,14 @@ write_build_capability_manifest() {
   elif [ "$meshtext_status" -ne 1 ]; then
     echo "Cannot determine the Full Companion Meshtext capability contract." >&2
     return "$meshtext_status"
+  fi
+  local host_kiss_status=0
+  requires_host_kiss_code "$env_name" "$pio_env_name" "$env_platform" || host_kiss_status=$?
+  if [ "$host_kiss_status" -eq 0 ]; then
+    checker_args+=(--require-host-kiss)
+  elif [ "$host_kiss_status" -ne 1 ]; then
+    echo "Cannot determine the host KISS capability contract." >&2
+    return "$host_kiss_status"
   fi
   if [ "$env_platform" = "ESP32_PLATFORM" ]; then
     checker_args+=(--firmware-bin "${build_output_dir}/firmware.bin"

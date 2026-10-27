@@ -343,10 +343,12 @@ int main() {
   GuestMemoryFS fs;Radio radio;RadioProfileCLI profiles(radio);Dispatcher dispatcher;
   hostkiss::begin(&fs,radio,profiles,dispatcher);
   command("get kiss");assert(strstr(reply,"> off"));
+  assert(!hostkiss::usbInputReserved(0xc0));
   input({0xc0,0,1,0xc0});assert(!hostkiss::serviceUsb()&&serial.available()==4);
   serial.input.clear();
   command("set kiss on",false);assert(strstr(reply,"local connection"));
   command("set kiss on");assert(strstr(reply,"OK"));
+  assert(hostkiss::usbInputReserved(0xc0) && !hostkiss::usbInputReserved(0));
   hostkiss::Settings saved;assert(saved.begin(&fs)&&saved.selection().enabled);
   input({'g','e','t',' '});assert(!hostkiss::serviceUsb()&&serial.available()==4);
   serial.input.clear();
@@ -354,6 +356,7 @@ int main() {
   // same connection becomes ready automatically once the tuple is stable.
   profiles.busy=true;input({0xc0});poll();
   assert(hostkiss::usbActive()&&!hostkiss::radioActive()&&serial.output.empty());
+  assert(hostkiss::usbInputReserved(0) && hostkiss::usbInputReserved(-1));
   command("get kiss");assert(strstr(reply,"waiting-radio")&&strstr(reply,"pending radio settings"));
   fake_millis=1999;poll();assert(serial.output.empty());
   profiles.busy=false;fake_millis=2000;poll();

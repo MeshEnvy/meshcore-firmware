@@ -1113,6 +1113,15 @@ static void resetUsbTerminalHostSession() {
 // Park this one Companion transport; BLE/WiFi and the primary mesh stay live.
 static bool serviceCompanionHostKissUsb() {
 #if MESH_ENABLE_HOST_KISS
+  // A FEND inside an already-started Companion frame is payload, not a
+  // request to change protocols. The idle ingress gate handles the next one.
+  if (!mesh::hostkiss::usbActive()) {
+    if (usb_serial_interface.isReceivingFrame()) return false;
+#if COMPANION_FEATURE_USB_MOTA_SOURCE
+    if (usb_mota_mode
+        || mesh::ota::OtaContext::serialFolderSource().hasPendingResponse()) return false;
+#endif
+  }
   const bool claimed = mesh::hostkiss::serviceUsb();
   if (claimed && mesh::hostkiss::usbActive() && !host_kiss_usb_parked) {
     host_kiss_usb_restore_enabled = usb_serial_interface.isEnabled();
@@ -1320,6 +1329,7 @@ static void serviceUsbTerminal() {
   bool blank_input = false;
   int pending = usb_input.available();
   while (pending-- > 0) {
+    if (mesh::hostkiss::usbInputReserved(usb_input.peek())) return;
     // A leftover CR/LF (for example after mOTA shutdown) must not hide a
     // following frame or cause a banner to poison its first binary reply.
     if (usb_terminal_line_len == 0 && !usb_terminal_discard_line) {
@@ -1488,7 +1498,10 @@ static void serviceUsbLoggingOwnership(bool logging_enabled) {
     // the stream quarantined forever. Let its bounded consumer drain instead.
     Stream& input = mesh::usbCompanionPort();
     int pending = response_pending ? 0 : input.available();
-    while (pending-- > 0) input.read();
+    while (pending-- > 0) {
+      if (mesh::hostkiss::usbInputReserved(input.peek())) return;
+      input.read();
+    }
     usb_logging_network_parked = false;
     usb_serial_interface.setPassthroughMode(
         the_mesh.isTerminalMode() || response_pending);
@@ -1610,7 +1623,10 @@ static void expireUsbBinaryStartupProbeBeforeDispatch() {
   // already queued for that expired attempt so they cannot begin a new probe.
   Stream& usb_input = mesh::usbCompanionPort();
   int pending = usb_input.available();
-  while (pending-- > 0) usb_input.read();
+  while (pending-- > 0) {
+    if (mesh::hostkiss::usbInputReserved(usb_input.peek())) return;
+    usb_input.read();
+  }
   enterUsbTerminalMode();
 }
 #endif
@@ -4141,6 +4157,11 @@ void setup() {
   // keep frames intact and pace the contact stream when the host is slow
   usb_serial_interface.enableFlowControl(true);
   usb_serial_interface.setReceiveFrameCheck(acceptUsbBinaryStartupFrame);
+#if MESH_ENABLE_HOST_KISS
+  usb_serial_interface.setIdleReceiveCheck([](int next_byte) {
+    return !mesh::hostkiss::usbInputReserved(next_byte);
+  });
+#endif
 #if defined(ESP32) && defined(ARDUINO_USB_MODE) && ARDUINO_USB_MODE == 1 \
     && defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
   // The ESP32 USB-Serial-JTAG peripheral (HWCDC) has no DTR concept at all.

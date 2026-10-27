@@ -36,7 +36,9 @@ If the initial radio2 change is still pending, the connection waits and sends
 READY when radio2 becomes available; no reconnect is needed. DATA received
 while waiting is discarded, so hosts should wait for the initial READY.
 
-USB remains the normal CLI until an initial KISS FEND (`C0`). During the raw
+USB remains the normal CLI until an initial KISS FEND (`C0`). A delimiter
+inside an unfinished Companion frame or an active mOTA session keeps its
+original protocol ownership. During the raw
 session, USB Companion framing and text/debug output are parked. Send the
 standard KISS RETURN frame (`C0 FF C0`) to leave the session, then issue CLI
 commands normally. A detected USB disconnect/reset also ends the session.

@@ -307,6 +307,10 @@ size_t ArduinoSerialInterface::checkRecvFrame(uint8_t dest[]) {
   // host must not keep the radio/watchdog loop trapped in this parser.
   int pending = _serial->available();
   while (pending-- > 0) {
+    // Input can arrive after the role's initial protocol-owner poll. Leave a
+    // reserved first byte for that owner without consuming its framing.
+    if (_state == RECV_STATE_IDLE && _idle_receive_check != nullptr
+        && !_idle_receive_check(_serial->peek())) return 0;
     int c = _serial->read();
     if (c < 0) break;
     _last_rx_byte_ms = millis();

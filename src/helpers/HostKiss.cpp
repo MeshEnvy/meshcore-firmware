@@ -522,6 +522,10 @@ bool serviceUsb() {
 }
 
 bool usbActive() { return usb_session; }
+bool usbInputReserved(int next_byte) {
+  return usb_session || (settings.selection().enabled
+      && settings.selection().transport == Transport::Usb && next_byte == Codec::Fend);
+}
 bool radioActive() { return current(); }
 void resetUsbSession() { if (usb_session) closeSession(); }
 

@@ -526,6 +526,10 @@ static void __attribute__((noinline)) serviceCommandInterfaces() {
   bool overlong_line_complete = false;
   size_t read_budget = 256;
   while (usb_ready && read_budget-- > 0 && console.available()) {
+#if MESH_ENABLE_HOST_KISS
+    // Bytes may arrive after the loop-top KISS poll. Preserve its first FEND.
+    if (mesh::hostkiss::usbInputReserved(console.peek())) break;
+#endif
     char c = console.read();
     if (c == '\n') continue;
     console.print(c);

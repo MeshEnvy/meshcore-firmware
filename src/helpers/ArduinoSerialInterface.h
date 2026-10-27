@@ -10,6 +10,9 @@ public:
   // Optional protocol-owner gate, checked before a completed frame is exposed
   // or recorded as client activity. Other transports retain their old behavior.
   typedef bool (*ReceiveFrameCheck)(uint32_t completed_at);
+  // Before reading an idle byte, another protocol may reserve it in-place.
+  // Length-prefixed frame bodies bypass this gate, including opaque 0xC0.
+  typedef bool (*IdleReceiveCheck)(int next_byte);
 
 private:
   static constexpr uint8_t TX_QUEUE_SIZE = 4;
@@ -46,6 +49,7 @@ private:
   const char* _secondaryControlSequence;
   ConnectedCheck _conn_check;
   ReceiveFrameCheck _receive_frame_check;
+  IdleReceiveCheck _idle_receive_check;
   uint8_t rx_buf[MAX_FRAME_SIZE];
   TxFrame _tx_queue[TX_QUEUE_SIZE];
 
@@ -71,7 +75,7 @@ public:
         _has_received_frame(false),
         _serial(nullptr), _controlSequence(nullptr),
         _secondaryControlSequence(nullptr), _conn_check(nullptr),
-        _receive_frame_check(nullptr) {}
+        _receive_frame_check(nullptr), _idle_receive_check(nullptr) {}
 
   void begin(Stream& serial, const char* controlSequence = nullptr,
              const char* secondaryControlSequence = nullptr) {
@@ -105,6 +109,8 @@ public:
   // Without it isConnected() assumes true, as a plain UART has no way of knowing.
   void setConnectedCheck(ConnectedCheck fn) { _conn_check = fn; }
   void setReceiveFrameCheck(ReceiveFrameCheck fn) { _receive_frame_check = fn; }
+  void setIdleReceiveCheck(IdleReceiveCheck fn) { _idle_receive_check = fn; }
+  bool isReceivingFrame() const { return _state != 0; }
 
   // Clear all protocol state owned by one host session while retaining the
   // monotonic completed-frame counter used by startup handoff arbitration.

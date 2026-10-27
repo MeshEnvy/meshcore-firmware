@@ -24,11 +24,16 @@ FIXTURE = r'''
 #include <string>
 static std::deque<unsigned char> input;
 static bool kiss_active = false, reset_pending = false, network_pending = false;
+static bool inject_late_fend=false;
 static unsigned reset_reads = 0, kiss_resets = 0, ascii_commands = 0;
 static unsigned board_loops = 0, ethernet_loops = 0, network_commands = 0;
 static unsigned serial_cancels = 0, terminal_drains = 0;
 struct Stream {
-  int available() const { return int(input.size()); }
+  int available() const {
+    if(inject_late_fend){inject_late_fend=false;input={0xc0,0x00,0x41,0xc0};}
+    return int(input.size());
+  }
+  int peek()const{return input.empty()?-1:input.front();}
   int read() {
     assert(!input.empty() && input.front() != 0xc0);
     int value = input.front(); input.pop_front(); return value;
@@ -49,6 +54,7 @@ namespace power { void serviceRegulatorSettings() {} }
 #if MESH_ENABLE_HOST_KISS
 namespace hostkiss {
 void resetUsbSession() { ++kiss_resets; kiss_active=false; }
+bool usbInputReserved(int next){return kiss_active || next==0xc0;}
 bool serviceUsb() {
   if (!input.empty() && input.front()==0xc0) {
     input.pop_front(); kiss_active=true;
@@ -127,6 +133,11 @@ int main() {
   assert(command[0]==0 && !command_overflow);
   ascii(); serviceCommandInterfaces(); assert(ascii_commands==3);
 #endif
+  // The first FEND arrives after serviceUsb() returned false this poll.
+  inject_late_fend=true;const unsigned prior_commands=ascii_commands;
+  serviceCommandInterfaces();
+  assert(!kiss_active && !input.empty() && input.front()==0xc0 && ascii_commands==prior_commands);
+  serviceCommandInterfaces();assert(kiss_active && input.empty());
 #endif
 }
 '''
