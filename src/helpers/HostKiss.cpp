@@ -25,6 +25,7 @@ RadioProfileCLI* profiles = nullptr;
 Dispatcher* dispatcher = nullptr;
 Codec* codec = nullptr;  // All frame buffers are absent while the setting is off.
 bool usb_session = false, suspended = false, leased = false, transmitting = false;
+bool initial_waiting = false, initial_fresh = false, established = false, ready_started = false;
 bool ready_pending = false, completion_pending = false, completion_success = false;
 uint8_t quarantine_return = 0;
 uint32_t profile_generation = 0, intent_generation = 0;
@@ -65,6 +66,7 @@ void resetFrames() {
   if (codec) codec->reset();
   ready_pending = completion_pending = false;
   quarantine_return = 0;
+  initial_waiting = initial_fresh = established = ready_started = false;
 }
 
 void closeSession() {
@@ -102,17 +104,55 @@ bool leaseRadio() {
   return true;
 }
 
-bool current() {
+bool validLease() {
   if (!leased || !active() || suspended || admission()) return false;
   const auto* p = radio->profiles();
   return p && p->generation[1] == profile_generation
       && profiles->secondaryIntentGeneration() == intent_generation;
+}
+bool current() { return established && validLease(); }
+
+// Before the first READY, a pending settings handoff or another RF owner is a
+// wait, not a failed connection. All pre-READY DATA is discarded; admission
+// requires no buffered input and a complete KISS frame boundary.
+bool startInitialLease() {
+  if (!leaseRadio()) return false;
+  resetFrames();
+  codec->feed(Codec::Fend);
+  ready_pending = true;
+  return true;
+}
+void admitInitial(bool input_empty) {
+  if (initial_waiting && codec && input_empty && codec->atFrameBoundary()
+      && (!usb_session || isUsbBinaryStreamReady())) startInitialLease();
+}
+
+bool inputByte(uint8_t byte) {
+  codec->feed(byte);
+  if (codec->returned()) { closeSession(); return false; }
+  if (initial_waiting || suspended || !leased) {
+    const uint8_t* bytes;
+    size_t length;
+    while (codec->peekTransmit(bytes, length)) {
+      codec->consumeTransmit();
+      ++discarded;
+    }
+  }
+  return true;
+}
+
+void outputProgress() {
+  // No RX or TX output is admitted before this initial READY completes.
+  if (leased && !initial_waiting && !established && !ready_pending
+      && !codec->queuedOutput()) established = true;
 }
 
 const char* state(const Selection& selected, const char* reason) {
   if (!selected.enabled) return "off";
   if (suspended) return "suspended";
   if (!codec) return "unavailable";
+  if (active() && initial_waiting) return "waiting-radio";
+  if (active() && !established) return "starting";
   if (active()) return "connected";
   if (reason) return "blocked";
 #if defined(ESP32)
@@ -139,6 +179,17 @@ void invalidateSession() {
     // Drop accepts queued in the old profile session, not only its owner.
     if (tcp) { tcp->server.end(); tcp->listening = tcp->attempted = false; }
 #endif
+  }
+}
+
+void checkLease() {
+  if (!leased || validLease()) return;
+  // A partial READY cannot be withdrawn: the peer may already have its bytes.
+  if (established || ready_started) invalidateSession();
+  else {
+    releaseRadio();
+    resetFrames();
+    initial_waiting = true;
   }
 }
 
@@ -231,38 +282,61 @@ void loopTcp() {
   if (tcp->listening) {
     WiFiClient incoming = tcp->server.available();
     if (incoming) {
-      if (tcp->connected || admission()) incoming.stop();
+      if (tcp->connected) incoming.stop();
       else {
         resetFrames();
-        if (!leaseRadio()) incoming.stop();
-        else {
-          tcp->client = incoming;
-          tcp->client.setNoDelay(true);
-          tcp->connected = true;
-          suspended = false;
-          ready_pending = true;
-        }
+        tcp->client = incoming;
+        tcp->client.setNoDelay(true);
+        tcp->connected = true;
+        suspended = false;
+        initial_waiting = true;
+        // A stable tuple accepts the first DATA even from a generic KISS
+        // client with flow control disabled. Only a genuinely blocked initial
+        // handoff needs to discard pre-READY input.
+        startInitialLease();
       }
     }
   }
   if (!tcp->connected) return;
+  const bool was_ready = established;
+  // Drain invalid/pre-READY host bytes before admitting the final RF tuple.
+  // recv's EAGAIN proves the socket input was empty on this bounded poll.
+  bool input_empty = false;
+  if (!established) {
+    for (size_t i = 0; i < ByteBudget && codec->canAcceptByte(); ++i) {
+      uint8_t byte;
+      const int got = ::recv(tcp->client.fd(), &byte, 1, MSG_DONTWAIT);
+      if (got == 1) { if (!inputByte(byte)) return; }
+      else {
+        if (!got || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+          closeSession(); return;
+        }
+        input_empty = errno == EAGAIN || errno == EWOULDBLOCK;
+        break;
+      }
+    }
+    admitInitial(input_empty);
+  }
   queueControls();
   const uint8_t* bytes;
   size_t length;
   if (codec->peekOutput(bytes, length)) {
     if (length > ByteBudget) length = ByteBudget;
     const int written = ::send(tcp->client.fd(), bytes, length, MSG_DONTWAIT);
-    if (written > 0) codec->consumeOutput(size_t(written));
+    if (written > 0) {
+      ready_started = true;
+      codec->consumeOutput(size_t(written)); outputProgress();
+    }
     else if (written < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
       closeSession(); return;
     }
   }
+  if (!was_ready) return;
   for (size_t i = 0; i < ByteBudget && codec->canAcceptByte(); ++i) {
     uint8_t byte;
     const int got = ::recv(tcp->client.fd(), &byte, 1, MSG_DONTWAIT);
     if (got == 1) {
-      codec->feed(byte);
-      if (codec->returned()) { closeSession(); break; }
+      if (!inputByte(byte)) break;
     } else {
       if (!got || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) closeSession();
       break;
@@ -318,8 +392,8 @@ bool handleCommand(const char* command, char* reply, size_t capacity, bool local
           (unsigned long)received, (unsigned long)transmitted, (unsigned long)failed,
           (unsigned long)(discarded + (codec ? codec->droppedFrames() : 0)),
           (unsigned long)(codec ? codec->malformedFrames() : 0),
-          selected.enabled && !active() && reason ? " reason=" : "",
-          selected.enabled && !active() && reason ? reason : "");
+          selected.enabled && (!active() || initial_waiting) && reason ? " reason=" : "",
+          selected.enabled && (!active() || initial_waiting) && reason ? reason : "");
     }
     return true;
   }
@@ -375,7 +449,7 @@ bool handleCommand(const char* command, char* reply, size_t capacity, bool local
 
 void loop() {
   if (!settings.selection().enabled || !codec) return;
-  if (active() && !suspended && !current()) invalidateSession();
+  if (active() && !suspended) checkLease();
 #if defined(ESP32)
   if (settings.selection().transport == Transport::Tcp) loopTcp();
 #endif
@@ -389,9 +463,10 @@ bool serviceUsb() {
     if (!port.available() || port.peek() != Codec::Fend) return false;
     resetFrames();
     usb_session = true;
-    suspended = !codec || !leaseRadio();
+    suspended = false;
+    initial_waiting = true;
+    initial_fresh = true;
     setUsbBinaryStreamOwned(true);
-    ready_pending = !suspended;
   }
   // USB text writers may have been admitted just before the binary claim.
   // Their nonblocking retirement must finish before READY or host bytes move.
@@ -410,22 +485,37 @@ bool serviceUsb() {
     }
     return true;
   }
-  if (!suspended && !current()) invalidateSession();
+  if (initial_fresh) {
+    initial_fresh = false;
+    startInitialLease();
+  }
+  if (!suspended) checkLease();
+  const bool was_ready = established;
+  if (!established) {
+    for (size_t i = 0; i < ByteBudget && port.available() && codec->canAcceptByte(); ++i) {
+      const int value = port.read();
+      if (value < 0) break;
+      if (!inputByte(uint8_t(value))) return true;
+    }
+    if (!suspended) admitInitial(!port.available());
+  }
   if (!suspended) {
     queueControls();
     const uint8_t* bytes;
     size_t length;
     if (codec->peekOutput(bytes, length)) {
       if (length > ByteBudget) length = ByteBudget;
-      codec->consumeOutput(port.write(bytes, length));
+      const size_t written = port.write(bytes, length);
+      if (written) ready_started = true;
+      codec->consumeOutput(written);
+      outputProgress();
     }
   }
+  if (!was_ready) { pumpTransmit(); return true; }
   for (size_t i = 0; i < ByteBudget && port.available() && codec->canAcceptByte(); ++i) {
     const int value = port.read();
     if (value < 0) break;
-    codec->feed(uint8_t(value));
-    if (codec->returned()) { closeSession(); return true; }
-    if (suspended) codec->consumeTransmit();  // Never queue TX while suspended.
+    if (!inputByte(uint8_t(value))) return true;
   }
   pumpTransmit();
   return true;

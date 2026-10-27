@@ -294,6 +294,35 @@ int main(){
   const int third=newSocket();accepts.push_back(third);hostkiss::loop();assert(hostkiss::radioActive());
   WiFi.mode=WIFI_AP;hostkiss::loop();assert(!hostkiss::radioActive()&&!sockets.at(third)->connected);
   command("set kiss off");assert(strstr(reply,"OK"));
+  WiFi.mode=WIFI_STA;command("set kiss on");hostkiss::loop();
+  // A single connection survives the two-second settings handoff. No
+  // pre-READY DATA, including a partial escaped frame, can reach the radio.
+  profiles.busy=true;const int waiting=newSocket();accepts.push_back(waiting);
+  input(waiting,{0xc0,0,91,0xdb});hostkiss::loop();
+  assert(sockets.at(waiting)->connected&&!hostkiss::radioActive());
+  assert(sockets.at(waiting)->output.empty());command("get kiss");assert(strstr(reply,"waiting-radio"));
+  fake_millis=1999;hostkiss::loop();assert(sockets.at(waiting)->output.empty());
+  profiles.busy=false;fake_millis=2000;hostkiss::loop();assert(sockets.at(waiting)->output.empty());
+  input(waiting,{0xdc,0xc0});hostkiss::loop();
+  assert(sockets.at(waiting)->connected&&hostkiss::radioActive());
+  assert(sockets.at(waiting)->output==std::vector<uint8_t>({0xc0,0x0f,1,0xc0}));
+  assert(dispatcher.submitted==before);
+  input(waiting,{0,71,0xc0});hostkiss::loop();assert(dispatcher.submitted==before+1&&dispatcher.packet[0]==71);
+  command("set kiss off");assert(!sockets.at(waiting)->connected&&!dispatcher.pending);
+  // Initial conflicts wait automatically, but RETURN can cancel that wait.
+  command("set kiss on");profiles.manual=false;hostkiss::loop();
+  const int conflict=newSocket();accepts.push_back(conflict);hostkiss::loop();
+  assert(sockets.at(conflict)->connected&&!hostkiss::radioActive());
+  input(conflict,{0xc0,0xff,0xc0});hostkiss::loop();assert(!sockets.at(conflict)->connected);
+  const int resolves=newSocket();accepts.push_back(resolves);hostkiss::loop();
+  profiles.manual=true;hostkiss::loop();assert(sockets.at(resolves)->connected&&hostkiss::radioActive());
+  command("set kiss off");
+  // A stable, fresh connection preserves immediate first DATA from a generic
+  // KISS client which does not wait for the READY extension.
+  command("set kiss on");hostkiss::loop();const int immediate=newSocket();
+  input(immediate,{0xc0,0,72,0xc0});accepts.push_back(immediate);hostkiss::loop();
+  assert(dispatcher.submitted==before+2&&dispatcher.packet==std::vector<uint8_t>({72}));
+  command("set kiss off");
 }
 '''
 
@@ -321,6 +350,27 @@ int main() {
   hostkiss::Settings saved;assert(saved.begin(&fs)&&saved.selection().enabled);
   input({'g','e','t',' '});assert(!hostkiss::serviceUsb()&&serial.available()==4);
   serial.input.clear();
+  // First FEND can arrive during the saved radio2 two-second handoff. The
+  // same connection becomes ready automatically once the tuple is stable.
+  profiles.busy=true;input({0xc0});poll();
+  assert(hostkiss::usbActive()&&!hostkiss::radioActive()&&serial.output.empty());
+  command("get kiss");assert(strstr(reply,"waiting-radio")&&strstr(reply,"pending radio settings"));
+  fake_millis=1999;poll();assert(serial.output.empty());
+  profiles.busy=false;fake_millis=2000;poll();
+  assert(hostkiss::radioActive()&&serial.output==std::vector<uint8_t>({0xc0,0x0f,1,0xc0}));
+  hostkiss::resetUsbSession();serial.output.clear();
+  // Drain a complete pre-READY frame and wait for the remainder of a partial
+  // escaped frame before announcing READY. Only fresh post-READY DATA sends.
+  profiles.busy=true;input({0xc0,0,90,0xc0,0,91,0xdb});poll();
+  profiles.busy=false;poll();assert(serial.output.empty()&&!hostkiss::radioActive());
+  input({0xdc,0xc0});poll();assert(hostkiss::radioActive());
+  assert(dispatcher.submitted==0&&serial.output==std::vector<uint8_t>({0xc0,0x0f,1,0xc0}));
+  hostkiss::resetUsbSession();serial.output.clear();
+  // Another initial owner can release radio2 without a reconnect.
+  radio.p.secondary.params.protocol=RadioProfileProtocol::Meshtext;input({0xc0});poll();
+  assert(!hostkiss::radioActive()&&serial.output.empty());
+  radio.p.secondary.params.protocol=RadioProfileProtocol::MeshCore;++radio.p.generation[1];poll();
+  assert(hostkiss::radioActive());hostkiss::resetUsbSession();serial.output.clear();
   profiles.manual=false;input({0xc0});assert(hostkiss::serviceUsb()&&hostkiss::usbActive()&&binary_owned);
   assert(!hostkiss::radioActive());input({0xff,0xc0});assert(hostkiss::serviceUsb()&&!hostkiss::usbActive());
   profiles.manual=true;input({0xc0});binary_ready=false;
@@ -352,13 +402,28 @@ int main() {
   poll();assert(hostkiss::usbActive()&&!hostkiss::radioActive());
   assert(profiles.clear==cleared&&radio.p.secondary.params.protocol==RadioProfileProtocol::Meshtext);
   const unsigned submitted=dispatcher.submitted;
+  radio.p.secondary.params.protocol=RadioProfileProtocol::MeshCore;++radio.p.generation[1];poll();
+  assert(!hostkiss::radioActive()); // An established invalidated session cannot reacquire.
   input({0xc0,0,99,0xc0});poll();assert(dispatcher.submitted==submitted);
   input({0xc0,0xff,0xc0});assert(hostkiss::serviceUsb());
   assert(!hostkiss::usbActive()&&!binary_owned&&!dispatcher.pending);
   hostkiss::sendComplete(true); // late completion cannot enter a new session
   profiles.overlay=false;radio.p.secondary=profiles.saved;++radio.p.generation[1];
-  input({0xc0,0,17,0xc0});poll();assert(dispatcher.submitted==submitted+1);
+  input({0xc0});poll();input({0,17,0xc0});poll();assert(dispatcher.submitted==submitted+1);
   hostkiss::resetUsbSession();assert(!hostkiss::usbActive()&&!binary_owned&&!dispatcher.pending);
+  // A partially written READY is already observable; a later profile change
+  // quarantines it rather than manufacturing READY on another generation.
+  serial.output.clear();serial.write_budget=1;input({0xc0});poll();
+  assert(serial.output.size()==1&&!hostkiss::radioActive());
+  ++radio.p.generation[1];poll();serial.write_budget=128;poll();
+  assert(!hostkiss::radioActive()&&hostkiss::usbActive());
+  input({0xc0,0xff,0xc0});poll();assert(!hostkiss::usbActive());
+  // Stable radio2 also preserves a complete first DATA before the peer reads
+  // READY, as ordinary KISS hosts with flow control disabled require.
+  const unsigned before_immediate=dispatcher.submitted;
+  input({0xc0,0,33,0xc0});poll();
+  assert(dispatcher.submitted==before_immediate+1&&dispatcher.packet==std::vector<uint8_t>({33}));
+  hostkiss::resetUsbSession();
   // Off must be durable, releases the overlay and cannot consume binary input.
   command("set kiss off");assert(strstr(reply,"OK")&&!hostkiss::radioActive());
   assert(saved.begin(&fs)&&!saved.selection().enabled);

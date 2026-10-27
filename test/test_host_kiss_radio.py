@@ -227,6 +227,107 @@ int main() {
                     "-DMESH_ENABLE_ETHERNET_TUNNEL=" + str(foreign)],
                     ["src/helpers/RadioProfileCLI.cpp"], ["test/fixtures/radio_profiles/mocks"])
 
+    def test_actual_meshtext_refresh_never_revokes_host_kiss_protocol(self):
+        source = (ROOT / "examples/companion_radio/MeshtextCompanion.cpp").read_text()
+        refresh = body(source, "void MyMesh::refreshMeshtextProfile()")
+        code = r'''
+#define main existing_cli_main
+#include "test/fixtures/radio_profiles/cli_test.cpp"
+#undef main
+#include <helpers/CompanionChannelAlias.h>
+#define MAX_GROUP_CHANNELS 4
+struct ChannelDetails {char name[32]={};};
+class BaseChatMesh {
+public:
+  ChannelDetails channels[MAX_GROUP_CHANNELS];unsigned channel_reads=0;
+  bool getChannel(int n,ChannelDetails& out){++channel_reads;out=channels[n];return out.name[0];}
+};
+namespace mesh {namespace mt {
+enum class Region{Unset,US};enum class Preset{LongFast,ShortFast};struct Channel{};
+bool parsePreset(const char* name,Preset& preset){
+  if(!strcmp(name,"longfast")){preset=Preset::LongFast;return true;}
+  if(!strcmp(name,"shortfast")){preset=Preset::ShortFast;return true;}
+  return false;
+}
+bool modemConfig(Region,Preset,RadioProfileParams& out,uint32_t){
+  out={910.5f,500,16,8,5};out.protocol=RadioProfileProtocol::Meshtext;return true;
+}
+bool frequencyInRegion(Region region,const RadioProfileParams&){return region==Region::US;}
+bool sameModulation(const RadioProfileParams&a,const RadioProfileParams&b){return a.bw==b.bw&&a.sf==b.sf&&a.cr==b.cr;}
+}}
+bool describe(const ChannelDetails&,mesh::mt::Channel&){return true;}
+class MyMesh:public BaseChatMesh {
+public:
+  struct RadioView {
+    Radio& radio;
+    mesh::RadioProfiles* profiles(){return radio.profiles();}
+    bool supportsMeshtext()const{return true;}
+    bool validateProfile(const mesh::RadioProfileParams& p)const{return radio.validateProfile(p);}
+  } view;
+  RadioView* _radio;mesh::RadioProfileCLI& _radio_profiles;
+  bool _mt_active=true,_mt_profile_dirty=true,_mt_last_radio_ready=false,_mt_last_secondary_ready=false;
+  bool _radio_available=true,_mt_settings_valid=true;
+  uint32_t _mt_primary_generation=0,_mt_secondary_generation=0,_mt_intent_generation=0,_mt_slot=0;
+  float _mt_primary_frequency=0;const char* _mt_status="";
+  struct {float freq=909.5f;} _prefs;
+  struct {bool enabled=false;} _ethernet_settings;
+  mesh::mt::Region region=mesh::mt::Region::US;
+  MyMesh(Radio& radio,mesh::RadioProfileCLI& profiles):view{radio},_radio(&view),_radio_profiles(profiles){}
+  mesh::mt::Region meshtextRegion()const{return region;}
+  void refreshMeshtextProfile();
+};
+@REFRESH@
+int main(){
+  using P=mesh::RadioProfileProtocol;
+  for(unsigned scenario=0;scenario<10;++scenario){
+    Fixture f;f.cmd("set radio2 910.5,500,8,5,rxtx,80");f.advance(2000);
+    const auto saved=f.fs.files;const auto intent=f.cli.secondaryIntentGeneration();
+    assert(f.cli.useSecondaryProtocol(P::Kiss));
+    const auto generation=f.radio.p.generation[1];const auto params=f.radio.p.secondary.params;
+    MyMesh mesh(f.radio,f.cli);
+    if(scenario!=0)strcpy(mesh.channels[0].name,"#mt-longfast");
+    if(scenario==2)strcpy(mesh.channels[0].name,"#mt-custom");
+    if(scenario==3)strcpy(mesh.channels[1].name,"#mt-shortfast");
+    if(scenario==4)strcpy(mesh.channels[1].name,"#r2-public");
+    if(scenario==5)mesh._mt_settings_valid=false;
+    if(scenario==6)mesh._radio_available=false;
+    if(scenario==7)mesh.region=mesh::mt::Region::Unset;
+    if(scenario==8)mesh._prefs.freq=915;
+    if(scenario==9)mesh._ethernet_settings.enabled=true;
+    mesh.refreshMeshtextProfile();mesh.refreshMeshtextProfile();
+    assert(f.radio.p.secondary.params.protocol==P::Kiss && f.radio.p.secondary.params==params);
+    assert(f.radio.p.generation[1]==generation && f.cli.secondaryIntentGeneration()==intent && f.fs.files==saved);
+    assert(!mesh._mt_active && mesh._mt_profile_dirty && !strcmp(mesh._mt_status,"radio2 reserved for KISS"));
+    assert(!mesh.channel_reads);
+    if(scenario==1){
+      f.cli.clearSecondaryProtocol();mesh.refreshMeshtextProfile();
+      assert(mesh._mt_active && f.radio.p.secondary.params.protocol==P::Meshtext);
+      assert(f.fs.files==saved);
+    }
+  }
+}
+'''
+        runner = ethernet_test.EthernetRadioTest()
+        runner.setUpClass()
+        guard_start = refresh.index("#if MESH_ENABLE_HOST_KISS")
+        guard_end = refresh.index("#endif", guard_start) + len("#endif")
+        negative = refresh[:guard_start] + refresh[guard_end:]
+        for ethernet, remove_guard in ((0, False), (1, False), (0, True)):
+            with self.subTest(ethernet=ethernet, remove_guard=remove_guard):
+                candidate = negative if remove_guard else refresh
+                if remove_guard:
+                    with self.assertRaises(AssertionError) as failure:
+                        runner.compile_run(code.replace("@REFRESH@", candidate),
+                            ["-DMESH_ENABLE_HOST_KISS=1", "-DMESH_ENABLE_MESHTEXT_CHAT=1",
+                             "-DMESH_ENABLE_ETHERNET_TUNNEL=" + str(ethernet)],
+                            ["src/helpers/RadioProfileCLI.cpp"], ["test/fixtures/radio_profiles/mocks"])
+                    self.assertIn("f.radio.p.secondary.params.protocol==P::Kiss", str(failure.exception))
+                else:
+                    runner.compile_run(code.replace("@REFRESH@", candidate),
+                        ["-DMESH_ENABLE_HOST_KISS=1", "-DMESH_ENABLE_MESHTEXT_CHAT=1",
+                         "-DMESH_ENABLE_ETHERNET_TUNNEL=" + str(ethernet)],
+                        ["src/helpers/RadioProfileCLI.cpp"], ["test/fixtures/radio_profiles/mocks"])
+
     def test_feature_layout_is_consistent_with_platform_and_explicit_overrides(self):
         checker = feature_config.MeshtextConfigTest()
         checker.setUp()

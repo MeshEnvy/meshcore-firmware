@@ -100,6 +100,11 @@ class Codec {
     return true;
   }
   bool returned() const { return return_; }
+  // A pristine decoder or a closing FEND is a safe place to announce READY.
+  // A host's partial pre-READY frame must finish (and be discarded) first.
+  bool atFrameBoundary() const {
+    return !has_command_ && !escaped_ && !discard_ && input_size_ == 0;
+  }
   bool peekTransmit(const uint8_t*& bytes, size_t& length) const {
     if (!tx_count_) { bytes = nullptr; length = 0; return false; }
     bytes = tx_[tx_head_].bytes;

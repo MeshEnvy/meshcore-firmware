@@ -50,7 +50,11 @@ bool Settings::save(const Selection& selection) {
   if (!healthy_ || !fs_ || uint8_t(selection.transport) > 1) return false;
   uint8_t image[ImageSize];
   encode(image, selection);
-#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+#if defined(NRF52_PLATFORM)
+  const auto outcome = storage::writeCheckedSettingsFile(fs_, Path, image, sizeof(image));
+  if (outcome == AtomicFileWriter::Outcome::Indeterminate) healthy_ = false;
+  if (outcome != AtomicFileWriter::Outcome::Committed) return false;
+#elif defined(STM32_PLATFORM)
   AtomicFileWriter writer(fs_, Path);
   const bool wrote = writer && writer.write(image, sizeof(image)) == sizeof(image);
   const bool saved = writer.commit(wrote);
@@ -65,10 +69,12 @@ bool Settings::save(const Selection& selection) {
   writer.commit();
   if (writer.outcome() == ContactFileTransaction::Outcome::NotCommitted) return false;
 #endif
+#if !defined(NRF52_PLATFORM)
   uint8_t verified[ImageSize];
   healthy_ = storage::readFixedSettingsFile(fs_, Path, verified, sizeof(verified))
       && memcmp(image, verified, sizeof(image)) == 0;
   if (!healthy_) return false;
+#endif
   selection_ = selection;
   return true;
 }

@@ -32,6 +32,9 @@ runtime radio2 protocol lease without changing the saved radio2 tuple.
 Temporary radio settings and Meshtext/Ethernet radio2 owners block admission.
 The service never chooses a frequency, takes another service's radio2 lease,
 crosses raw packets onto radio1, or feeds them into MeshCore parsing/bridges.
+If the initial radio2 change is still pending, the connection waits and sends
+READY when radio2 becomes available; no reconnect is needed. DATA received
+while waiting is discarded, so hosts should wait for the initial READY.
 
 USB remains the normal CLI until an initial KISS FEND (`C0`). During the raw
 session, USB Companion framing and text/debug output are parked. Send the

@@ -323,6 +323,17 @@ bool MyMesh::validateMeshtextChannelChange(int index, const ChannelDetails& cand
 }
 
 void MyMesh::refreshMeshtextProfile() {
+  const auto* current_profiles = _radio->profiles();
+#if MESH_ENABLE_HOST_KISS
+  // Raw host traffic owns this running protocol until its session releases it.
+  // Meshtext refreshes must not clear that lease or publish another overlay.
+  if (current_profiles && current_profiles->secondary.params.protocol == mesh::RadioProfileProtocol::Kiss) {
+    _mt_active = false;
+    _mt_status = "radio2 reserved for KISS";
+    _mt_profile_dirty = true;
+    return;
+  }
+#endif
 #if MESH_ENABLE_ETHERNET_TUNNEL
   // This owner must never revoke an Ethernet lease simply because it has
   // no Meshtext channels. Explicit channel conflicts suspend Ethernet too.
@@ -333,7 +344,6 @@ void MyMesh::refreshMeshtextProfile() {
     return;
   }
 #endif
-  const auto* current_profiles = _radio->profiles();
   const uint32_t primary_generation = current_profiles ? current_profiles->generation[0] : 0;
   const uint32_t secondary_generation = current_profiles ? current_profiles->generation[1] : 0;
   const uint32_t intent_generation = _radio_profiles.secondaryIntentGeneration();
