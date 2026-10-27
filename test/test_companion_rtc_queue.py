@@ -196,7 +196,10 @@ class CompanionRtcQueueTests(unittest.TestCase):
         source = (ROOT / 'examples/companion_radio/MyMesh.cpp').read_text()
         start = header.index('#elif COMPANION_RTC_FAST_OFFLINE_FRAMES || COMPANION_RTC_SLOW_OFFLINE_FRAMES', header.index('static constexpr unsigned OTA_RETAINED_OFFLINE_FRAMES'))
         end = header.index('#elif defined(ESP32_PLATFORM) && defined(BOARD_HAS_PSRAM)', start)
-        storage = header[start:].split('\n', 1)[1][:end - start - len(header[start:].split('\n', 1)[0]) - 1]
+        common_start = header.index('  // Concrete definitions in MyMesh.cpp')
+        common_end = header.index('\n#endif\n#if defined(OTA_SHARED_COMPANION_QUEUE)', common_start)
+        storage = (header[common_start:common_end] + '\n'
+                   + header[start:].split('\n', 1)[1][:end - start - len(header[start:].split('\n', 1)[0]) - 1])
         banks_start = source.index('#if COMPANION_RTC_FAST_OFFLINE_FRAMES\n')
         banks_end = source.index('bool MyMesh::Frame::isChannelMsg()', banks_start)
         methods = '\n'.join(extract_braced(source, name) for name in (
@@ -287,7 +290,8 @@ class CompanionRtcQueueTests(unittest.TestCase):
         base = ['ESP32_PLATFORM=1', 'COMPANION_RADIO_FULL=1', 'CONFIG_IDF_TARGET_ESP32C3=1',
                 'CONFIG_ESP_SYSTEM_ALLOW_RTC_FAST_MEM_AS_HEAP=1', 'COMPANION_RTC_FAST_OFFLINE_FRAMES=32']
         cases = ([value for value in base if not value.startswith('CONFIG_IDF_TARGET_')],
-                 base + ['BOARD_HAS_PSRAM=1'], base + ['OTA_SHARED_COMPANION_QUEUE=1'],
+                 base + ['BOARD_HAS_PSRAM=1'], [value for value in base if not value.startswith('CONFIG_IDF_TARGET_')]
+                 + ['OTA_SHARED_COMPANION_QUEUE=1', 'CONFIG_IDF_TARGET_ESP32S3=1'],
                  base + ['ONE_KEY_DM_SHARED_OFFLINE_QUEUE=1'],
                  base + ['COMPANION_RTC_SLOW_OFFLINE_FRAMES=32'],
                  [value for value in base if not value.startswith('COMPANION_RADIO_FULL')],
@@ -299,7 +303,7 @@ class CompanionRtcQueueTests(unittest.TestCase):
                     capture_output=True, text=True, timeout=15)
                 self.assertNotEqual(result.returncode, 0)
 
-    def test_only_five_named_full_policies_select_banks_without_capacity_reductions(self):
+    def test_only_named_full_policies_select_banks_without_capacity_reductions(self):
         source = (ROOT / 'build_legacy.sh').read_text()
         start = source.index('  # BLE + WiFi exhaust internal DRAM')
         start = source.index('  case "${env_name,,}" in', start)
@@ -310,6 +314,8 @@ class CompanionRtcQueueTests(unittest.TestCase):
         self.assertNotIn('COMPANION_RTC_SLOW_OFFLINE_FRAMES', prefix)
         for target, fast, slow, contacts, queue in (
                 ('Generic_ESPNOW_companion_radio_full', 32, 0, 100, 224),
+                ('Xiao_C3_companion_radio_full', 32, 0, 100, 224),
+                ('Heltec_CT62_companion_radio_full', 0, 0, 100, 224),
                 ('Heltec_Wireless_Tracker_companion_radio_full', 32, 32, 150, 256),
                 ('MKE_s3_companion_radio_full', 32, 32, 350, 256),
                 ('ThinkNode_M2_companion_radio_full', 32, 32, 350, 256),
@@ -328,7 +334,11 @@ class CompanionRtcQueueTests(unittest.TestCase):
                 self.assertEqual(int(flags.get('COMPANION_RTC_SLOW_OFFLINE_FRAMES', 0)), slow)
                 self.assertEqual(int(flags.get('MAX_CONTACTS', 350)), contacts)
                 self.assertEqual(int(flags.get('OFFLINE_QUEUE_SIZE', 256)), queue)
-                self.assertNotIn('OTA_SHARED_COMPANION_QUEUE', flags)
+                if target in ('Xiao_C3_companion_radio_full', 'Heltec_CT62_companion_radio_full'):
+                    self.assertEqual(flags.get('OTA_SHARED_COMPANION_QUEUE'), '1')
+                    self.assertEqual(flags.get('ONE_KEY_DM_COMPACT_HELD'), '1')
+                else:
+                    self.assertNotIn('OTA_SHARED_COMPANION_QUEUE', flags)
 
 
 if __name__ == '__main__':
