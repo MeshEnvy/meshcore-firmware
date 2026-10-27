@@ -1,6 +1,7 @@
 #include <helpers/BorrowableFrameBuffer.h>
 #include <helpers/ota/OtaContext.h>
 #include <helpers/CompanionMotaControl.h>
+#include <helpers/CLICommandUtils.h>
 #include <helpers/ota/MotaStreamWritePolicy.h>
 #include <cassert>
 #include <cstring>
@@ -41,6 +42,21 @@ struct Queue {
     ++q.released;
   }
 };
+
+#define COMPANION_FEATURE_DIRECT_OTA_ADMIN 1
+struct MyMesh {
+  struct Guard { bool enabled = false; bool active(uint32_t) const { return enabled; } } _ota_direct_admin;
+  struct Timer { uint32_t getMillis() const { return 100; } } timer;
+  Timer* _ms = &timer;
+  bool _primary_radio_blocked = false;
+  float _temp_radio_freq = 0, _temp_radio_bw = 0;
+  uint8_t _temp_radio_sf = 0, _temp_radio_cr = 0, _temp_radio_failures = 0;
+  uint32_t _temp_radio_set_at = 0, _temp_radio_revert_at = 0, _temp_radio_retry_at = 0;
+  uint32_t futureMillis(uint32_t delay) const { return _ms->getMillis() + delay; }
+  void appendRxPowerSavingAdjustmentNote(char*, size_t, uint8_t, float) {}
+  bool scheduleTempRadio(float, float, uint8_t, uint8_t, uint32_t, char*, size_t);
+};
+#include "temp_radio_under_test.h"
 
 class Folder : public MotaSource {
 public:
@@ -162,11 +178,25 @@ int main() {
   assert(strstr(reply, "sync unread messages"));
   assert(q.head == 191 && q.count == 129 && q.buffer.capacity() == 256);
   check_messages();
+  MyMesh companion;
+  companion._ota_direct_admin.enabled = true;
+  assert(!companion.scheduleTempRadio(910.525f, 62.5f, 7, 5, 60, reply, sizeof reply));
+  assert(strstr(reply, "sync unread messages"));
+  assert(q.head == 191 && q.count == 129 && q.buffer.capacity() == 256);
+  assert(!companion._temp_radio_set_at && !ota_context_if_active());
+  check_messages();
+  companion._ota_direct_admin.enabled = false;
   uint16_t drained = 0;
-  assert(ota_acquire_context(reply, sizeof reply, true, &drained));
-  assert(drained == 1 && q.count == 128 && q.head == 0);
+  assert(companion.scheduleTempRadio(910.525f, 62.5f, 7, 5, 60, reply, sizeof reply));
+  assert(strstr(reply, "OTA cleared 1 oldest queued messages"));
+  assert(q.count == 128 && q.head == 0);
   first_retained = 1;
   check_messages();
+  companion._ota_direct_admin.enabled = true;
+  assert(companion.scheduleTempRadio(910.525f, 62.5f, 7, 5, 60, reply, sizeof reply));
+  assert(!strstr(reply, "cleared") && q.count == 128);
+  check_messages();
+  ota_ctx().release_when_idle = true;
 
   for (unsigned cycle = 0; cycle < 8; ++cycle) {
     assert(ota_acquire_context(reply, sizeof reply));

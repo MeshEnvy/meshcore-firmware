@@ -24,6 +24,9 @@ class SharedMotaQueueTest(unittest.TestCase):
             control = method((ROOT / "examples/companion_radio/main.cpp").read_text(),
                              "class Nrf52BleMotaSourceControl")
             (Path(temp) / "ble_control_under_test.h").write_text(control + ";\n")
+            (Path(temp) / "temp_radio_under_test.h").write_text(method(
+                (ROOT / "examples/companion_radio/MyMesh.cpp").read_text(),
+                "bool MyMesh::scheduleTempRadio("))
             subprocess.run([
                 "cc", "-DENABLE_OTA=1", "-fsanitize=address,undefined", "-g",
                 "-c", str(ROOT / "src/helpers/ota/OtaTinf.c"), "-o", str(tinf),
@@ -45,6 +48,7 @@ class SharedMotaQueueTest(unittest.TestCase):
                 "c++", "-std=c++17", "-fsanitize=address,undefined", "-g",
                 *flags, "-DOTA_SEEDER_ONLY=1",
                 "-DCOMPANION_RADIO_FULL=1", "-DOTA_SHARED_COMPANION_QUEUE=1",
+                "-DMESH_ENABLE_HOST_KISS=0",
                 "-DENABLE_OTA=1", "-I", str(ROOT / "src"),
                 "-I", str(ROOT / "test/fixtures/shared_mota_queue/mocks"),
                 "-I", str(ROOT / "test/mocks"), "-I", temp,

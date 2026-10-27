@@ -3738,7 +3738,11 @@ bool MyMesh::scheduleTempRadio(float freq, float bw, uint8_t sf, uint8_t cr,
   }
 #if defined(OTA_SHARED_COMPANION_QUEUE)
   uint16_t drained = 0;
-  if (!mesh::ota::ota_acquire_context(reply, reply_size, true, &drained)) return false;
+  bool drain_queue = true;
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
+  drain_queue = !_ota_direct_admin.active(_ms->getMillis());
+#endif
+  if (!mesh::ota::ota_acquire_context(reply, reply_size, drain_queue, &drained)) return false;
   mesh::ota::ota_ctx().release_when_idle = false;
 #endif
   _temp_radio_freq = freq;
@@ -5185,7 +5189,7 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
     while (*action == ' ') ++action;
     // Only an explicit transfer, catalog search, or source attach may evict
     // unread offline frames. Read-only OTA queries leave the queue intact.
-    bool const drain_queue = strcmp(action, "folder on") == 0
+    bool drain_queue = strcmp(action, "folder on") == 0
         || strcmp(action, "ls") == 0 || strncmp(action, "ls ", 3) == 0
         || strncmp(action, "pull ", 5) == 0
         || strncmp(action, "get ", 4) == 0
@@ -5195,6 +5199,9 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
         || strcmp(action, "applydelta") == 0
         || strncmp(action, "bootloader install ", 19) == 0
         || strncmp(action, "rescue install ", 15) == 0;
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
+    if (_ota_direct_admin.active(_ms->getMillis())) drain_queue = false;
+#endif
     uint16_t drained = 0;
     if (!mesh::ota::ota_acquire_context(ota_reply, sizeof(ota_reply), drain_queue, &drained)) {
       snprintf(reply, reply_size, "%s", ota_reply);

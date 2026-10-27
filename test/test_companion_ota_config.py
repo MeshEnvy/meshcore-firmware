@@ -81,6 +81,11 @@ static bool handle_ota_command(const char* command, char* reply, int) {
   return config(rest, reply, context);
 }
 } }
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
+static struct Guard { bool enabled=false; bool active(uint32_t) const { return enabled; } } _ota_direct_admin;
+static struct Timer { uint32_t getMillis() const { return 100; } } timer;
+static Timer* _ms=&timer;
+#endif
 static bool companion(const char* command, char* reply, size_t reply_size) {
   int board=0;
   @WRAPPER@
@@ -124,6 +129,14 @@ int main() {
   reboot(fs);
   command("ota folder on", "OK folder attached");
   assert(drain_requested);
+#if COMPANION_FEATURE_DIRECT_OTA_ADMIN
+  _ota_direct_admin.enabled=true;
+  command("ota folder on", "OK folder attached");
+  assert(!drain_requested);
+  _ota_direct_admin.enabled=false;
+  command("ota folder on", "OK folder attached");
+  assert(drain_requested);
+#endif
   command("ota config", "ota config: speed=1x packet=0.5x");
   assert(!drain_requested);
   for (const auto* setting : {"hops", "checkpoint", "advert"}) {
@@ -295,6 +308,8 @@ class CompanionOtaConfigTest(unittest.TestCase):
                         for platform in ("ESP32_PLATFORM", "NRF52_PLATFORM", "STM32_PLATFORM")
                         for seeder in ([], ["-DOTA_SEEDER_ONLY=1"])]
             variants.append(("ESP32_PLATFORM", [], "-DCOMPANION_FEATURE_OTA_CLI=1"))
+            variants.append(("ESP32_PLATFORM", ["-DCOMPANION_FEATURE_DIRECT_OTA_ADMIN=1"],
+                             "-DCOMPANION_RADIO_FULL=1"))
             for platform, seeder, capability in variants:
                     with self.subTest(platform=platform, seeder=seeder, capability=capability):
                         binary = Path(directory) / "config"
