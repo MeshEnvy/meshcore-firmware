@@ -194,7 +194,8 @@ def custom_build(args, destination, target_env: str) -> Path:
     output.mkdir(parents=True, exist_ok=False)
     # build.sh holds the repository's build lock and runs one PlatformIO process.
     command = ["bash", "build.sh", "build-firmware", target_env,
-               "--build-profile", "full", "--radio-preset", "target",
+               "--build-profile", "full" if destination.platform == "esp32" else "auto",
+               "--radio-preset", "target",
                "--profile", "cascade", "--firmware-version", version]
     if destination.platform == "esp32":
         command += ["--full-exact"]

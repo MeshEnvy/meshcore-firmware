@@ -1,5 +1,6 @@
 """User-facing choices, recovery identity, and compiler-free offline preparation."""
 import asyncio
+from dataclasses import replace
 from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
@@ -66,12 +67,17 @@ class WizardTests(unittest.TestCase):
                 mock.patch.object(wizard.subprocess, 'run', side_effect=process), \
                 redirect_stdout(io.StringIO()):
             built = wizard.custom_build(args, destination(), 'ikoka_stick_nrf_33dbm_repeater')
+            wizard.custom_build(args, replace(destination(), platform='esp32'), 'heltec_v4_repeater')
         self.assertEqual(built.read_bytes(), image().image)
-        self.assertEqual(len(builds), 1)
+        self.assertEqual(len(builds), 2)
         command, kwargs = builds[0]
         self.assertEqual(command[:5], ['wsl.exe', '--cd', '/mnt/source checkout', '--exec', 'env'])
         self.assertIn('OUTPUT_DIR=/mnt/output cache', command)
-        self.assertIn('full', command)
+        self.assertEqual(command[command.index('--build-profile')+1], 'auto')
+        self.assertNotIn('--full-exact', command)
+        esp_command = builds[1][0]
+        self.assertEqual(esp_command[esp_command.index('--build-profile')+1], 'full')
+        self.assertIn('--full-exact', esp_command)
         self.assertNotIn('MESHCORE_ADMIN_PASSWORD', kwargs['env'])
         self.assertNotIn('MESHCORE_OTA_PASSWORD', kwargs['env'])
         self.assertNotIn('never inherit', repr(command))
