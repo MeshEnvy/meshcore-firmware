@@ -98,14 +98,15 @@ class ResultReaderTests(unittest.TestCase):
         master, slave = os.openpty()
         try:
             device = os.ttyname(slave)
-            for vid, expected in ((0x10C4, False), (0x1A86, False),
-                                  (0x303A, True), (0x2886, True), (0x239A, True)):
-                with self.subTest(vid=vid):
+            for vid, pid, expected in ((0x10C4, 0xEA60, False), (0x1A86, 0x7523, False),
+                                       (0x303A, 0x1001, False), (0x303A, 0x4001, True),
+                                       (0x2886, 0x8045, True), (0x239A, 0x8029, True)):
+                with self.subTest(vid=vid, pid=pid):
                     port = PosixModemSerial()
                     port.port = device
                     try:
                         with patch("profile_switch.list_ports.comports", return_value=[
-                                SimpleNamespace(device=device, vid=vid)]):
+                                SimpleNamespace(device=device, vid=vid, pid=pid)]):
                             open_session(port)
                         self.assertFalse(port.has_reset_transition(), port.modem_edges)
                         self.assertEqual(port.modem_lines, {"dtr": expected, "rts": False})
@@ -170,11 +171,12 @@ class ResultReaderTests(unittest.TestCase):
         self.assertTrue(result["transport_recovered"])
 
     def test_native_usb_and_bridge_have_distinct_control_lines(self):
-        for vid, expected in ((0x303A, True), (0x2886, True), (0x239A, True),
-                              (0x1A86, False), (0x10C4, False), (None, False)):
+        for vid, pid, expected in ((0x303A, 0x1001, False), (0x303A, 0x4001, True),
+                                   (0x2886, 0x8045, True), (0x239A, 0x8029, True),
+                                   (0x1A86, 0x7523, False), (0x10C4, 0xEA60, False), (None, None, False)):
             port = SessionPort("test")
             with patch("profile_switch.list_ports.comports", return_value=[
-                    SimpleNamespace(device="TEST", vid=vid),
+                    SimpleNamespace(device="TEST", vid=vid, pid=pid),
                     SimpleNamespace(device="different", vid=0x303A)]):
                 configure_session(port)
             self.assertFalse(port.is_open)
@@ -196,9 +198,9 @@ class ResultReaderTests(unittest.TestCase):
             bridge_id = by_id / "usb-Silicon_Labs_CP2102-if00-port0"
             native_id.symlink_to(native)
             bridge_id.symlink_to(bridge)
-            inventory = [SimpleNamespace(device=str(native), vid=0x303A),
+            inventory = [SimpleNamespace(device=str(native), vid=0x303A, pid=0x1001),
                          SimpleNamespace(device=str(bridge), vid=0x10C4)]
-            for device, expected in ((native_id, True), (bridge_id, False)):
+            for device, expected in ((native_id, False), (bridge_id, False)):
                 with self.subTest(device=device.name):
                     port = SessionPort(str(device))
                     with patch("profile_switch.list_ports.comports", return_value=inventory):

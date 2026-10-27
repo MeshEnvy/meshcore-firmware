@@ -16,11 +16,13 @@ _run_sequences = itertools.count(secrets.randbelow(0x3fffffff) + 1)
 
 
 def configure_session(port):
-    # Native Espressif/Seeed/Adafruit USB and CP2102/CH340 bridges differ in DTR semantics.
-    # DTR keeps the native session active; on a bridge it can drive BOOT/GPIO0.
+    # ESP32-C3/S3 USB Serial/JTAG (303A:1001) maps asserted DTR to IO0.
+    # Leave it released across a firmware reboot. TinyUSB/nRF52 CDC still
+    # needs DTR; UART bridges can also drive BOOT/GPIO0 and keep it released.
     port.rts = False
     device = os.path.realpath(str(port.port)).casefold()
     port.dtr = any(info.vid in (0x303A, 0x2886, 0x239A)
+                   and (info.vid, getattr(info, "pid", None)) != (0x303A, 0x1001)
                    and os.path.realpath(str(info.device)).casefold() == device
                    for info in list_ports.comports())
 

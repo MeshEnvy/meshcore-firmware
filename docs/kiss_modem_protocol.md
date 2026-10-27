@@ -45,6 +45,9 @@ commands normally. A detected USB disconnect/reset also ends the session.
 UART-to-USB adapters without a disconnect signal may require RETURN.
 If the radio2 settings change mid-session, USB stays quarantined until RETURN
 or disconnect, so leftover binary bytes cannot become CLI commands.
+For Espressif USB-Serial/JTAG (`303A:1001`), open the host port with DTR and
+RTS deasserted; those lines control boot/reset selection. Other USB CDC
+devices, including nRF52/TinyUSB, retain their normal DTR handling.
 
 ESP32 also supports `set kiss.transport tcp`. Enable station WiFi separately
 and connect to its address on TCP **5004**. The service accepts one client,
