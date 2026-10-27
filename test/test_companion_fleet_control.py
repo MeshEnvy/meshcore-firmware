@@ -20,6 +20,13 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "examples/companion_radio/MyMesh.cpp"
 
 HARNESS = r'''
+// Fleet rescue uses the real disabled-host-session API. Enable only its
+// Arduino declarations; the fleet protocol fixture remains platform-neutral.
+#define ARDUINO 1
+#define MESH_ENABLE_HOST_KISS 0
+#include <helpers/HostKiss.h>
+#include <helpers/UsbLogging.h>
+#undef ARDUINO
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
@@ -42,7 +49,7 @@ struct RescueStream : Stream {
 static RescueStream rescue_input, rescue_output;
 
 namespace mesh {
-Stream& usbTerminalPort() { return rescue_output; }
+Stream& usbTerminalPort(bool) { return rescue_output; }
 Stream& usbCompanionPort() { return rescue_input; }
 Identity::Identity() { memset(pub_key, 0, sizeof(pub_key)); }
 LocalIdentity::LocalIdentity() : Identity() {
