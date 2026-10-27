@@ -5,7 +5,9 @@
 #include <string.h>
 #if defined(BOARD_HAS_PSRAM)
 #include <esp_heap_caps.h>
-#include <helpers/MQTTConnectionAdmission.h>
+// This vendored adapter shares the firmware's internal-memory reserve. PIO
+// library builds do not inherit the application's src include path.
+#include "../../../src/helpers/MQTTConnectionAdmission.h"
 #endif
 
 static const char *TAG = "[OCTOPUS]";
