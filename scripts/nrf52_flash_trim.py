@@ -247,6 +247,11 @@ def install(build_env):
         print("nRF52 infrastructure flash trim: compact crypto, unused USB device classes/GPS cache/vendor splash, compact OTA target names")
     else:
         print("nRF52 Companion flash trim: small crypto table, unused USB device classes/GPS cache/vendor splash; fonts and Reader retained")
+        hook_path = build_env.subst("$PROJECT_DIR/scripts/nrf52_gnss_version_trim.py")
+        hook_spec = importlib.util.spec_from_file_location("mesh_nrf52_gnss_trim", hook_path)
+        hook = importlib.util.module_from_spec(hook_spec)
+        hook_spec.loader.exec_module(hook)
+        hook.install(build_env)
     framework = platform.get_package_dir("framework-arduinoadafruitnrf52")
     values = flag_defines(flags, cppdefines)
     if "MESH_NRF52_NO_PROGRAM_EXIT" not in values and supported_program_lifetime(framework):

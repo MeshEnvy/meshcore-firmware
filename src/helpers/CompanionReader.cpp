@@ -4,7 +4,9 @@
 #include <Arduino.h>
 #include "bible/ReaderLookup.h"
 
-#if defined(NRF52_PLATFORM)
+#if defined(NRF52_PLATFORM) && COMPANION_READER_COMPACT_STREAM
+#include "bible/ReaderCompactStreamData.generated.h"
+#elif defined(NRF52_PLATFORM)
 #include "bible/ReaderStreamData.generated.h"
 #else
 #include "bible/ReaderData.generated.h"

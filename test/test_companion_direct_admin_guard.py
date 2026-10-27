@@ -25,19 +25,23 @@ HARNESS = r'''
 #define TXT_TYPE_CLI_DATA 1
 struct ContactInfo {
   mesh::Identity id;
-  uint8_t type=0, out_path_len=0, tx_radio=0;
+  uint8_t type=0, out_path_len=0, tx_radio=0, flags=0;
+  char name[32]{};
   uint32_t sync_since=0;
-  uint8_t out_path[64]{},secret[32]{};
-  const uint8_t* getSharedSecret(const mesh::LocalIdentity&) {memset(secret,0x44,32);return secret;}
+  uint8_t out_path[64]{};
+  mutable uint8_t secret[32]{};
+  const uint8_t* getSharedSecret(const mesh::LocalIdentity&) const {memset(secret,0x44,32);return secret;}
   bool setPath(const uint8_t*,uint8_t length){out_path_len=length;memset(out_path,0,sizeof(out_path));return true;}
 };
 struct BaseSerialInterface {BaseSerialInterface* route=this;BaseSerialInterface* captureReplyRoute(){return route;}};
 struct Timer { uint32_t now=100;uint32_t getMillis()const{return now;} };
 struct BaseChatMesh:mesh::Mesh {
   ContactInfo contact,anonymous[MAX_ANON_CONTACTS];
-  int data_calls=0,path_calls=0,login_calls=0,clear_calls=0;
-  BaseChatMesh(){memset(contact.id.pub_key,0x11,32);contact.type=2;contact.out_path_len=2;contact.out_path[0]=0xAA;}
+  int data_calls=0,path_calls=0,login_calls=0,clear_calls=0,lookup_length=0;
+  BaseChatMesh(){memset(contact.id.pub_key,0x11,32);contact.type=2;contact.out_path_len=2;contact.out_path[0]=0xAA;
+    contact.flags=31;contact.sync_since=987;contact.tx_radio=2;strcpy(contact.name,"Saved contact");}
   ContactInfo* lookupContactByPubKey(const uint8_t* key,int n){
+    lookup_length=n;
     for(auto& p:anonymous) if(!memcmp(key,p.id.pub_key,n)) return &p;
     return !memcmp(key,contact.id.pub_key,n)?&contact:nullptr;
   }
@@ -45,7 +49,13 @@ struct BaseChatMesh:mesh::Mesh {
   bool isTransientContact(const ContactInfo& p){for(auto& a:anonymous)if(&a==&p)return true;return false;}
   void resetContactValue(ContactInfo& c){c=ContactInfo();}
   bool clearTransientContact(ContactInfo& c){assert(isTransientContact(c));resetContactValue(c);++clear_calls;return true;}
-  uint8_t getContactTxRadio(const mesh::Identity&)const{return 2;}
+  virtual uint8_t getContactTxRadio(const mesh::Identity&)const{return 2;}
+  int sendLogin(const ContactInfo&,const char*,uint32_t&);
+  int sendContactPacket(const ContactInfo& peer,mesh::Packet* packet,uint32_t& timeout){
+    assert(peer.out_path_len==0);timeout=0;
+    packet->tx_radio=getContactTxRadio(peer.id);
+    return sendDirect(packet,nullptr,peer.out_path_len)?1:0;
+  }
   void onPeerDataRecv(mesh::Packet*,uint8_t,int,const uint8_t*,uint8_t*,size_t){++data_calls;}
   bool onPeerPathRecv(mesh::Packet*,int,const uint8_t*,uint8_t*,uint8_t,uint8_t,uint8_t*,uint8_t){++path_calls;return true;}
   void onContactResponse(const ContactInfo&,const uint8_t*,uint8_t){++login_calls;}
@@ -71,9 +81,9 @@ struct MyMesh:BaseChatMesh {
   bool handleDirectOtaFrame(size_t len);
   bool handleDirectOtaCommand(const char*,uint32_t,char*,size_t);
   void closeDirectOtaAdmin();
-  void mode(int value,const mesh::Identity* peer=nullptr){
+  void mode(int value,const mesh::Identity* peer=nullptr,uint8_t type=ADV_TYPE_REPEATER){
     cmd_frame[0]=52;cmd_frame[1]=value;memcpy(cmd_frame+2,(peer?peer->pub_key:contact.id.pub_key),32);
-    cmd_frame[34]=2;dispatch(value==1?35:34);
+    cmd_frame[34]=type;dispatch(value==1?35:34);
   }
   bool command(const char* command,uint32_t stamp,char* reply){
 #if FULL
@@ -84,7 +94,11 @@ struct MyMesh:BaseChatMesh {
   }
   void expect(const char* prefix){cmd_frame[0]=52;cmd_frame[1]=4;memcpy(cmd_frame+2,contact.id.pub_key,32);memcpy(cmd_frame+34,prefix,3);dispatch(37);assert(response==0);}
   void onPeerDataRecv(mesh::Packet*,uint8_t,int,const uint8_t*,uint8_t*,size_t);
+#if FULL
   uint8_t getContactTxRadio(const mesh::Identity&)const;
+#else
+  uint8_t getContactTxRadio(const mesh::Identity& peer)const override{return BaseChatMesh::getContactTxRadio(peer);}
+#endif
   bool onPeerPathRecv(mesh::Packet*,int,const uint8_t*,uint8_t*,uint8_t,uint8_t,uint8_t*,uint8_t);
   void rawRoute(mesh::Packet* pkt){
 #if FULL
@@ -96,6 +110,7 @@ struct MyMesh:BaseChatMesh {
 };
 @CALLBACKS@
 @BINARY@
+@SEND_LOGIN@
 static void repeaterPrefix(char*& command,char*& reply){@REPEATER_PREFIX@}
 static void roomPrefix(char*& command,char*& reply){@ROOM_PREFIX@}
 [[maybe_unused]] static void body(uint8_t* data,uint32_t stamp,const char* prefix,const char* text){
@@ -119,7 +134,12 @@ int main(){
 #if FULL
   assert(m.response==0&&m.calls==0); // capability negotiation has no RF
   assert(m.contact.out_path_len==2&&m.contact.out_path[0]==0xAA);
+  assert(m.lookup_length==PUB_KEY_SIZE&&m._ota_direct_contact.id.matches(m.contact.id));
   assert(m._ota_direct_contact.out_path_len==0&&m._ota_direct_contact.tx_radio==1);
+  assert(m._ota_direct_contact.type==ADV_TYPE_REPEATER&&m._ota_direct_contact.sync_since==0);
+  assert(m._ota_direct_contact.flags==0&&m._ota_direct_contact.name[0]==0);
+  assert(m.contact.flags==31&&m.contact.sync_since==987&&m.contact.tx_radio==2);
+  assert(!strcmp(m.contact.name,"Saved contact"));
   assert(m.getContactTxRadio(m.contact.id)==mesh::RADIO_TX_PRIMARY);
   mesh::Identity another;assert(m.getContactTxRadio(another)==2);
   mesh::Packet ota;ota.payload_type=12;m.rawRoute(&ota);assert(ota.tx_radio==mesh::RADIO_TX_PRIMARY);
@@ -181,8 +201,22 @@ int main(){
   m.mode(3);assert(m.response==0&&!m._ota_direct_admin.active(m.timer.now));
   assert(m.getContactTxRadio(m.contact.id)==2);
   m.mode(3);assert(m.response==0); // cleanup is idempotent
+  m.contact.type=ADV_TYPE_ROOM;
+  m.mode(1,nullptr,ADV_TYPE_ROOM);
+  assert(m.response==0&&m._ota_direct_contact.type==ADV_TYPE_ROOM);
+  assert(m._ota_direct_contact.sync_since==0&&m._ota_direct_contact.id.matches(m.contact.id));
+  uint32_t timeout=0;
+  assert(m.sendLogin(m._ota_direct_contact,"secret",timeout)==1);
+  assert(m.type==PAYLOAD_TYPE_ANON_REQ&&m.packet.tx_radio==mesh::RADIO_TX_PRIMARY);
+  assert(m.sent.size()==14&&!memcmp(m.sent.data()+8,"secret",6));
+  for(unsigned i=4;i<8;++i)assert(m.sent[i]==0); // Room login requests no historical cursor.
+  assert(m.contact.type==ADV_TYPE_ROOM&&m.contact.sync_since==987);
+  assert(m.contact.out_path_len==2&&m.contact.out_path[0]==0xAA&&m.contact.tx_radio==2);
+  m.mode(3);assert(m.response==0);
   mesh::Identity fresh;memset(fresh.pub_key,0x22,32);m.mode(1,&fresh);
   assert(m.response==0&&m._ota_direct_transient);
+  assert(m._ota_direct_contact.id.matches(fresh)&&m._ota_direct_contact.type==ADV_TYPE_REPEATER);
+  assert(m._ota_direct_contact.out_path_len==0&&m._ota_direct_contact.tx_radio==mesh::RADIO_TX_PRIMARY);
   assert(m._ota_direct_transient->type==ADV_TYPE_NONE&&m.contact.out_path_len==2);
   m.mode(3,&fresh);assert(m.response==0&&m.clear_calls==1);
   for(auto& slot:m.anonymous){memset(slot.id.pub_key,0x33,32);slot.type=ADV_TYPE_NONE;}
@@ -206,6 +240,8 @@ class CompanionDirectAdminGuardTest(unittest.TestCase):
         binary = extract_braced(source, "bool MyMesh::handleDirectOtaFrame(")
         getter = extract_braced(source, "bool MyMesh::handleDirectOtaCommand(")
         closer = extract_braced(source, "void MyMesh::closeDirectOtaAdmin(")
+        base = (ROOT / "src/helpers/BaseChatMesh.cpp").read_text()
+        send_login = extract_braced(base, "int BaseChatMesh::sendLogin(")
         callbacks = "\n".join(extract_braced(source, signature) for signature in (
             "uint8_t MyMesh::getContactTxRadio(", "void MyMesh::onPeerDataRecv(", "bool MyMesh::onPeerPathRecv("))
         raw = extract_braced(source, "if (pkt->getPayloadType() == PAYLOAD_TYPE_OTA\n            && _ota_direct_admin.active")
@@ -233,6 +269,7 @@ class CompanionDirectAdminGuardTest(unittest.TestCase):
                 code = HARNESS.replace("@BINARY@", (binary + "\n" + getter + "\n" + closer) if full else "")
                 code = code.replace("@RAW_ROUTE@", raw)
                 code = code.replace("@CALLBACKS@", callbacks if full else "")
+                code = code.replace("@SEND_LOGIN@", send_login if full else "")
                 code = code.replace("@REPEATER_PREFIX@", prefix_blocks[0])
                 code = code.replace("@ROOM_PREFIX@", prefix_blocks[1])
                 (folder / "test.cpp").write_text(code)
@@ -255,9 +292,9 @@ class CompanionDirectAdminGuardTest(unittest.TestCase):
         full = ["COMPANION_RADIO_FULL=1", "ENABLE_OTA=1", "ENABLE_USB_INTERFACE=1", "BLE_PIN_CODE=123456"]
         cases = (("esp32", full + ["ESP32_PLATFORM=1", "WIFI_SSID=fixture"], 1, 1),
                  ("nrf52", full + ["NRF52_PLATFORM=1"], 1, 1),
-                 ("rak4631", full + ["NRF52_PLATFORM=1", "RAK_4631=1"], 0, 1),
+                 ("rak4631", full + ["NRF52_PLATFORM=1", "RAK_4631=1"], 1, 1),
                  ("reduced", ["NRF52_PLATFORM=1", "RAK_4631=1"], 0, 0),
-                 ("rak override", full + ["NRF52_PLATFORM=1", "RAK_4631=1", "COMPANION_FEATURE_DIRECT_OTA_ADMIN=1"], 1, 1))
+                 ("rak opt-out", full + ["NRF52_PLATFORM=1", "RAK_4631=1", "COMPANION_FEATURE_DIRECT_OTA_ADMIN=0"], 0, 1))
         code = ('#include "examples/companion_radio/CompanionFeatures.h"\n'
                 'DIRECT_HELPER COMPANION_FEATURE_DIRECT_OTA_ADMIN\n'
                 'EXISTING_OTA COMPANION_FEATURE_OTA_CLI\n'

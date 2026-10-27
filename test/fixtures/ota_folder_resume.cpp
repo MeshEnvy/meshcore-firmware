@@ -319,7 +319,36 @@ static void established_capture_still_refuses_replacement_file() {
   assert(f.host.begins == 0 && f.flight.manifests == 0);
 }
 
+static void pull_parser_accepts_only_complete_destination_words() {
+  for (const char* text : {"pull 1 folder", "pull 1   folder   ",
+      "pull 1 \tfolder\v\fvalidate\r\n", "pull 1 folder validate"}) {
+    Fixture f;
+    char reply[160] = {};
+    assert(pull_command(text, reply, f.context));
+    assert(strncmp(reply, "OK ", 3) == 0);
+  }
+  // Reaching the seeder policy proves both flash syntaxes parsed successfully.
+  for (const char* text : {"pull 1 flash", "pull 1 \tflash\v\frescue\r\n"}) {
+    Fixture f;
+    char reply[160] = {};
+    assert(pull_command(text, reply, f.context));
+    assert(strcmp(reply, "ERR seeder-only build cannot stage or install firmware; use `folder`") == 0);
+  }
+  for (const char* text : {"pull 1 \t\r\n", "pull 1 flashgarbage",
+      "pull 1 folders", "pull 1 folderss", "pull 1 folder validates",
+      "pull 1 folder validatess", "pull 1 folder validate extra",
+      "pull 1 flash rescue extra", "pull 1 folder rescue", "pull 1 flash validate",
+      "pull 1 foldervalidate"}) {
+    Fixture f;
+    char reply[160] = {};
+    assert(pull_command(text, reply, f.context));
+    assert(strncmp(reply, "ERR usage:", 10) == 0);
+    assert(f.host.begins == 0 && f.flight.manifests == 0);
+  }
+}
+
 int main() {
+  pull_parser_accepts_only_complete_destination_words();
   for (auto failure : {HostStream::Timeout, HostStream::Truncated, HostStream::BadChecksum,
                        HostStream::Error, HostStream::ShortWrite, HostStream::WrongOp}) {
     for (bool retry_by_pull : {false, true}) {

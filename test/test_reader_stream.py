@@ -116,6 +116,13 @@ class ReaderStreamTest(unittest.TestCase):
             spec.loader.exec_module(packer)
             document = json.loads(packer.blocks.SOURCE.read_text(encoding="utf-8"))
             self.assertEqual(packer.HEADER.read_text(encoding="ascii"), packer.render(document))
+            self.assertEqual(packer.COMPACT_HEADER.read_text(encoding="ascii"), packer.render(document, compact=True))
+            normal, plain, _, normal_chunks = packer.encode(document)
+            compact, compact_plain, _, compact_chunks = packer.encode(document, compact=True)
+            self.assertEqual((normal_chunks, compact_chunks), (3, 0))
+            self.assertEqual(plain, compact_plain)
+            self.assertEqual(zlib.decompress(compact, wbits=-12), plain)
+            self.assertEqual(len(normal) - len(compact), 661)
             pinned = json.loads(packer.TOKENS.read_text(encoding="ascii"))
             self.assertLessEqual(len(pinned), 128)
             self.assertEqual(len(pinned), len(set(pinned)))
@@ -126,8 +133,8 @@ class ReaderStreamTest(unittest.TestCase):
             sys.path.remove(path)
 
     def test_all_879_verses_match_independently_normalized_source(self):
-        binary = self.compile(r"""
-#include <helpers/bible/ReaderStreamData.generated.h>
+        body = r"""
+#include <helpers/bible/@HEADER@>
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -148,13 +155,16 @@ int main() {
     }
   }
 }
-""", "corpus")
+"""
         document = json.loads((ROOT / "tools/bible/reader-web.json").read_text())
         typography = str.maketrans({"\u00a0": " ", "\u2013": "-", "\u2014": "-",
                                    "\u2018": "'", "\u2019": "'", "\u201c": '\"', "\u201d": '\"'})
         expected = b"".join(text.translate(typography).encode("ascii") + b"\0"
                             for text in document["verses"].values())
-        self.assertEqual(self.run_binary(binary), expected)
+        for name in ("ReaderStreamData.generated.h", "ReaderCompactStreamData.generated.h"):
+            with self.subTest(header=name):
+                binary = self.compile(body.replace("@HEADER@", name), "corpus" + name.split("Data")[0])
+                self.assertEqual(self.run_binary(binary), expected)
 
     def test_ring_bounds_truncation_distances_and_deterministic_mutations(self):
         cases = []
@@ -247,7 +257,7 @@ int main() {
             document = json.loads(packer.blocks.SOURCE.read_text())
             document["verses"] = dict.fromkeys(packer.blocks.references(), None)
             document["verses"]["1:1"] = "q" * 4095
-            rendered = packer.render(document)
+            rendered = packer.render(document, compact=True)
         finally:
             sys.path.remove(path)
         header = self.directory / "literal.h"
@@ -260,6 +270,7 @@ int main() {
   using namespace mesh::bible;
   char scratch[kBlockSize];const char* text=nullptr;
   const auto& c=generated::readerCorpus;
+  assert(c.chunk_count==0);
   assert(lookup(c,{1,1},scratch,sizeof(scratch),text)==LookupResult::Found);
   assert(strlen(text)==4095);for(unsigned n=0;n<4095;++n) assert(text[n]=='q');
   assert(lookup(c,{1,2},scratch,sizeof(scratch),text)==LookupResult::Missing);assert(!text);
@@ -386,6 +397,9 @@ void check(const uint8_t* data,unsigned data_size,unsigned plain_size,const uint
         # against the unchanged block decoder using identical host options.
         binary = self.compile(r"""
 #include <helpers/bible/ReaderStreamData.generated.h>
+#define generated compact_generated
+#include <helpers/bible/ReaderCompactStreamData.generated.h>
+#undef generated
 #define generated old_generated
 #include <helpers/bible/ReaderData.generated.h>
 #undef generated
@@ -405,8 +419,9 @@ template<class Corpus> double bench(const Corpus& corpus) {
   assert(sum>0);
   return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()/80;
 }
-int main() { printf("Reader last verse host ms: block=%.4f stream=%.4f\n",
-                     bench(mesh::bible::old_generated::readerCorpus),bench(mesh::bible::generated::readerCorpus)); }
+int main() { printf("Reader last verse host ms: block=%.4f stream=%.4f compact=%.4f\n",
+                     bench(mesh::bible::old_generated::readerCorpus),bench(mesh::bible::generated::readerCorpus),
+                     bench(mesh::bible::compact_generated::readerCorpus)); }
 """, "benchmark")
         print(self.run_binary(binary).decode().strip())
 

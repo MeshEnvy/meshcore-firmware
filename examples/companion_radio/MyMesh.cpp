@@ -6312,10 +6312,7 @@ __attribute__((noinline, cold)) bool MyMesh::handleDirectOtaFrame(size_t len) {
     memcpy(peer.pub_key, key, PUB_KEY_SIZE);
     if (!_ota_direct_admin.matches(peer, _ms->getMillis())) {
       closeDirectOtaAdmin();
-      ContactInfo* contact = lookupContactByPubKey(key, PUB_KEY_SIZE);
-      if (contact) {
-        _ota_direct_contact = *contact;
-      } else {
+      if (!lookupContactByPubKey(key, PUB_KEY_SIZE)) {
         // Empty anonymous slots are RAM-only. Never evict another request,
         // add an accepted contact, or schedule a contact-store write.
         for (unsigned i = 0; i < MAX_ANON_CONTACTS; ++i) {
@@ -6333,14 +6330,10 @@ __attribute__((noinline, cold)) bool MyMesh::handleDirectOtaFrame(size_t len) {
         resetContactValue(*_ota_direct_transient);
         _ota_direct_transient->id = peer;
         _ota_direct_transient->out_path_len = 0;
-        _ota_direct_contact.id = peer;
       }
-      if (!_ota_direct_contact.setPath(nullptr, 0)) {
-        closeDirectOtaAdmin();
-        writeErrFrame(ERR_CODE_BAD_STATE);
-        return true;
-      }
+      _ota_direct_contact.id = peer;
       _ota_direct_contact.type = type;
+      _ota_direct_contact.out_path_len = 0;
       _ota_direct_contact.sync_since = 0;
       _ota_direct_contact.tx_radio = mesh::RADIO_TX_PRIMARY;
     }

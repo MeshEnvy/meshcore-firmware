@@ -157,6 +157,28 @@ int main() {
   expect("bootloader install 12345678 0123456789ABCDEF extra",
          "ERR usage: ota bootloader install <MID8> <HASH16>", c);
   assert(c.staged_installs == 1);
+  for (const char* text : {
+      "bootloader install   12345678   0123456789ABCDEF   ",
+      "bootloader install \t12345678\v\f0123456789ABCDEF\r\n"}) {
+    expect(text, "OK | staged install", c);
+  }
+  assert(c.staged_installs == 3);
+  for (const char* text : {
+      "bootloader install \t\n", "bootloader install 12345678",
+      "bootloader install 123456789 0123456789ABCDEF",
+      "bootloader install 12345678 0123456789ABCDEFF",
+      "bootloader install 123456780123456789ABCDEF",
+      "bootloader install 12345678 0123456789ABCDEF \t extra"}) {
+    expect(text, "ERR usage: ota bootloader install <MID8> <HASH16>", c);
+  }
+  for (const char* text : {
+      "bootloader install 1234567 0123456789ABCDEF",
+      "bootloader install 12345678 0123456789ABCDE",
+      "bootloader install 1234567Z 0123456789ABCDEF",
+      "bootloader install 12345678 0123456789ABCDEZ"}) {
+    expect(text, "ERR MID must be 8 hex and HASH must be 16 hex characters", c);
+  }
+  assert(c.staged_installs == 3);
 #else
   expect("bootloader install 12345678 0123456789ABCDEF",
          "ERR this build cannot update its bootloader over LoRa", c);
@@ -171,7 +193,8 @@ def harness():
     context = (ROOT / "src/helpers/ota/OtaContext.h").read_text(encoding="utf-8")
     return (SOURCE.replace("@IDLE@", body(context, "bool embeddedBootloaderIdle() const"))
             .replace("@HELPERS@", "\n".join(body(cli, signature) for signature in (
-                "static bool is_cmd(", "static bool parse_hex_exact(")))
+                "static bool is_cmd(", "static bool parse_hex_exact(",
+                "static __attribute__((noinline)) int parse_two_words(")))
             .replace("@COMMAND@", body(cli, 'if (is_cmd(a, "bootloader|blupdate", &rest))')))
 
 

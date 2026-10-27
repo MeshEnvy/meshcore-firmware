@@ -35,10 +35,6 @@ saved contact routes. Some Full Companion boards borrow queue space for OTA and
 retain up to 128 unread messages during an update. If more are waiting, sync them
 with an app first; the wizard refuses to discard them to make room.
 
-For this wizard, use an ESP32 source instead of RAK4631 Full. The RAK image's
-current flash limit prevents adding the new direct admin helper. RAK4631
-Repeaters and Room Servers remain supported destinations.
-
 The source and destination must already use the same main-channel settings
 and hear each other directly. The destination needs working LoRa OTA support
 and its admin password. A stock nRF52 bootloader may need a matching local

@@ -19,6 +19,27 @@
 namespace mesh {
 namespace ota {
 
+// Read complete whitespace-delimited words, never truncated scanf fields.
+// Three also denotes an overlong word, so callers reject the whole command.
+static __attribute__((noinline)) int parse_two_words(const char* text,
+    char* first, size_t first_capacity, char* second, size_t second_capacity) {
+  int count = 0;
+  for (;;) {
+    while (*text == ' ' || (*text >= '\t' && *text <= '\r')) ++text;
+    if (!*text) return count;
+    if (count == 2) return 3;
+    char* word = count ? second : first;
+    const size_t capacity = count ? second_capacity : first_capacity;
+    size_t length = 0;
+    do {
+      if (length + 1 >= capacity) return 3;
+      word[length++] = *text++;
+    } while (*text && *text != ' ' && (*text < '\t' || *text > '\r'));
+    word[length] = 0;
+    ++count;
+  }
+}
+
 static bool parse_page(const char* s, uint16_t& page) {
   while (*s == ' ') s++;
   if (*s == 0) { page = 1; return true; }
@@ -573,8 +594,8 @@ static __attribute__((noinline)) bool handle_control_command(
     if (c.apply_pending) { strcpy(reply, "ERR busy applying"); return true; }
     // Parse exact destination/options. Prefix matches used to accept typos such as "flashgarbage" and an
     // ignored third token, which is especially unsafe for the explicit no-EndF rescue acknowledgement.
-    char destination[8] = {0}, option[10] = {0}, extra[2] = {0};
-    int parts = sscanf(dst, "%7s %9s %1s", destination, option, extra);
+    char destination[8] = {0}, option[10] = {0};
+    int parts = parse_two_words(dst, destination, sizeof(destination), option, sizeof(option));
     if (parts < 1 || parts > 2) {
       snprintf(reply, 160, "ERR %s", pull_usage);
       return true;
@@ -1093,8 +1114,8 @@ static __attribute__((noinline)) bool handle_control_command(
     if (!is_cmd(rest, "install", &confirm)) {
       strcpy(reply, "ERR usage: ota bootloader install <MID8> <HASH16>"); return true;
     }
-    char midtxt[9] = {0}, hashtxt[17] = {0}, extra[2] = {0};
-    if (sscanf(confirm, "%8s %16s %1s", midtxt, hashtxt, extra) != 2) {
+    char midtxt[9] = {0}, hashtxt[17] = {0};
+    if (parse_two_words(confirm, midtxt, sizeof(midtxt), hashtxt, sizeof(hashtxt)) != 2) {
       strcpy(reply, "ERR usage: ota bootloader install <MID8> <HASH16>"); return true;
     }
     uint8_t operator_mid[4], operator_hash8[8];

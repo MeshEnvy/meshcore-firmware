@@ -20,7 +20,7 @@ class OtaFolderResumeTest(unittest.TestCase):
         start = cli.index('  } else if (is_cmd(a, "pull|get|download", &rest)) {')
         end = cli.index('  // ---- discard the current session', start)
         harness = (ROOT / "test/fixtures/ota_folder_resume.cpp").read_text()
-        helpers = "\n\n".join(function(cli, name) for name in ("is_cmd", "state_word"))
+        helpers = "\n\n".join(function(cli, name) for name in ("is_cmd", "state_word", "parse_two_words"))
         harness = harness.replace("// @CLI_HELPERS@", helpers).replace("// @CLI_PULL@", cli[start:end])
         with tempfile.TemporaryDirectory(prefix="meshcore-ota-folder-resume-") as temporary:
             work = Path(temporary)

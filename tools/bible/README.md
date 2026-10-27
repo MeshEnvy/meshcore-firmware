@@ -321,6 +321,14 @@ independent blocks. Native tests compare every verse and output byte, exercise
 malformed inputs, and check the actual ARM stack against the existing 8 KiB
 loop stack. Linked-ELF tests retain the same text and reply checks.
 
+RAK4631 Full opts into `COMPANION_READER_COMPACT_STREAM=1` and a separate
+single-stream asset. Its data and vocabulary occupy 28,126 bytes, saving another
+661 bytes while retaining every verse, font and the same 4 KiB scratch.
+The tradeoff is a cold lookup that may decode up to 50,732 encoded bytes before
+the selected verse. Other nRF52 boards retain the three-stream asset and its
+shorter cold lookup. The single stream uses the existing unframed format;
+larger custom corpora still use bounded, independently framed streams.
+
 `reader-stream-tokens.json` is the pinned compression vocabulary. It substitutes
 only exact source byte strings, including substrings of words. Host-only Google
 Zopfli uses 1,000 iterations with a 4 KiB match window; its Apache-2.0 source,
@@ -330,5 +338,6 @@ committed header and require no extra downloads.
 
 ```sh
 python tools/bible/pack_reader_stream.py --check
+python tools/bible/pack_reader_stream.py --compact --check
 python test/test_reader_stream.py
 ```

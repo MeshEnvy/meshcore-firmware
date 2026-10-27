@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compare the real firmware decoder and CLI output against every source verse."""
 import copy
+import configparser
 import importlib.util
 import json
 import os
@@ -55,6 +56,12 @@ class CompanionReaderTest(unittest.TestCase):
             self.assertEqual(actual, list(self.expected_verses.values()))
 
     def test_arm_reader_decode_frames_fit_existing_loop_stack(self):
+        self.check_arm_reader_stack()
+
+    def test_compact_arm_reader_decode_frames_fit_existing_loop_stack(self):
+        self.check_arm_reader_stack(compact=True)
+
+    def check_arm_reader_stack(self, compact=False):
         # Use the actual Cortex-M4 compiler when installed. This does not
         # invoke PlatformIO or reserve decode buffers in ordinary commands.
         tool = shutil.which("arm-none-eabi-g++")
@@ -74,6 +81,8 @@ class CompanionReaderTest(unittest.TestCase):
                      "-fstack-usage", "-DNRF52_PLATFORM=1", "-DCOMPANION_RADIO_FULL=1",
                      "-DENABLE_USB_INTERFACE=1", "-I" + str(directory),
                      "-I" + str(ROOT / "src"), "-I" + str(FIXTURE)]
+            if compact:
+                flags.append("-DCOMPANION_READER_COMPACT_STREAM=1")
             self.run_checked([tool, "-std=gnu++17", "-fno-exceptions", "-fno-rtti", *flags,
                 "-c", str(ROOT / "src/helpers/CompanionReader.cpp"), "-o", str(directory / "reader.o")])
             self.run_checked([cc, "-std=gnu11", *flags, "-c",
@@ -229,8 +238,10 @@ class CompanionReaderTest(unittest.TestCase):
             self.skipTest("host GCC and G++ required")
         with tempfile.TemporaryDirectory(prefix="meshcore-reader-") as directory:
             directory = Path(directory)
-            for platform in ("ESP32_PLATFORM", "NRF52_PLATFORM"):
+            for platform, compact in (("ESP32_PLATFORM", False), ("NRF52_PLATFORM", False), ("NRF52_PLATFORM", True)):
                 flags = [f"-D{platform}=1", "-DCOMPANION_RADIO_FULL=1", "-DENABLE_USB_INTERFACE=1"]
+                if compact:
+                    flags.append("-DCOMPANION_READER_COMPACT_STREAM=1")
                 obj, binary = directory / "tinf.o", directory / "reader.exe"
                 self.run_checked([cc, "-std=c11", "-Os", *flags, "-c",
                                   str(ROOT / "src/helpers/ota/OtaTinf.c"), "-o", str(obj)])
@@ -241,6 +252,27 @@ class CompanionReaderTest(unittest.TestCase):
                 result = self.run_checked([str(binary), "--dump"])
                 actual = dict(line.split("\t", 1) for line in result.splitlines())
                 self.assertEqual(actual, self.expected_verses)
+
+    def test_compact_asset_is_opted_into_by_rak4631_full_only(self):
+        config = configparser.ConfigParser(interpolation=None)
+        config.read(ROOT / "variants/rak4631/platformio.ini")
+        opted_in = [section for section in config.sections()
+                    if "-D COMPANION_READER_COMPACT_STREAM=1" in config.get(section, "build_flags", fallback="")]
+        self.assertEqual(opted_in, ["env:RAK_4631_companion_radio_full"])
+        cxx = shutil.which("g++")
+        if not cxx:
+            self.skipTest("host G++ required")
+        for platform, compact, expected in (("NRF52_PLATFORM", False, 3), ("NRF52_PLATFORM", True, 0),
+                                             ("ESP32_PLATFORM", True, None)):
+            flags = [f"-D{platform}=1", "-DCOMPANION_RADIO_FULL=1", "-DENABLE_USB_INTERFACE=1"]
+            if compact:
+                flags.append("-DCOMPANION_READER_COMPACT_STREAM=1")
+            result = self.run_checked([cxx, "-E", "-P", *flags,
+                                      "-I" + str(FIXTURE), str(ROOT / "src/helpers/CompanionReader.cpp")])
+            if expected is None:
+                self.assertIn("using ReaderCorpus = TokenCorpusT<uint16_t>;", result)
+            else:
+                self.assertIn(f"128, kVerseCount, {expected}", result)
 
     def test_other_profiles_exclude_corpus(self):
         cxx = shutil.which("g++")
