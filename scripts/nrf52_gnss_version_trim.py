@@ -1,7 +1,8 @@
 """Keep the reviewed GNSS version parser without linking the scanf engine.
 
-Only the qualified nRF52 Companion trim installs this middleware. Compile a
-private copy of the reviewed SparkFun GNSS sources; never change downloaded dependencies.
+Qualified nRF52 Companion and RAK3401/RAK4631 Repeater trims install this
+middleware. Compile a private copy of the reviewed SparkFun GNSS sources;
+never change downloaded dependencies.
 Unknown sources or headers retain their ordinary implementation.
 """
 
@@ -11,6 +12,9 @@ from pathlib import Path
 
 SOURCE_NAME = "SparkFun_u-blox_GNSS_Arduino_Library.cpp"
 SOURCE_SHA256 = "8ed1d313177df864b6821b3cb3e4fbcc59d850d09e2460269d571f70cd2b9f1c"
+# 2.2.28 has the same version parser and headers as 2.2.29. Its only source
+# differences are two file-buffer boundary checks, which this trim preserves.
+SOURCE_2_2_28_SHA256 = "4c6c40fe01b15b486791d9ceb045093a394bf157489c2b22d96d7afb92789c49"
 HEADERS = {
     "SparkFun_u-blox_GNSS_Arduino_Library.h": "5da7a95ddd4b24e26ca474d017a6a5347137a31aee58fb7b450a4ce85bbcc07a",
     "u-blox_config_keys.h": "86cae35ec200871f748be21d6d59583c48db82621f4c5504e257e8358a241499",
@@ -38,7 +42,8 @@ def digest(source):
 
 def patched_source(source):
     source = source.replace("\r\n", "\n")
-    if (digest(source) != SOURCE_SHA256 or source.count(ORIGINAL_CONVERSION) != 1
+    if (digest(source) not in (SOURCE_SHA256, SOURCE_2_2_28_SHA256)
+            or source.count(ORIGINAL_CONVERSION) != 1
             or source.count(INCLUDE) != 1):
         raise RuntimeError("changed reviewed SparkFun GNSS source")
     return source.replace(INCLUDE, "#include <stdlib.h>\n" + INCLUDE, 1).replace(
@@ -63,7 +68,7 @@ def replace_gnss_source(build_env, node):
                 raise RuntimeError("changed reviewed SparkFun GNSS header: " + name)
             headers[name] = header
     except (OSError, UnicodeError, RuntimeError) as error:
-        print("nRF52 Companion GNSS trim: ordinary source retained (" + str(error) + ")")
+        print("nRF52 GNSS trim: ordinary source retained (" + str(error) + ")")
         return node
     destination = Path(build_env.subst("$BUILD_DIR")) / "trimmed-nrf52-gnss" / source.name
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -71,7 +76,7 @@ def replace_gnss_source(build_env, node):
     for name, header in headers.items():
         write_if_changed(destination.parent / name, header)
     write_if_changed(destination, patched)
-    print("nRF52 Companion GNSS trim: reviewed version conversion uses strtol")
+    print("nRF52 GNSS trim: reviewed version conversion uses strtol")
     return build_env.File(str(destination))
 
 

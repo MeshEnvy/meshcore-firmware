@@ -67,6 +67,29 @@ class Nrf52FlashTrimTest(unittest.TestCase):
         self.assertNotIn("SSD1306_NO_SPLASH", defines)
         self.assertEqual(TRIM.flag_defines("-DMESH_NRF52_FLASH_TRIM=1 -UMESH_NRF52_FLASH_TRIM")["MESH_NRF52_FLASH_TRIM"], None)
 
+    def test_rak_repeater_trims_follow_hardware_and_effective_role(self):
+        for board in ("RAK_3401", "RAK_4631"):
+            for suffix in ("repeater", "repeater_lora_ota_no_external_sensors",
+                           "repeater_unified_lora_ota", "repeater_bridge_rs232_serial1"):
+                with self.subTest(board=board, suffix=suffix):
+                    defines = self.policy(name=board + "_" + suffix, flags="-D" + board)
+                    for name in ("ED25519_COMPACT_SCALAR", "MESH_CLI_SHARE_REPLIES"):
+                        self.assertEqual(defines[name], 1)
+                    self.assertNotIn("ED25519_COMPACT_FIELD", defines)
+            for role in ("simple_room_server", "simple_sensor", "kiss_modem", "companion_radio"):
+                defines = self.policy(role=role, flags="-D" + board)
+                for name in TRIM.RAK_REPEATER_TRIM_DEFINES:
+                    self.assertNotIn(name, defines)
+        for options in (dict(flags="-DRAK_3401=0"), dict(mcu="nrf52832", flags="-DRAK_3401"),
+                        dict(src_filter="+<../examples/simple_repeater> +<../examples/simple_sensor>",
+                             flags="-DRAK_4631")):
+            for name in TRIM.RAK_REPEATER_TRIM_DEFINES:
+                self.assertNotIn(name, self.policy(**options))
+        defines = self.policy(flags="-DRAK_3401 -DED25519_COMPACT_SCALAR=0 "
+                              "-UED25519_COMPACT_FIELD -DMESH_CLI_SHARE_REPLIES=0")
+        for name in TRIM.RAK_REPEATER_TRIM_DEFINES:
+            self.assertNotIn(name, defines)
+
     def test_local_names_honor_overlay_identity_and_explicit_defines(self):
         flags = ('-DMESH_OTA_LOCAL_TARGET_NAME_ONLY=1 '
                  '-DMOTA_TARGET_ID=0x29a0da19 '
@@ -81,6 +104,25 @@ class Nrf52FlashTrimTest(unittest.TestCase):
             self.assertNotIn(name, explicit)
         for flags in ("", "-DMESH_OTA_LOCAL_TARGET_NAME_ONLY=0"):
             self.assertNotIn("OTA_TARGET_NAME_TABLE", self.policy(flags=flags))
+
+    def test_cli_reply_copy_flag_is_attached_only_to_exact_cli_object(self):
+        class Node:
+            def __init__(self, path): self.path = path
+            def srcnode(self): return self
+            def get_abspath(self): return str(self.path)
+
+        class Env(dict):
+            def subst(self, value): return value.replace("$PROJECT_DIR", str(ROOT))
+            def Object(self, node, **flags): return node, flags
+
+        env = Env(CCFLAGS=["-Os", "-flto"])
+        cli = Node(ROOT / "src/helpers/CommonCLI.cpp")
+        result, flags = TRIM.compile_shared_cli_replies(env, cli)
+        self.assertIs(result, cli)
+        self.assertEqual(flags["CCFLAGS"], ["-Os", "-flto", "-fno-builtin-strcpy"])
+        self.assertEqual(env["CCFLAGS"], ["-Os", "-flto"])
+        other = Node(ROOT / "test/fixtures/CommonCLI.cpp")
+        self.assertIs(TRIM.compile_shared_cli_replies(env, other), other)
 
     def test_local_names_do_not_change_companion_or_unqualified_roles(self):
         for options in (dict(name="RAK_4631_companion_radio_full"),

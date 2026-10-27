@@ -50,6 +50,13 @@ class BuildEnv:
 
 
 class GnssVersionTrimTests(unittest.TestCase):
+    def test_both_reviewed_revisions_use_the_same_bounded_transform(self):
+        for hash_name in ("SOURCE_SHA256", "SOURCE_2_2_28_SHA256"):
+            with self.subTest(revision=hash_name), patch.object(TRIM, hash_name, TRIM.digest(SOURCE)):
+                patched = TRIM.patched_source(SOURCE)
+                self.assertNotIn(TRIM.ORIGINAL_CONVERSION, patched)
+                self.assertIn(TRIM.VERSION_CONVERSION, patched)
+
     def test_private_copy_checks_source_and_all_headers_and_preserves_downloads(self):
         # Small synthetic dependencies test the transform mechanics; production
         # fingerprints remain fixed to the complete reviewed library files.
@@ -90,7 +97,7 @@ class GnssVersionTrimTests(unittest.TestCase):
                     self.assertFalse(other_env.path.exists())
                     target.write_bytes(before)
 
-    def test_only_qualified_companion_installs_middleware(self):
+    def test_only_qualified_roles_install_middleware_and_opt_out_is_preserved(self):
         spec = importlib.util.spec_from_file_location("flash_trim", ROOT / "scripts/nrf52_flash_trim.py")
         policy = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(policy)
@@ -107,14 +114,22 @@ class GnssVersionTrimTests(unittest.TestCase):
             def subst(self, value): return value.replace("$PROJECT_DIR", str(ROOT))
             def AddBuildMiddleware(self, callback, pattern): self.setdefault("middleware", []).append(pattern)
 
-        for role, flags, expected in (("companion_radio", "", True),
-                ("companion_radio", "-DMESH_NRF52_COMPANION_TRIM=0", False),
-                ("simple_repeater", "", False), ("custom", "", False)):
+        for role, flags, expected, shared_replies in (("companion_radio", "", True, False),
+                ("companion_radio", "-DMESH_NRF52_COMPANION_TRIM=0", False, False),
+                ("simple_repeater", "", False, False), ("custom", "", False, False),
+                ("simple_repeater", "-DRAK_3401", True, True),
+                ("simple_repeater", "-DRAK_4631", True, True),
+                ("simple_room_server", "-DRAK_4631", False, False),
+                ("simple_sensor", "-DRAK_3401", False, False),
+                ("simple_repeater", "-DRAK_4631 -DMESH_NRF52_GNSS_VERSION_TRIM=0", False, True),
+                ("simple_repeater", "-DRAK_4631 -DMESH_CLI_SHARE_REPLIES=0", True, False),
+                ("simple_repeater", "-DRAK_3401 -DMESH_NRF52_FLASH_TRIM=0", False, False)):
             with self.subTest(role=role, flags=flags):
                 env = Env(BUILD_FLAGS=flags, CPPDEFINES=[], PIOENV="custom",
                           SRC_FILTER="+<../examples/" + role + ">")
                 policy.install(env)
                 self.assertEqual("*" + TRIM.SOURCE_NAME in env.get("middleware", []), expected)
+                self.assertEqual("*CommonCLI.cpp" in env.get("middleware", []), shared_replies)
 
     def test_native_gnss_conversion_parity_and_bounded_cli_tokens(self):
         compiler = shutil.which("g++") or shutil.which("clang++")
