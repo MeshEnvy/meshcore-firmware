@@ -3,6 +3,7 @@ import asyncio
 from copy import deepcopy
 from enum import Enum
 from types import SimpleNamespace
+import sys
 import unittest
 from unittest import mock
 import time
@@ -458,6 +459,113 @@ class PureHelpers(unittest.TestCase):
                            companion.packet_airtime(180, (910, 62.5, 7, 5)))
         self.assertGreater(companion.packet_airtime(180, (910, 62.5, 7, 5)),
                            companion.packet_airtime(20, (910, 62.5, 7, 5)))
+
+
+class UsbConstructionTests(unittest.IsolatedAsyncioTestCase):
+    async def create_sdk(self, dtr, *, handshake=True):
+        import ota_wizard_usb as usb
+        history = []
+
+        class Wire:
+            def __init__(self, port, baudrate, write_timeout):
+                self.port, self.baudrate = port, baudrate
+                self.is_open, self.dsrdtr = False, False
+                self._dtr = self._rts = True
+                history.append(("construct", port))
+
+            @property
+            def dtr(self):
+                return self._dtr
+
+            @dtr.setter
+            def dtr(self, value):
+                history.append(("dtr", value, self.is_open))
+                self._dtr = value
+
+            @property
+            def rts(self):
+                return self._rts
+
+            @rts.setter
+            def rts(self, value):
+                history.append(("rts", value, self.is_open))
+                self._rts = value
+
+            def open(self):
+                history.append(("open", self.dtr, self.rts))
+                self.is_open = True
+
+            def close(self):
+                history.append(("close",))
+                self.is_open = False
+
+        class SerialConnection:
+            def __init__(self, port, baudrate, cx_dly):
+                self.port, self.baudrate = port, baudrate
+                self.transport = None
+                self._connected_event = asyncio.Event()
+
+            class MCSerialClientProtocol:
+                def __init__(self, connection):
+                    self.connection = connection
+
+                def connection_made(self, transport):
+                    self.connection.transport = transport
+                    transport.serial.rts = False
+                    self.connection._connected_event.set()
+
+        class MeshCore:
+            last = None
+            def __init__(self, connection, **settings):
+                MeshCore.last = self
+                self.connection, self.settings = connection, settings
+
+            async def connect(self):
+                await self.connection.connect()
+                return event() if handshake else None
+
+            async def disconnect(self):
+                if self.connection.transport:
+                    self.connection.transport.close()
+                    self.connection.transport = None
+
+        async def adopt(loop, protocol_factory, wire):
+            self.assertTrue(wire.is_open)
+            self.assertEqual((wire.dtr, wire.rts), (dtr, False))
+            history.append(("adopt", wire.dtr, wire.rts))
+            protocol = protocol_factory()
+            transport = SimpleNamespace(serial=wire, close=wire.close)
+            protocol.connection_made(transport)
+            return transport, protocol
+
+        modules = {"meshcore": SimpleNamespace(MeshCore=MeshCore, SerialConnection=SerialConnection),
+                   "serial": SimpleNamespace(Serial=Wire),
+                   "serial_asyncio_fast": SimpleNamespace(connection_for_serial=adopt)}
+        with mock.patch.dict(sys.modules, modules), \
+                mock.patch.object(usb, "serial_line_states", return_value=(dtr, False)):
+            sdk = await companion._create_usb_sdk("USB-TEST", default_timeout=.1)
+        return sdk, MeshCore.last, history
+
+    async def test_native_usb_dtr_is_false_before_sdk_adopts_connection(self):
+        sdk, instance, history = await self.create_sdk(False)
+        self.assertIs(sdk, instance)
+        self.assertLess(history.index(("dtr", False, False)), history.index(("open", False, False)))
+        self.assertFalse(any(item[0] == "dtr" and item[1] for item in history))
+        self.assertFalse(sdk.settings["auto_reconnect"])
+        await sdk.disconnect()
+        self.assertEqual(history[-1], ("close",))
+
+    async def test_tinyusb_nrf_dtr_is_true_before_open(self):
+        sdk, _, history = await self.create_sdk(True)
+        self.assertLess(history.index(("dtr", True, False)), history.index(("open", True, False)))
+        await sdk.disconnect()
+        self.assertEqual(history[-1], ("close",))
+
+    async def test_failed_binary_handshake_closes_the_configured_port(self):
+        sdk, instance, history = await self.create_sdk(False, handshake=False)
+        self.assertIsNone(sdk)
+        self.assertIsNone(instance.connection.transport)
+        self.assertEqual(history[-1], ("close",))
 
 
 if __name__ == "__main__":

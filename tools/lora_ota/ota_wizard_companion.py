@@ -68,6 +68,52 @@ def _deflate(data):
     return compressor.compress(data) + compressor.flush()
 
 
+async def _create_usb_sdk(port, baudrate=115200, *, only_error=True,
+                          default_timeout=15, auto_reconnect=False):
+    """Use SDK framing with control lines selected before the USB port opens."""
+    import serial
+    import serial_asyncio_fast
+    from meshcore import MeshCore, SerialConnection
+    from ota_wizard_usb import open_serial_session
+
+    class ConfiguredConnection(SerialConnection):
+        async def connect(self, timeout=10):
+            self._connected_event.clear()
+            wire = serial.Serial(port=None, baudrate=self.baudrate, write_timeout=2)
+            try:
+                # The pinned SDK factory cannot configure DTR before opening.
+                # Adopt an already configured connection through the serial
+                # transport's public API; keep the SDK protocol and parser.
+                await asyncio.to_thread(open_serial_session, wire, self.port)
+                loop = asyncio.get_running_loop()
+                transport, _ = await serial_asyncio_fast.connection_for_serial(
+                    loop, lambda: self.MCSerialClientProtocol(self), wire)
+                self.transport = transport
+                await asyncio.wait_for(self._connected_event.wait(), timeout)
+                return self.port
+            except BaseException:
+                if self.transport is not None:
+                    self.transport.close()
+                    self.transport = None
+                await asyncio.to_thread(wire.close)
+                raise
+
+    connection = ConfiguredConnection(port, baudrate, cx_dly=.1)
+    sdk = MeshCore(connection, only_error=only_error, default_timeout=default_timeout,
+                   auto_reconnect=auto_reconnect)
+    try:
+        if await sdk.connect() is None:
+            await sdk.disconnect()
+            return None
+        return sdk
+    except BaseException:
+        try:
+            await sdk.disconnect()
+        except Exception:
+            pass
+        raise
+
+
 class CompanionTransport:
     def __init__(self, port, baud=115200, *, command_timeout=15,
                  remote_timeout=60, discovery_seconds=4, sdk_factory=None,
@@ -126,10 +172,10 @@ class CompanionTransport:
             return self
         if self._sdk_factory is None:
             try:
-                from meshcore import MeshCore, EventType
+                from meshcore import EventType
             except ImportError as exc:
                 raise CompanionError("Install the meshcore Python package for USB Companion support") from exc
-            self._sdk_factory, self._event_types = MeshCore.create_serial, EventType
+            self._sdk_factory, self._event_types = _create_usb_sdk, EventType
         if self._event_types is None:
             raise CompanionError("Companion event definitions are unavailable")
         try:

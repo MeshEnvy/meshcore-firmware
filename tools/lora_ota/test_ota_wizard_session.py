@@ -262,6 +262,9 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             await self.session.cleanup()
 
     async def test_destination_temporarily_missing_after_reboot_is_probed_again(self):
+        import itertools
+        from types import SimpleNamespace
+        from unittest import mock
         from ota_wizard_companion import CompanionError
         before = await self.session.inspect()
         original = self.link.remote_command
@@ -273,7 +276,11 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 raise CompanionError("No directly reachable destination replied yet")
             return await original(key, password, text)
         self.link.remote_command = reboot_discovery
-        after = await self.session.install(wizard.full_package(application(), 1024), before)
+        # Advance only this module's deadline clock; compiler load must not
+        # exhaust the tiny test reboot budget between three fake probes.
+        clock = SimpleNamespace(monotonic=itertools.count(0, .001).__next__)
+        with mock.patch.object(wizard, "time", clock):
+            after = await self.session.install(wizard.full_package(application(), 1024), before)
         self.assertEqual(after.version, NEW)
         self.assertEqual(missing, 0)
         self.assertEqual(len(self.link.reset_calls), 3)

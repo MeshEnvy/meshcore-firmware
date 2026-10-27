@@ -24,6 +24,7 @@ from ota_wizard_packages import (find_builder, find_running_image, install_build
 from ota_wizard_session import DirectSession
 from ota_wizard_bundle import (load_bundle, load_ready_application, load_request,
                                save_bundle, save_request)
+from ota_wizard_usb import open_serial_session
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -139,10 +140,8 @@ def detect_mode(port: str) -> str:
     """A harmless text probe avoids feeding Binary commands to a repeater CLI."""
     import serial
     connection = serial.Serial(port=None, baudrate=115200, timeout=.1, write_timeout=2)
-    connection.dtr, connection.rts = True, False
-    connection.port = port
     try:
-        connection.open()
+        open_serial_session(connection, port)
         time.sleep(.75)
         connection.write(b"\rver\rota status\r")
         deadline = time.monotonic() + 3

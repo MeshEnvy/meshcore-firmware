@@ -15,6 +15,7 @@ import time
 import zlib
 
 import lora_ota as ota
+from ota_wizard_usb import open_serial_session
 
 
 class RepeaterError(ota.OtaError):
@@ -178,9 +179,7 @@ class RepeaterTransport:
         def create():
             connection = factory(port=None, baudrate=self.baud, timeout=.1,
                                  write_timeout=3, rtscts=False, dsrdtr=False)
-            connection.dtr, connection.rts = True, False
-            connection.port = self.port
-            connection.open()
+            open_serial_session(connection, self.port)
             return connection
         try:
             self._serial = await asyncio.to_thread(create)

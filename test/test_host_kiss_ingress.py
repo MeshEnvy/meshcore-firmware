@@ -177,8 +177,8 @@ class HostKissIngressTest(unittest.TestCase):
             signature = ('static void __attribute__((noinline)) serviceCommandInterfaces()'
                          if role == 'simple_repeater' else 'void loop()')
             pump = body(source, signature)
-            self.assertLess(pump.index('mesh::hostkiss::usbInputReserved(console.peek())'),
-                            pump.index('console.read()'))
+            read = 'const int value = console_read()' if role == 'simple_repeater' else 'console.read()'
+            self.assertLess(pump.index('mesh::hostkiss::usbInputReserved(console.peek())'), pump.index(read))
 
 
 if __name__ == '__main__':
