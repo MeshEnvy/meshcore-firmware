@@ -61,6 +61,7 @@ class RadioProfileCLI {
   // readable backup. Read/I/O failures and an intact backup remain read-only.
   bool recoverable_corrupt_store_ = false;
   bool publish_pending_ = false;
+#if !defined(COMPANION_RADIO_FULL)
   MediaMeshScopeHandler media_scope_handler_ = nullptr;
   void* media_scope_context_ = nullptr;
   uint32_t media_scope_retry_ms_ = 0;
@@ -68,6 +69,15 @@ class RadioProfileCLI {
   bool mediaMeshScopeReady(const RadioProfileConfig& config) const;
   void updateMediaMeshScope();
   void retryMediaMeshScope();
+  bool mediaMeshScopePending() const { return media_scope_pending_; }
+#else
+  // Full Companions have no forwarding RegionMap. Do not retain unreachable
+  // infrastructure callbacks, state or failure text in their tight images.
+  bool mediaMeshScopeReady(const RadioProfileConfig&) const { return true; }
+  void updateMediaMeshScope() {}
+  void retryMediaMeshScope() {}
+  bool mediaMeshScopePending() const { return false; }
+#endif
 #if MESH_RADIO_SWITCH_TUNING
   RadioSwitchTuning fast_saved_;
   uint32_t fast_retry_ms_ = 0;
@@ -131,7 +141,11 @@ class RadioProfileCLI {
 #endif
   void begin(FILESYSTEM* fs, Radio* radio, RTCClock* rtc, bool infrastructure_replies = false);
   // Bind only after RegionMap::load(), so boot reconciliation is not discarded.
+#if !defined(COMPANION_RADIO_FULL)
   void setMediaMeshScopeHandler(MediaMeshScopeHandler handler, void* context);
+#else
+  void setMediaMeshScopeHandler(MediaMeshScopeHandler, void*) {}
+#endif
   void servicePendingTuning();
   bool hasPendingTuning() const {
 #if MESH_RADIO_SWITCH_TUNING
