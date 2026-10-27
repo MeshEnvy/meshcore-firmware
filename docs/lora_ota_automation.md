@@ -4,6 +4,9 @@
 
 # Scripted LoRa OTA from start to finish
 
+For a manual example using a Pi-connected repeater and the app's admin console,
+see [Station G2 to Ikoka Stick](ota_station_g2_to_ikoka_stick.md).
+
 For **[1.18.0.1 USA Cascade](releases/1.18.0.1.md)**, download the exact board,
 role and storage profile from the [firmware picker](firmware_picker.md).
 For a new nRF52 installation, use the matching
