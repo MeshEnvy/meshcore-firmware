@@ -112,6 +112,9 @@ nav:
           - Older releases: old-releases/index.md
       - Test Results: test-results/index.md
 
+markdown_extensions:
+  - md_in_html
+
 theme:
   name: material
   logo: _assets/meshcore.svg
