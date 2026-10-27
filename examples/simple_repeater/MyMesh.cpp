@@ -3707,11 +3707,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
     : mesh::Mesh(radio, ms, rng, rtc, *createObserverPacketManager(32), tables),
       region_map(key_store), temp_map(key_store),
       _cli(board, rtc, sensors, region_map, acl, &_prefs, this),
-#if MESH_REPEATER_PSRAM_TABLES
-      flood_channel_scopes(flood_channel_storage.require("channel scope tables").scopes),
-      flood_channel_direct_scopes(flood_channel_storage.require("channel scope tables").direct),
-      flood_channel_scope_requirements(flood_channel_storage.require("channel scope tables").requirements),
-#endif
       telemetry(MAX_PACKET_PAYLOAD - 4),
       discover_limiter(4, 120),  // max 4 every 2 minutes
       anon_limiter(4, 180)   // max 4 every 3 minutes
@@ -3796,11 +3791,13 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   if (flood_packet_filters) memset(flood_packet_filters, 0, sizeof(FloodPacketFilterEntry) * flood_packet_filter_slots);
   flood_packet_filter_blacklist_count = 0;
   memset(flood_packet_filter_blacklist, 0, sizeof(flood_packet_filter_blacklist));
+#if !MESH_REPEATER_PSRAM_TABLES
   memset(flood_channel_scopes, 0, sizeof(flood_channel_scopes));
   memset(flood_channel_direct_scopes, 0,
          sizeof(flood_channel_direct_scopes));
   memset(flood_channel_scope_requirements, 0,
          sizeof(flood_channel_scope_requirements));
+#endif
 #if MESH_ENABLE_FLOOD_GROUP_MODERATION
   memset(flood_group_moderation, 0, sizeof(flood_group_moderation));
 #endif
@@ -3998,6 +3995,14 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 // OTA mesh-integration (receive/begin/loop) is centralized in mesh::Mesh - no per-example wiring.
 
 void MyMesh::begin(FILESYSTEM *fs) {
+#if MESH_REPEATER_PSRAM_TABLES
+  // initArduino() has now initialized either QSPI or OPI PSRAM. Allocate
+  // complete tables before any routing or persistence can obtain an address.
+  if (!flood_channel_storage.begin("channel scope tables")) abort();
+#ifndef PORTABLE_MQTT_OBSERVER
+  if (!flood_advert_limiter.begin()) abort();
+#endif
+#endif
 #if MESH_ENABLE_FLOOD_RULE_ENGINE
   flood_filter_probability_seed = getRNG()->nextInt(0, UINT32_MAX);
 #endif
@@ -6651,9 +6656,9 @@ bool MyMesh::loadFloodPacketFilters() {
     if (flood_packet_filters) memset(flood_packet_filters, 0, sizeof(FloodPacketFilterEntry) * flood_packet_filter_slots);
     flood_channel_data_rule_slot = 0xFF;
     flood_channel_data_rule_max_hops = FLOOD_CHANNEL_HOPS_ALL;
-    memset(flood_channel_scopes, 0, sizeof(flood_channel_scopes));
-    memset(flood_channel_direct_scopes, 0,
-           sizeof(flood_channel_direct_scopes));
+    memset(floodChannelScopes(), 0, sizeof(floodChannelScopes()));
+    memset(floodChannelDirectScopes(), 0,
+           sizeof(floodChannelDirectScopes()));
     flood_packet_filter_blacklist_count = 0;
     memset(flood_packet_filter_blacklist, 0,
            sizeof(flood_packet_filter_blacklist));
@@ -6957,7 +6962,7 @@ bool MyMesh::loadFloodPacketFilters() {
     size_t retained_scope_bytes = (size_t)retained_scope
         * sizeof(FloodChannelScopeEntry);
     success = success
-        && file.read((uint8_t*)flood_channel_scopes, retained_scope_bytes)
+        && file.read((uint8_t*)floodChannelScopes(), retained_scope_bytes)
             == retained_scope_bytes;
     FloodChannelScopeEntry discarded_scope;
     for (uint16_t i = retained_scope; success && i < scope_count; i++) {
@@ -6981,13 +6986,13 @@ bool MyMesh::loadFloodPacketFilters() {
         success = false;
       }
       if (success && i < retained_direct) {
-        memcpy(flood_channel_direct_scopes[i], direct_name,
+        memcpy(floodChannelDirectScopes()[i], direct_name,
                sizeof(direct_name));
       }
     }
 
     for (uint16_t i = 0; success && i < retained_scope; i++) {
-      auto& entry = flood_channel_scopes[i];
+      auto& entry = floodChannelScopes()[i];
       uint8_t selector =
           FloodFilterPolicy::channelScopeMatchSelectorValue(entry.selector);
       bool direct_target =
@@ -6996,7 +7001,7 @@ bool MyMesh::loadFloodPacketFilters() {
         memset(&entry, 0, sizeof(entry));
       } else if (direct_target
           && (entry.target_id > retained_direct
-              || flood_channel_direct_scopes[entry.target_id - 1][0] == 0)) {
+              || floodChannelDirectScopes()[entry.target_id - 1][0] == 0)) {
         success = false;
       } else if (selector <= FLOOD_CHANNEL_SCOPE_OTHER_ANY) {
         entry.channel_hash = 0;
@@ -7051,9 +7056,9 @@ bool MyMesh::loadFloodPacketFilters() {
     file.close();
     if (!success) {
       if (flood_packet_filters) memset(flood_packet_filters, 0, sizeof(FloodPacketFilterEntry) * flood_packet_filter_slots);
-      memset(flood_channel_scopes, 0, sizeof(flood_channel_scopes));
-      memset(flood_channel_direct_scopes, 0,
-             sizeof(flood_channel_direct_scopes));
+      memset(floodChannelScopes(), 0, sizeof(floodChannelScopes()));
+      memset(floodChannelDirectScopes(), 0,
+             sizeof(floodChannelDirectScopes()));
       flood_packet_filter_blacklist_count = 0;
       memset(flood_packet_filter_blacklist, 0,
              sizeof(flood_packet_filter_blacklist));
@@ -7577,12 +7582,12 @@ bool MyMesh::saveFloodPacketFilters(bool empty_scope_phase,
   uint8_t direct_count = 0;
   if (!empty_scope_phase) {
     for (uint16_t i = 0; i < FLOOD_CHANNEL_SCOPE_SLOTS; i++) {
-      if (flood_channel_scopes[i].target_id != 0) {
+      if (floodChannelScopes()[i].target_id != 0) {
         scope_count = (uint8_t)(i + 1U);
       }
     }
     for (uint16_t i = 0; i < FLOOD_CHANNEL_DIRECT_SCOPE_SLOTS; i++) {
-      if (flood_channel_direct_scopes[i][0] != 0) {
+      if (floodChannelDirectScopes()[i][0] != 0) {
         direct_count = (uint8_t)(i + 1U);
       }
     }
@@ -7594,12 +7599,12 @@ bool MyMesh::saveFloodPacketFilters(bool empty_scope_phase,
                     sizeof(flood_channel_data_rule_max_hops))
       && writeExact(&scope_count, sizeof(scope_count));
   if (success && scope_count != 0) {
-    success = writeExact(flood_channel_scopes,
+    success = writeExact(floodChannelScopes(),
                          scope_count * sizeof(FloodChannelScopeEntry));
   }
   success = success && writeExact(&direct_count, sizeof(direct_count));
   if (success && direct_count != 0) {
-    success = writeExact(flood_channel_direct_scopes,
+    success = writeExact(floodChannelDirectScopes(),
                          direct_count
                              * FLOOD_PACKET_FILTER_SCOPE_NAME_LEN);
   }
@@ -9304,9 +9309,9 @@ static const char* wildcardFloodChannelScopeName(uint8_t selector) {
 bool MyMesh::loadFloodChannelScopes() {
   static_assert(sizeof(FloodChannelScopeEntry) == 36,
                 "channel scope persistence requires 36-byte entries");
-  memset(flood_channel_scopes, 0, sizeof(flood_channel_scopes));
-  memset(flood_channel_direct_scopes, 0,
-         sizeof(flood_channel_direct_scopes));
+  memset(floodChannelScopes(), 0, sizeof(floodChannelScopes()));
+  memset(floodChannelDirectScopes(), 0,
+         sizeof(floodChannelDirectScopes()));
   if (_fs == NULL || !_fs->exists(FLOOD_CHANNEL_SCOPE_FILE)) return true;
   File file = openFloodSettingsRead(_fs, FLOOD_CHANNEL_SCOPE_FILE);
   if (!file) return false;
@@ -9323,7 +9328,7 @@ bool MyMesh::loadFloodChannelScopes() {
       && file.read(&count, sizeof(count)) == sizeof(count);
   uint8_t retained = count < FLOOD_CHANNEL_SCOPE_SLOTS ? count : FLOOD_CHANNEL_SCOPE_SLOTS;
   size_t retained_bytes = (size_t)retained * sizeof(FloodChannelScopeEntry);
-  success = success && file.read((uint8_t*)flood_channel_scopes, retained_bytes) == retained_bytes;
+  success = success && file.read((uint8_t*)floodChannelScopes(), retained_bytes) == retained_bytes;
   FloodChannelScopeEntry discarded;
   for (int i = retained; success && i < count; i++) {
     success = file.read((uint8_t*)&discarded, sizeof(discarded)) == sizeof(discarded);
@@ -9338,10 +9343,10 @@ bool MyMesh::loadFloodChannelScopes() {
     size_t retained_direct_bytes = (size_t)retained_direct
         * FLOOD_PACKET_FILTER_SCOPE_NAME_LEN;
     success = success
-        && file.read((uint8_t*)flood_channel_direct_scopes,
+        && file.read((uint8_t*)floodChannelDirectScopes(),
                      retained_direct_bytes) == retained_direct_bytes;
     for (int i = 0; success && i < retained_direct; i++) {
-      char* name = flood_channel_direct_scopes[i];
+      char* name = floodChannelDirectScopes()[i];
       if (name[0] != 0 && !isValidStoredFloodFilterScopeName(name)) {
         success = false;
       }
@@ -9349,7 +9354,7 @@ bool MyMesh::loadFloodChannelScopes() {
   }
 
   for (int i = 0; success && i < retained; i++) {
-    auto& entry = flood_channel_scopes[i];
+    auto& entry = floodChannelScopes()[i];
     if ((version_1
          && (FloodFilterPolicy::scopeUsesSlowTiming(entry.selector)
              || FloodFilterPolicy::scopeRequiresPath(entry.selector)))
@@ -9370,7 +9375,7 @@ bool MyMesh::loadFloodChannelScopes() {
     } else if (direct_target
         && (!version_5
             || entry.target_id > FLOOD_CHANNEL_DIRECT_SCOPE_SLOTS
-            || flood_channel_direct_scopes[entry.target_id - 1][0] == 0)) {
+            || floodChannelDirectScopes()[entry.target_id - 1][0] == 0)) {
       success = false;
       break;
     } else if (selector <= FLOOD_CHANNEL_SCOPE_OTHER_ANY) {
@@ -9390,9 +9395,9 @@ bool MyMesh::loadFloodChannelScopes() {
 
   // A malformed table is inert; corrupt storage must never assign a scope.
   if (!success) {
-    memset(flood_channel_scopes, 0, sizeof(flood_channel_scopes));
-    memset(flood_channel_direct_scopes, 0,
-           sizeof(flood_channel_direct_scopes));
+    memset(floodChannelScopes(), 0, sizeof(floodChannelScopes()));
+    memset(floodChannelDirectScopes(), 0,
+           sizeof(floodChannelDirectScopes()));
   }
   return success;
 }
@@ -9410,17 +9415,17 @@ bool MyMesh::saveFloodChannelScopes(bool empty_table) {
   bool success = file.write(magic, sizeof(magic)) == sizeof(magic)
       && file.write(&count, sizeof(count)) == sizeof(count);
   if (success && count != 0) {
-    success = file.write((const uint8_t*)flood_channel_scopes,
-                         sizeof(flood_channel_scopes)) == sizeof(flood_channel_scopes);
+    success = file.write((const uint8_t*)floodChannelScopes(),
+                         sizeof(floodChannelScopes())) == sizeof(floodChannelScopes());
   }
   uint8_t direct_count = empty_table ? 0 : FLOOD_CHANNEL_DIRECT_SCOPE_SLOTS;
   success = success
       && file.write(&direct_count, sizeof(direct_count))
           == sizeof(direct_count);
   if (success && direct_count != 0) {
-    success = file.write((const uint8_t*)flood_channel_direct_scopes,
-                         sizeof(flood_channel_direct_scopes))
-        == sizeof(flood_channel_direct_scopes);
+    success = file.write((const uint8_t*)floodChannelDirectScopes(),
+                         sizeof(floodChannelDirectScopes()))
+        == sizeof(floodChannelDirectScopes());
   }
   file.close();
   if (!success || !_fs->rename(FLOOD_CHANNEL_SCOPE_TEMP_FILE, FLOOD_CHANNEL_SCOPE_FILE)) {
@@ -9432,8 +9437,8 @@ bool MyMesh::saveFloodChannelScopes(bool empty_table) {
 }
 
 void MyMesh::loadFloodChannelScopeRequirements() {
-  memset(flood_channel_scope_requirements, 0,
-         sizeof(flood_channel_scope_requirements));
+  memset(floodChannelScopeRequirements(), 0,
+         sizeof(floodChannelScopeRequirements()));
   if (_fs == NULL || !_fs->exists(FLOOD_CHANNEL_SCOPE_REQUIRE_FILE)) return;
 
   File file =
@@ -9450,7 +9455,7 @@ void MyMesh::loadFloodChannelScopeRequirements() {
   size_t retained_bytes =
       (size_t)retained * sizeof(FloodChannelScopeRequireEntry);
   success = success
-      && file.read((uint8_t*)flood_channel_scope_requirements, retained_bytes)
+      && file.read((uint8_t*)floodChannelScopeRequirements(), retained_bytes)
           == retained_bytes;
   FloodChannelScopeRequireEntry discarded;
   for (int i = retained; success && i < count; i++) {
@@ -9458,7 +9463,7 @@ void MyMesh::loadFloodChannelScopeRequirements() {
         == sizeof(discarded);
   }
   for (int i = 0; success && i < retained; i++) {
-    auto& entry = flood_channel_scope_requirements[i];
+    auto& entry = floodChannelScopeRequirements()[i];
     if (entry.key_len == 0) {
       memset(&entry, 0, sizeof(entry));
     } else if (entry.key_len == CIPHER_KEY_SIZE
@@ -9476,8 +9481,8 @@ void MyMesh::loadFloodChannelScopeRequirements() {
   file.close();
 
   if (!success) {
-    memset(flood_channel_scope_requirements, 0,
-           sizeof(flood_channel_scope_requirements));
+    memset(floodChannelScopeRequirements(), 0,
+           sizeof(floodChannelScopeRequirements()));
   }
 }
 
@@ -9500,9 +9505,9 @@ bool MyMesh::saveFloodChannelScopeRequirements(bool empty_table) {
     }
   } else if (success) {
     success = file.write(
-        (const uint8_t*)flood_channel_scope_requirements,
-        sizeof(flood_channel_scope_requirements))
-        == sizeof(flood_channel_scope_requirements);
+        (const uint8_t*)floodChannelScopeRequirements(),
+        sizeof(floodChannelScopeRequirements()))
+        == sizeof(floodChannelScopeRequirements());
   }
   file.close();
   if (!success || !_fs->rename(FLOOD_CHANNEL_SCOPE_REQUIRE_TEMP_FILE,
@@ -9528,7 +9533,7 @@ bool MyMesh::findFloodChannelScopeRequirementMatch(
           % CIPHER_BLOCK_SIZE) == 0;
 
   for (int i = 0; i < FLOOD_CHANNEL_SCOPE_REQUIRE_SLOTS; i++) {
-    const auto& entry = flood_channel_scope_requirements[i];
+    const auto& entry = floodChannelScopeRequirements()[i];
     if (entry.key_len == 0) continue;
     table_active = true;
     if (!valid_layout || packet->payload[0] != entry.channel_hash) continue;
@@ -9558,7 +9563,7 @@ bool MyMesh::applyFloodChannelScopeTarget(mesh::Packet* packet,
   bool direct_target =
       FloodFilterPolicy::channelScopeUsesDirectTarget(entry.selector);
   if (direct_target) {
-    target_name = flood_channel_direct_scopes[entry.target_id - 1];
+    target_name = floodChannelDirectScopes()[entry.target_id - 1];
     deriveFloodFilterScopeKey(target_name, scope);
     regionless_scope_set = true;
   } else {
@@ -9644,7 +9649,7 @@ bool MyMesh::applyFloodChannelScope(mesh::Packet* packet, bool& fast_track,
     uint8_t data[MAX_PACKET_PAYLOAD];
     for (int path_pass = 1; path_pass >= 0; path_pass--) {
       for (int i = 0; i < FLOOD_CHANNEL_SCOPE_SLOTS; i++) {
-        const auto& entry = flood_channel_scopes[i];
+        const auto& entry = floodChannelScopes()[i];
         if (entry.target_id == 0 || !isExactFloodChannelScopeSelector(entry.selector)
             || packet->payload[0] != entry.channel_hash
             || !matches_path_pass(entry.selector, path_pass != 0)) {
@@ -9665,7 +9670,7 @@ bool MyMesh::applyFloodChannelScope(mesh::Packet* packet, bool& fast_track,
   uint8_t wildcard = wildcardFloodChannelScopeSelector(type);
   for (int path_pass = 1; path_pass >= 0; path_pass--) {
     for (int i = 0; i < FLOOD_CHANNEL_SCOPE_SLOTS; i++) {
-      const auto& entry = flood_channel_scopes[i];
+      const auto& entry = floodChannelScopes()[i];
       if (entry.target_id != 0
           && FloodFilterPolicy::channelScopeMatchSelectorValue(entry.selector)
               == wildcard
@@ -9819,7 +9824,7 @@ void MyMesh::formatFloodChannelScopeDetail(int index, char* reply, size_t reply_
     snprintf(reply, reply_len, "Err - scope slot must be 1-%d", FLOOD_CHANNEL_SCOPE_SLOTS);
     return;
   }
-  const auto& entry = flood_channel_scopes[index];
+  const auto& entry = floodChannelScopes()[index];
   if (entry.target_id == 0) {
     snprintf(reply, reply_len, "> %d empty", index + 1);
     return;
@@ -9856,7 +9861,7 @@ void MyMesh::formatFloodChannelScopeDetail(int index, char* reply, size_t reply_
   if (FloodFilterPolicy::channelScopeUsesDirectTarget(entry.selector)) {
     snprintf(reply, reply_len, "> %d match=%s%s scope=%s%s",
              index + 1, channel, path,
-             flood_channel_direct_scopes[entry.target_id - 1], timing);
+             floodChannelDirectScopes()[entry.target_id - 1], timing);
     return;
   }
 
@@ -9888,7 +9893,7 @@ void MyMesh::formatFloodChannelScopes(const char* args, char* reply) {
 
   int active = 0;
   for (int i = 0; i < FLOOD_CHANNEL_SCOPE_SLOTS; i++) {
-    if (flood_channel_scopes[i].target_id != 0) active++;
+    if (floodChannelScopes()[i].target_id != 0) active++;
   }
 #if defined(STM32_PLATFORM)
   snprintf(reply, 160, "> %d/%d",
@@ -10016,7 +10021,7 @@ void MyMesh::setFloodChannelScope(const char* args, char* reply) {
   int matching_slot = -1;
   int free_slot = -1;
   for (int i = 0; i < FLOOD_CHANNEL_SCOPE_SLOTS; i++) {
-    const auto& entry = flood_channel_scopes[i];
+    const auto& entry = floodChannelScopes()[i];
     if (entry.target_id == 0) {
       if (free_slot < 0) free_slot = i;
     } else if (FloodFilterPolicy::channelScopeMatchSelectorValue(
@@ -10042,7 +10047,7 @@ void MyMesh::setFloodChannelScope(const char* args, char* reply) {
   if (direct_target) {
     int reusable_direct_scope_slot = -1;
     for (int i = 0; i < FLOOD_CHANNEL_DIRECT_SCOPE_SLOTS; i++) {
-      if (strcmp(flood_channel_direct_scopes[i], direct_scope_name) == 0) {
+      if (strcmp(floodChannelDirectScopes()[i], direct_scope_name) == 0) {
         direct_scope_slot = i;
         break;
       }
@@ -10050,7 +10055,7 @@ void MyMesh::setFloodChannelScope(const char* args, char* reply) {
         bool referenced = false;
         for (int row = 0; row < FLOOD_CHANNEL_SCOPE_SLOTS; row++) {
           if (row == slot) continue;
-          const auto& entry = flood_channel_scopes[row];
+          const auto& entry = floodChannelScopes()[row];
           if (entry.target_id == i + 1
               && FloodFilterPolicy::channelScopeUsesDirectTarget(
                   entry.selector)) {
@@ -10070,15 +10075,15 @@ void MyMesh::setFloodChannelScope(const char* args, char* reply) {
       strcpy(reply, "Err - scope table full");
       return;
     }
-    if (strcmp(flood_channel_direct_scopes[direct_scope_slot],
+    if (strcmp(floodChannelDirectScopes()[direct_scope_slot],
                direct_scope_name) != 0) {
       changed_direct_scope_slot = direct_scope_slot;
       memcpy(previous_direct_scope,
-             flood_channel_direct_scopes[direct_scope_slot],
+             floodChannelDirectScopes()[direct_scope_slot],
              sizeof(previous_direct_scope));
-      StrHelper::strzcpy(flood_channel_direct_scopes[direct_scope_slot],
+      StrHelper::strzcpy(floodChannelDirectScopes()[direct_scope_slot],
                          direct_scope_name,
-                         sizeof(flood_channel_direct_scopes[direct_scope_slot]));
+                         sizeof(floodChannelDirectScopes()[direct_scope_slot]));
     }
   }
 
@@ -10086,8 +10091,8 @@ void MyMesh::setFloodChannelScope(const char* args, char* reply) {
       FloodFilterPolicy::encodeChannelScopeTargetSelector(selector,
                                                           direct_target);
 
-  FloodChannelScopeEntry previous = flood_channel_scopes[slot];
-  auto& entry = flood_channel_scopes[slot];
+  FloodChannelScopeEntry previous = floodChannelScopes()[slot];
+  auto& entry = floodChannelScopes()[slot];
   memset(&entry, 0, sizeof(entry));
   entry.target_id = direct_target ? direct_scope_slot + 1 : region->id;
   entry.selector =
@@ -10100,7 +10105,7 @@ void MyMesh::setFloodChannelScope(const char* args, char* reply) {
   if (!saveFloodChannelScopes()) {
     entry = previous;
     if (changed_direct_scope_slot >= 0) {
-      memcpy(flood_channel_direct_scopes[changed_direct_scope_slot],
+      memcpy(floodChannelDirectScopes()[changed_direct_scope_slot],
              previous_direct_scope, sizeof(previous_direct_scope));
     }
     strcpy(reply, "Err - save failed");
@@ -10115,9 +10120,9 @@ void MyMesh::deleteFloodChannelScope(const char* args, char* reply) {
     if (!saveFloodChannelScopes(true)) {
       strcpy(reply, "Err - save failed");
     } else {
-      memset(flood_channel_scopes, 0, sizeof(flood_channel_scopes));
-      memset(flood_channel_direct_scopes, 0,
-             sizeof(flood_channel_direct_scopes));
+      memset(floodChannelScopes(), 0, sizeof(floodChannelScopes()));
+      memset(floodChannelDirectScopes(), 0,
+             sizeof(floodChannelDirectScopes()));
       strcpy(reply, "OK");
     }
     return;
@@ -10129,14 +10134,14 @@ void MyMesh::deleteFloodChannelScope(const char* args, char* reply) {
     strcpy(reply, "Err - use: del flood.channel.scope.<n>|all");
     return;
   }
-  if (flood_channel_scopes[index].target_id == 0) {
+  if (floodChannelScopes()[index].target_id == 0) {
     strcpy(reply, "Err - empty scope slot");
     return;
   }
-  FloodChannelScopeEntry previous = flood_channel_scopes[index];
-  memset(&flood_channel_scopes[index], 0, sizeof(flood_channel_scopes[index]));
+  FloodChannelScopeEntry previous = floodChannelScopes()[index];
+  memset(&floodChannelScopes()[index], 0, sizeof(floodChannelScopes()[index]));
   if (!saveFloodChannelScopes()) {
-    flood_channel_scopes[index] = previous;
+    floodChannelScopes()[index] = previous;
     strcpy(reply, "Err - save failed");
   } else {
     strcpy(reply, "OK");
@@ -10150,7 +10155,7 @@ void MyMesh::formatFloodChannelScopeRequirementDetail(
              FLOOD_CHANNEL_SCOPE_REQUIRE_SLOTS);
     return;
   }
-  const auto& entry = flood_channel_scope_requirements[index];
+  const auto& entry = floodChannelScopeRequirements()[index];
   if (entry.key_len == 0) {
     snprintf(reply, reply_len, "> %d empty", index + 1);
     return;
@@ -10184,7 +10189,7 @@ void MyMesh::formatFloodChannelScopeRequirements(const char* args,
 
   int active = 0;
   for (int i = 0; i < FLOOD_CHANNEL_SCOPE_REQUIRE_SLOTS; i++) {
-    if (flood_channel_scope_requirements[i].key_len != 0) active++;
+    if (floodChannelScopeRequirements()[i].key_len != 0) active++;
   }
   snprintf(reply, 160,
            "> %d/%d active; listed=require allowed scope, others=bypass",
@@ -10221,7 +10226,7 @@ void MyMesh::setFloodChannelScopeRequirement(const char* args, char* reply) {
   int matching_slot = -1;
   int free_slot = -1;
   for (int i = 0; i < FLOOD_CHANNEL_SCOPE_REQUIRE_SLOTS; i++) {
-    const auto& entry = flood_channel_scope_requirements[i];
+    const auto& entry = floodChannelScopeRequirements()[i];
     if (entry.key_len == 0) {
       if (free_slot < 0) free_slot = i;
     } else if (entry.key_len == key_len
@@ -10239,8 +10244,8 @@ void MyMesh::setFloodChannelScopeRequirement(const char* args, char* reply) {
   }
 
   FloodChannelScopeRequireEntry previous =
-      flood_channel_scope_requirements[slot];
-  auto& entry = flood_channel_scope_requirements[slot];
+      floodChannelScopeRequirements()[slot];
+  auto& entry = floodChannelScopeRequirements()[slot];
   memset(&entry, 0, sizeof(entry));
   entry.key_len = key_len;
   entry.channel_hash = hash_prefix[0];
@@ -10265,8 +10270,8 @@ void MyMesh::deleteFloodChannelScopeRequirement(const char* args,
     if (!saveFloodChannelScopeRequirements(true)) {
       strcpy(reply, "Err - save failed");
     } else {
-      memset(flood_channel_scope_requirements, 0,
-             sizeof(flood_channel_scope_requirements));
+      memset(floodChannelScopeRequirements(), 0,
+             sizeof(floodChannelScopeRequirements()));
       strcpy(reply, "OK");
     }
     return;
@@ -10278,17 +10283,17 @@ void MyMesh::deleteFloodChannelScopeRequirement(const char* args,
     strcpy(reply, "Err - use: del flood.channel.scope.require.<n>|all");
     return;
   }
-  if (flood_channel_scope_requirements[index].key_len == 0) {
+  if (floodChannelScopeRequirements()[index].key_len == 0) {
     strcpy(reply, "Err - empty require slot");
     return;
   }
 
   FloodChannelScopeRequireEntry previous =
-      flood_channel_scope_requirements[index];
-  memset(&flood_channel_scope_requirements[index], 0,
-         sizeof(flood_channel_scope_requirements[index]));
+      floodChannelScopeRequirements()[index];
+  memset(&floodChannelScopeRequirements()[index], 0,
+         sizeof(floodChannelScopeRequirements()[index]));
   if (!saveFloodChannelScopeRequirements()) {
-    flood_channel_scope_requirements[index] = previous;
+    floodChannelScopeRequirements()[index] = previous;
     strcpy(reply, "Err - save failed");
   } else {
     strcpy(reply, "OK");

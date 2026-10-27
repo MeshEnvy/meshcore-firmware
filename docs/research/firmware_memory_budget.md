@@ -190,22 +190,29 @@ other tasks. Available linked internal heap cannot establish how much
 DMA-capable heap remains or how it is fragmented after boot. Only runtime
 observations can establish that.
 
-G3 repeater builds also place their channel/scope tables and full advert-source
-history in PSRAM. Their capacities and persisted formats remain unchanged.
+ESP32-S3 repeater builds with PSRAM also place their channel/scope tables and
+full advert-source history there. Their capacities and persisted formats
+remain unchanged.
 The RAM check still reserves internal fallback for both complete tables;
 moving them out of BSS does not relax startup admission or the DMA reserve.
 If neither heap can safely hold a complete table, startup reports the failed
 allocation and stops rather than running with reduced filtering protection.
-Other targets keep their existing storage. `MESH_REPEATER_PSRAM_TABLES=0`
-restores inline storage for a custom G3 build.
+Allocation occurs in `MyMesh::begin`, after Arduino initializes either QSPI or
+OPI PSRAM. Global constructors retain only the owners' pointers. Other targets
+keep their existing storage. `MESH_REPEATER_PSRAM_TABLES=0` restores inline
+storage for a custom build. The checker resolves the actual board MCU so the
+complete fallback cannot disappear from a non-G3 S3's budget.
 
-G3's IDF 4 WebSocket wrapper also prefers PSRAM for its two padded 1,025-byte
-SDK buffers per initialized MQTT client, including clients using plain MQTT.
+The IDF 4 WebSocket wrapper on any PSRAM-enabled ESP32 build also prefers PSRAM
+for its two padded 1,025-byte SDK buffers per initialized MQTT client, including
+clients using plain MQTT.
 Five initialized clients move 10,250 bytes of payload from internal RAM.
 Transport objects, task stacks, DMA buffers and radio packet queues keep their
 existing placement. The existing extra-byte overflow fix and guarded internal
 fallback remain in force. These figures describe allocation placement, not a
 measurement of running free heap or qualification of five simultaneous brokers.
+See the [cross-board checks](../test-results/esp32_psram_storage_2026-10-27.md)
+for covered families and the distinction between linked and physical results.
 
 Maximum-load qualification still needs physical boot and sustained reconnect,
 publish and configuration-change tests with the selected number of brokers,

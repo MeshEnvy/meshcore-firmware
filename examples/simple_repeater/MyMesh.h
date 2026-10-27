@@ -560,8 +560,8 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   uint8_t flood_packet_filter_blacklist[FLOOD_PACKET_FILTER_BLACKLIST_MAX]
                                        [FLOOD_PACKET_FILTER_PATH_ID_SIZE];
 #if MESH_REPEATER_PSRAM_TABLES
-  // Keep real array references: persistence, resets and rollback use sizeof
-  // these complete tables, and routing retains addresses into them.
+  // Only the pointer exists during global construction. Array-reference
+  // accessors preserve sizeof for persistence, resets and rollback.
   struct FloodChannelStorage {
     FloodChannelScopeEntry scopes[FLOOD_CHANNEL_SCOPE_SLOTS];
     char direct[FLOOD_CHANNEL_DIRECT_SCOPE_SLOTS][FLOOD_PACKET_FILTER_SCOPE_NAME_LEN];
@@ -575,11 +575,6 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
                        + FLOOD_CHANNEL_SCOPE_REQUIRE_SLOTS * 34U + 2U,
                 "Update the repeater PSRAM fallback budget in check_firmware_ram.py");
   mesh::RepeaterPsramStorage<FloodChannelStorage> flood_channel_storage;
-  FloodChannelScopeEntry (&flood_channel_scopes)[FLOOD_CHANNEL_SCOPE_SLOTS];
-  char (&flood_channel_direct_scopes)[FLOOD_CHANNEL_DIRECT_SCOPE_SLOTS]
-                                   [FLOOD_PACKET_FILTER_SCOPE_NAME_LEN];
-  FloodChannelScopeRequireEntry
-      (&flood_channel_scope_requirements)[FLOOD_CHANNEL_SCOPE_REQUIRE_SLOTS];
 #else
   FloodChannelScopeEntry flood_channel_scopes[FLOOD_CHANNEL_SCOPE_SLOTS];
   char flood_channel_direct_scopes[FLOOD_CHANNEL_DIRECT_SCOPE_SLOTS]
@@ -587,6 +582,53 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   FloodChannelScopeRequireEntry
       flood_channel_scope_requirements[FLOOD_CHANNEL_SCOPE_REQUIRE_SLOTS];
 #endif
+  using FloodChannelScopes = FloodChannelScopeEntry[FLOOD_CHANNEL_SCOPE_SLOTS];
+  using FloodChannelDirectScopes = char[FLOOD_CHANNEL_DIRECT_SCOPE_SLOTS]
+                                       [FLOOD_PACKET_FILTER_SCOPE_NAME_LEN];
+  using FloodChannelScopeRequirements =
+      FloodChannelScopeRequireEntry[FLOOD_CHANNEL_SCOPE_REQUIRE_SLOTS];
+  FloodChannelScopes& floodChannelScopes() {
+#if MESH_REPEATER_PSRAM_TABLES
+    return flood_channel_storage.require().scopes;
+#else
+    return flood_channel_scopes;
+#endif
+  }
+  const FloodChannelScopes& floodChannelScopes() const {
+#if MESH_REPEATER_PSRAM_TABLES
+    return flood_channel_storage.require().scopes;
+#else
+    return flood_channel_scopes;
+#endif
+  }
+  FloodChannelDirectScopes& floodChannelDirectScopes() {
+#if MESH_REPEATER_PSRAM_TABLES
+    return flood_channel_storage.require().direct;
+#else
+    return flood_channel_direct_scopes;
+#endif
+  }
+  const FloodChannelDirectScopes& floodChannelDirectScopes() const {
+#if MESH_REPEATER_PSRAM_TABLES
+    return flood_channel_storage.require().direct;
+#else
+    return flood_channel_direct_scopes;
+#endif
+  }
+  FloodChannelScopeRequirements& floodChannelScopeRequirements() {
+#if MESH_REPEATER_PSRAM_TABLES
+    return flood_channel_storage.require().requirements;
+#else
+    return flood_channel_scope_requirements;
+#endif
+  }
+  const FloodChannelScopeRequirements& floodChannelScopeRequirements() const {
+#if MESH_REPEATER_PSRAM_TABLES
+    return flood_channel_storage.require().requirements;
+#else
+    return flood_channel_scope_requirements;
+#endif
+  }
 #if MESH_ENABLE_FLOOD_GROUP_MODERATION
   FloodGroupModerationEntry flood_group_moderation[FLOOD_GROUP_MODERATION_SLOTS];
 #endif

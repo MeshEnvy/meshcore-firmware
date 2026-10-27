@@ -280,7 +280,9 @@ class WsTransportPsramTest(unittest.TestCase):
         cls.binaries = {}
         variants = {
             "g3_psram": (4, ["STATION_G3_ESP32", "BOARD_HAS_PSRAM"]),
-            "other_psram": (4, ["BOARD_HAS_PSRAM"]),
+            "generic_psram": (4, ["BOARD_HAS_PSRAM"]),
+            "classic_psram": (4, ["CONFIG_IDF_TARGET_ESP32", "BOARD_HAS_PSRAM"]),
+            "s3_psram": (4, ["CONFIG_IDF_TARGET_ESP32S3", "BOARD_HAS_PSRAM"]),
             "g3_internal": (4, ["STATION_G3_ESP32"]),
             "other_internal": (4, []),
             "idf5": (5, ["STATION_G3_ESP32", "BOARD_HAS_PSRAM"]),
@@ -306,14 +308,15 @@ class WsTransportPsramTest(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_g3_psram_and_guarded_failure_lifecycles(self):
-        for scenario in ["external_success", "internal_boundary", "reserve_denied",
-                         "largest_denied", "both_fail", "sdk_failure"]:
-            with self.subTest(scenario=scenario):
-                self.run_scenario("g3_psram", scenario)
+    def test_board_agnostic_psram_and_guarded_failure_lifecycles(self):
+        for variant in ["g3_psram", "generic_psram", "classic_psram", "s3_psram"]:
+            for scenario in ["external_success", "internal_boundary", "reserve_denied",
+                             "largest_denied", "both_fail", "sdk_failure"]:
+                with self.subTest(variant=variant, scenario=scenario):
+                    self.run_scenario(variant, scenario)
 
     def test_other_target_allocation_defaults_and_failure_cleanup(self):
-        for variant in ["other_psram", "g3_internal", "other_internal"]:
+        for variant in ["g3_internal", "other_internal"]:
             for scenario in ["generic_success", "generic_failure", "sdk_failure"]:
                 with self.subTest(variant=variant, scenario=scenario):
                     self.run_scenario(variant, scenario)

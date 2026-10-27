@@ -91,8 +91,8 @@ protected:
 #else
   FloodAdvertLimiter(Entry* entries, size_t capacity) : _entries(entries), _capacity(capacity) {}
 #if MESH_REPEATER_PSRAM_TABLES
-  // The derived storage owner is initialized after this base. Bind its full
-  // table before reset() or any limiter operation can inspect the entries.
+  // Bind the complete table from begin(), after Arduino initializes PSRAM,
+  // before reset() or any limiter operation can inspect the entries.
   void bindStorage(Entry* entries) {
     if (!entries || reinterpret_cast<uintptr_t>(entries) % alignof(Entry)) abort();
     _entries = entries;
@@ -211,17 +211,24 @@ public:
   struct Storage { Entry entries[Capacity]; };
   RepeaterPsramStorage<Storage> _storage;
 public:
-  StaticFloodAdvertLimiter() : FloodAdvertLimiter(nullptr, Capacity) {
+  StaticFloodAdvertLimiter() : FloodAdvertLimiter(nullptr, Capacity) {}
+  bool begin() {
+    if (_storage.data()) return true;
     // Exhaustion must stop startup rather than disabling advert protection
     // or reducing its source/hash history. No full internal array is retained.
-    if (!_storage.begin("advert source history")) abort();
+    if (!_storage.begin("advert source history")) return false;
     bindStorage(_storage.data()->entries);
     reset();
+    return true;
   }
 #else
   Entry _storage[Capacity];
 public:
   StaticFloodAdvertLimiter() : FloodAdvertLimiter(_storage, Capacity) { reset(); }
+#endif
+#if !MESH_REPEATER_PSRAM_TABLES || FLOOD_ADVERT_IRAM_WORD_STORAGE \
+    || FLOOD_ADVERT_RTC_FAST_SLOTS || FLOOD_ADVERT_RTC_SLOW_SLOTS
+  bool begin() { return true; }
 #endif
 };
 

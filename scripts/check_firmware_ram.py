@@ -355,7 +355,7 @@ def requirements(platform, defines, target):
         slots = integer(defines, "FLOOD_PACKET_FILTER_SLOTS", 63 if engine else 16)
         parts["flood_filter_table"] = slots * (304 if engine else 40) + 16
         psram_tables_default = int(platform == "ESP32_PLATFORM" and qualified_repeater
-                                   and "STATION_G3_ESP32" in defines
+                                   and integer(defines, "CONFIG_IDF_TARGET_ESP32S3", 0)
                                    and "BOARD_HAS_PSRAM" in defines)
         if platform == "ESP32_PLATFORM" and integer(
                 defines, "MESH_REPEATER_PSRAM_TABLES", psram_tables_default):
@@ -605,7 +605,12 @@ def heap_regions(elf, platform, mcu):
 def check_firmware(elf_path, platform, mcu, defines, target, output=None):
     elf = FirmwareElf(elf_path)
     if platform == "ESP32_PLATFORM":
-        defines = {**defines, "MESH_RAM_DEFAULT_RECENT_REPEATERS": 256 if str(mcu).lower() == "esp32" else 2048}
+        # SDK target macros are absent from SCons CPPDEFINES. Resolve them
+        # from the actual board MCU so source-selected PSRAM tables cannot
+        # disappear from the fallback budget on a non-G3 ESP32-S3.
+        target_mcu = str(mcu).lower()
+        defines = {**defines, "CONFIG_IDF_TARGET_ESP32S3": int(target_mcu == "esp32s3"),
+                   "MESH_RAM_DEFAULT_RECENT_REPEATERS": 256 if target_mcu == "esp32" else 2048}
     policy = requirements(platform, defines, target)
     regions = heap_regions(elf, platform, mcu)
     available = sum(end - start for start, end, _ in regions)

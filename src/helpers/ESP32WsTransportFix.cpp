@@ -67,7 +67,7 @@
 #include "esp_transport.h"
 #include "esp_transport_ws.h"
 
-#if defined(STATION_G3_ESP32) && defined(BOARD_HAS_PSRAM)
+#if defined(BOARD_HAS_PSRAM)
 #include "esp_heap_caps.h"
 #include "MQTTConnectionAdmission.h"
 #endif
@@ -109,7 +109,7 @@ esp_transport_handle_t __wrap_esp_transport_ws_init(esp_transport_handle_t paren
       // The buffer is untouched at this point (allocated moments ago inside
       // __real_esp_transport_ws_init), so a swap is safe.
       const size_t bytes = CONFIG_WS_BUFFER_SIZE + 1;
-#if defined(STATION_G3_ESP32) && defined(BOARD_HAS_PSRAM)
+#if defined(BOARD_HAS_PSRAM)
       // Upgrade request/response text is CPU-only. Retain this padded buffer
       // until the SDK destroys the transport; its ordinary free accepts PSRAM.
       char* padded = (char*)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
