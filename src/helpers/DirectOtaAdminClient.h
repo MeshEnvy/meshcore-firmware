@@ -146,14 +146,15 @@ public:
       if (phase_ != Idle) finish("admin session expired", true);
     }
   }
-  void service(Mesh& mesh, uint32_t now) {
+  void service(Mesh& mesh, uint32_t now, bool radio_idle) {
     tick(now);
     if (phase_ == Proof && expired(now, proof_retry_at_) && proof_attempts_ < 3) {
       if (!queueReturnPath(mesh)) { clearSession(); finish("login return path queue failed", true); }
+      return; // radio_idle was sampled before this new PATH was queued
     }
     // PATH has lower queue priority than CLI. Wait until its transmission and
     // retries finish before admitting the proof, rather than relying on delay.
-    if (phase_ == ReturnPath && !mesh.hasPendingRadioWork()) {
+    if (phase_ == ReturnPath && radio_idle) {
       phase_ = Proof;
       if (!queueCommand(mesh, "get public.key", now)) { clearSession(); finish("login proof queue failed", true); }
       else proof_retry_at_ = now + 8000;

@@ -13393,7 +13393,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, ClientInfo* sender, char *
 
 void MyMesh::loop() {
 #if MESH_ENABLE_DIRECT_OTA_ADMIN
-  direct_ota_admin.service(*this, millis());
+  direct_ota_admin.service(*this, millis(), !hasPendingRadioWork());
 #endif
 #if defined(WITH_WEBCONFIG) || defined(ETHERNET_ENABLED)
   _local_cli_output.service();
