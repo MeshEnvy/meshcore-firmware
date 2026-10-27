@@ -235,9 +235,7 @@ class DirectSession:
             source_key = identity[0]
         self._state["source_key"] = source_key.lower()
         for label, command in (("source", self.local), ("target", self.remote)):
-            temp = temp_state(await command("get tempradio"))
-            if temp.lower() != "off":
-                raise ota.OtaError(f"The {label} already has a temporary radio window. Finish it before updating.")
+            await self._check_temporary_windows(command, label)
             config = await command("ota config")
             radio = await command("get radio")
             try:
@@ -255,6 +253,22 @@ class DirectSession:
             raise ota.OtaError("The source and destination must start on the same saved radio settings.")
         self.save("prepared")
 
+    async def _check_temporary_windows(self, command, label: str) -> None:
+        if temp_state(await command("get tempradio")) != "off":
+            raise ota.OtaError(f"The {label} already has a temporary radio window. Finish it before updating.")
+        # Older supported repeaters report TempRadio off until a scheduled
+        # tuple starts. A new lease cancels even their future temp schedules.
+        try:
+            schedules = cli_value(await command("get tempradioat"))
+        except ota.TransmissionError:
+            raise
+        except ota.OtaError as exc:
+            if re.match(r"(?i)^(?:(?:err(?:or)?)[ :.-]*)?(?:unknown(?: command| config)?|unsupported|not supported)\b", str(exc)):
+                return  # Companion and Room roles have no primary scheduler.
+            raise
+        if schedules.lower() not in ("-none-", "none", "off") and not re.fullmatch(r"(?i)slots:\s*", schedules):
+            raise ota.OtaError(f"The {label} has scheduled temporary radio settings. Finish them before updating.")
+
     async def _wait_window(self, command) -> None:
         deadline = time.monotonic() + 45
         while time.monotonic() < deadline:
@@ -267,6 +281,11 @@ class DirectSession:
     async def begin(self) -> None:
         if not self.saved:
             await self.snapshot()
+        else:
+            # Package preparation can take time. Recheck both radios before
+            # the first mutation rather than replacing a newly queued lease.
+            for label, command in (("source", self.local), ("target", self.remote)):
+                await self._check_temporary_windows(command, label)
         self.active = True
         self.save("opening OTA windows")
         for label, command in (("target", self.remote), ("source", self.local)):

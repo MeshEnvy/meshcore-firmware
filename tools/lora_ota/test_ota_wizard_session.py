@@ -44,6 +44,7 @@ class FakeTransport:
         self.boot_version = BOOT_OLD
         self.calls = []
         self.windows = {"source": False, "target": False}
+        self.temp_schedules = {"source": "-none-", "target": "-none-"}
         self.rxps = {"source": "off,level=8,preamble=16,rx=10000,sleep=10000",
                      "target": "on,level=8,preamble=16,rx=10000,sleep=10000"}
         self.policies = {"source": dict(hops="3", autofetch="off", autoinstall="off"),
@@ -139,6 +140,8 @@ class FakeTransport:
             if label == "source":
                 return "TempRadio active: 910.525024,62.5,7,5 14000s left,preamble=16" if self.windows[label] else "TempRadio inactive"
             return "910.525024,62.5,7,5,240" if self.windows[label] else "off"
+        if text == "get tempradioat":
+            return self.temp_schedules[label]
         if text.startswith("tempradio "):
             self.windows[label] = True
             return "OK applying in 2s"
@@ -323,6 +326,48 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             await self.session.begin()
         self.assertFalse(self.session.active)
         self.assertFalse(any(text.startswith("set ") or text.startswith("ota config ") for _, text in self.link.calls))
+
+    async def test_legacy_future_temp_schedule_is_preserved_before_any_mutation(self):
+        future = "> 1:910.540,62.5,7,5,32@1900000000-1900000900"
+        for label in ("source", "target"):
+            self.link.calls.clear()
+            self.link.temp_schedules = {"source": "-none-", "target": "-none-"}
+            self.link.temp_schedules[label] = future
+            with self.subTest(label=label), self.assertRaisesRegex(ota.OtaError, "scheduled temporary"):
+                await self.session.begin()
+            self.assertFalse(self.session.active)
+            self.assertEqual(self.link.temp_schedules[label], future)
+            self.assertFalse(any(text.startswith(("set ", "ota config ", "tempradio ", "normalradio"))
+                                 for _, text in self.link.calls))
+
+    async def test_schedule_queued_during_preparation_is_checked_again(self):
+        await self.session.snapshot()
+        self.link.calls.clear()
+        self.link.temp_schedules["target"] = "> 1:910.540,62.5,7,5@1900000000-1900000900"
+        with self.assertRaisesRegex(ota.OtaError, "scheduled temporary"):
+            await self.session.begin()
+        self.assertFalse(self.session.active)
+        self.assertFalse(any(text.startswith(("set ", "ota config ", "tempradio ", "normalradio"))
+                             for _, text in self.link.calls))
+
+    async def test_roles_without_primary_schedule_getter_can_still_update(self):
+        self.link.temp_schedules = {"source": "Unknown command", "target": "Error: unsupported"}
+        await self.session.begin()
+        self.assertTrue(self.session.active)
+        self.assertEqual(await self.session.cleanup(), [])
+
+    async def test_schedule_read_timeout_cannot_be_treated_as_unsupported(self):
+        original = self.link.local_command
+        async def uncertain(text):
+            if text == "get tempradioat":
+                raise ota.TransmissionError("unknown command result after timeout")
+            return await original(text)
+        self.link.local_command = uncertain
+        with self.assertRaises(ota.TransmissionError):
+            await self.session.begin()
+        self.assertFalse(self.session.active)
+        self.assertFalse(any(text.startswith(("set ", "ota config ", "tempradio ", "normalradio"))
+                             for _, text in self.link.calls))
 
 
 if __name__ == "__main__":
