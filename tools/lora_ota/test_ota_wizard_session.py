@@ -48,12 +48,23 @@ class FakeTransport:
         self.rxps = {"source": "off,level=8,preamble=16,rx=10000,sleep=10000",
                      "target": "on,level=8,preamble=16,rx=10000,sleep=10000"}
         self.policies = {"source": dict(hops="3", autofetch="off", autoinstall="off"),
-                         "target": dict(hops="2", autofetch="on", autoinstall="on")}
+                         "target": dict(hops="2", autofetch="signed", autoinstall="trusted")}
         self.seeder = True
         self.unsupported_source = False
         self.serving = None
         self.serves = []
         self.mid = None
+        self.slot_mid = None
+        self.trusted_keys = set()
+        self.signer = None
+        self.auto_installed = False
+        self.apply_pending = False
+        self.defer_install = False
+        self.lost_cancel = self.discard_fails = False
+        self.lease_minutes = {}
+        self.lease_until = {}
+        self.now = 0
+        self.lost_window_ack = set()
         self.lost_pull = self.lost_install = False
         self.bad_mid = self.bad_hash = self.bad_body = False
         self.truncate_status = False
@@ -80,6 +91,8 @@ class FakeTransport:
 
     async def serve(self, blob, stop):
         self.serving = ota.parse_mota(blob)
+        manifest = ota.bootloader_library().parse_container(blob).manifest
+        self.signer = manifest.signer_pubkey.hex().upper() if manifest.is_signed else None
         self.serves.append(self.serving)
         await stop.wait()
 
@@ -123,6 +136,8 @@ class FakeTransport:
                 return "ERR seeder-only policy must stay off"
             if not self.ignore_restore or value == "0":
                 self.policies[label][field] = value
+            if label == "target":
+                self.auto_install_tick()
             return "OK"
         if text == "get radio":
             return "910.525024,62.5,7,5"
@@ -137,6 +152,8 @@ class FakeTransport:
             self.rxps[label] = "on,level=8,preamble=16,rx=10000,sleep=10000"
             return "OK on"
         if text == "get tempradio":
+            if self.now >= self.lease_until.get(label, float("inf")):
+                self.windows[label] = False
             if label == "source":
                 return "TempRadio active: 910.525024,62.5,7,5 14000s left,preamble=16" if self.windows[label] else "TempRadio inactive"
             return "910.525024,62.5,7,5,240" if self.windows[label] else "off"
@@ -144,11 +161,17 @@ class FakeTransport:
             return self.temp_schedules[label]
         if text.startswith("tempradio "):
             self.windows[label] = True
+            self.lease_minutes[label] = int(text.rsplit(",", 1)[1])
+            self.lease_until[label] = self.now + self.lease_minutes[label] * 60
+            if label in self.lost_window_ack:
+                self.lost_window_ack.remove(label)
+                raise TimeoutError("lost lease acknowledgment")
             return "OK applying in 2s"
         if text == "normalradio":
             self.windows[label] = False
             return "OK"
         if text.startswith("ota key add "):
+            self.trusted_keys.add(text.split()[-1])
             return "OK trusted key added"
         if text == "ota ls":
             return f"OTA | {self.serving.manifest_id}"
@@ -156,24 +179,56 @@ class FakeTransport:
             if not all(self.windows.values()):
                 raise AssertionError("pull without overlapping leases")
             self.mid = text.split()[2]
+            self.slot_mid = self.mid
             self.download_started.set()
             if self.lost_pull:
                 raise TimeoutError("lost pull acknowledgment")
             return "OK pulling"
-        if text.startswith("ota bootloader install ") or text == "ota install":
-            if self.serving.is_bootloader:
-                self.boot_version = self.serving.fw_version
-            else:
-                self.image = ota.parse_endf(self.serving.payload)
-                if self.bad_body:
-                    self.image = application(self.image.fw_version, b"different body" * 600)
-            self.windows["target"] = False  # reboot clears the RAM lease
-            self.login_stale = True
+        if text == "ota cancel":
+            # Firmware guards application apply_pending here, but not a
+            # separately armed bootloader installation.
+            if self.apply_pending and not self.serving.is_bootloader:
+                return "ERR update is armed; reboot is pending"
+            previous = self.mid
             self.mid = None
+            if not self.discard_fails:
+                self.slot_mid = None
+            if self.lost_cancel:
+                raise TimeoutError("lost cancel acknowledgment")
+            if self.discard_fails:
+                return f"ERR dropped live session (was C mid={previous}), but persistent OTA slot invalidation failed"
+            return f"OK dropped session (was C mid={previous}); OTA receive slot confirmed clear"
+        if text.startswith("ota bootloader install ") or text == "ota install":
+            self.apply_pending = True
+            if not self.defer_install:
+                self.finish_install()
             if self.lost_install:
                 raise TimeoutError("lost install acknowledgment")
             return "OK rebooting"
         raise AssertionError((label, text))
+
+    def finish_install(self):
+        if self.serving.is_bootloader:
+            self.boot_version = self.serving.fw_version
+        else:
+            self.image = ota.parse_endf(self.serving.payload)
+            if self.bad_body:
+                self.image = application(self.image.fw_version, b"different body" * 600)
+        self.windows["target"] = False
+        self.login_stale = True
+        self.mid = None
+        self.apply_pending = False
+
+    def auto_install_tick(self):
+        # Match Mesh.cpp's COMPLETE/signed/non-bootloader/trusted-auto gate,
+        # including the apply path's trusted-key/newer-version requirement.
+        if (self.mid and not self.hold_download and not self.apply_pending
+                and self.policies["target"]["autoinstall"] == "trusted"
+                and self.serving is not None and self.serving.flags & 2
+                and not self.serving.is_bootloader and self.signer in self.trusted_keys
+                and self.serving.fw_version > self.image.fw_version):
+            self.auto_installed = True
+            self.finish_install()
 
 
 class SessionTests(unittest.IsolatedAsyncioTestCase):
@@ -214,7 +269,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.session.cleanup(), [])
         self.assertEqual(self.link.rxps["source"].split(",")[0], "off")
         self.assertEqual(self.link.rxps["target"].split(",")[0], "on")
-        self.assertEqual(self.link.policies["target"], dict(hops="2", autofetch="on", autoinstall="on"))
+        self.assertEqual(self.link.policies["target"], dict(hops="2", autofetch="signed", autoinstall="trusted"))
         self.assertFalse(any(self.link.windows.values()))
         self.assertTrue(self.link.restore_path_called)
         journal = json.loads(self.path.read_text())
@@ -242,7 +297,9 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ota.OtaError, "not the selected package"):
                 await self.session.install(wizard.full_package(application(), 1024), before)
         finally:
-            self.assertEqual(await self.session.cleanup(), [])
+            self.assertTrue(await self.session.cleanup())
+        self.assertNotIn(("target", "ota cancel"), self.link.calls)
+        self.assertEqual(self.link.policies["target"]["autoinstall"], "off")
         self.assertNotIn(("target", "ota install"), self.link.calls)
 
     async def test_staged_bootloader_hash_must_match_exactly(self):
@@ -302,6 +359,205 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.session.active)
         self.assertFalse(any(self.link.windows.values()))
         self.assertNotIn(("target", "ota install"), self.link.calls)
+
+    async def stage_and_cancel(self, *, signed=False, complete=False):
+        from test_ota_wizard_bundle import signed_package
+        package = signed_package(application()) if signed else wizard.full_package(application(), 1024)
+        before = await self.session.inspect()
+        self.link.hold_download = True
+        task = asyncio.create_task(self.session.install(package, before))
+        await asyncio.wait_for(self.link.download_started.wait(), 2)
+        self.link.hold_download = not complete
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        return package
+
+    async def test_cancel_complete_signed_fetch_clears_slot_before_restoring_trusted_policy(self):
+        await self.stage_and_cancel(signed=True, complete=True)
+        errors = await self.session.cleanup()
+        self.assertFalse(self.link.auto_installed)
+        self.assertEqual(errors, [])
+        self.assertEqual(self.link.image.fw_version, OLD)
+        self.assertIsNone(self.link.mid)
+        self.assertIsNone(self.link.slot_mid)
+        target = [text for label, text in self.link.calls if label == "target"]
+        self.assertEqual(target.count("ota cancel"), 1)
+        self.assertLess(target.index("ota cancel"), target.index("ota config autoinstall trusted"))
+        self.assertNotIn("ota install", target)
+        self.assertEqual(json.loads(self.path.read_text())["phase"], "finished")
+        # There is no abandoned live receive slot blocking the next update.
+        after = await self.session.install(wizard.full_package(application(), 1024), await self.session.inspect())
+        self.assertEqual(after.version, NEW)
+        self.assertEqual(await self.session.cleanup(), [])
+
+    async def test_lost_cancel_reply_never_replays_cancel_or_restores_automatic_policy(self):
+        await self.stage_and_cancel(signed=True, complete=True)
+        self.link.lost_cancel = True
+        self.assertTrue(await self.session.cleanup())
+        self.assertTrue(await self.session.cleanup())
+        self.assertEqual([text for _, text in self.link.calls].count("ota cancel"), 1)
+        self.assertEqual(self.link.policies["target"]["autoinstall"], "off")
+        self.assertEqual(self.link.policies["target"]["autofetch"], "off")
+        self.assertFalse(self.link.auto_installed)
+        self.assertEqual(json.loads(self.path.read_text())["phase"], "needs cleanup")
+
+    async def test_legacy_download_journal_remembers_uncertain_cancel_after_restart(self):
+        await self.stage_and_cancel(signed=True, complete=True)
+        for name in ("pull_attempted", "install_attempted", "package_finalized", "cancel_sent", "cancel_confirmed"):
+            self.session._state.pop(name, None)
+        self.session.save("downloading")
+        self.link.lost_cancel = True
+        self.assertTrue(await self.session.cleanup())
+        recovery = wizard.DirectSession(self.link, KEY, "secret-for-test", self.path, progress=lambda _: None)
+        recovery._state = json.loads(self.path.read_text())
+        recovery.saved, recovery.active = recovery._state["settings"], True
+        self.assertTrue(recovery._state["pull_attempted"])
+        self.assertTrue(recovery._state["cancel_sent"])
+        self.assertTrue(await recovery.cleanup())
+        self.assertEqual([text for _, text in self.link.calls].count("ota cancel"), 1)
+        self.assertEqual(self.link.policies["target"]["autoinstall"], "off")
+        self.assertEqual(self.link.policies["target"]["autofetch"], "off")
+        self.assertFalse(self.link.auto_installed)
+
+    async def test_legacy_install_journal_never_becomes_cancelable_after_failed_recovery(self):
+        self.link.defer_install = True
+        before = await self.session.inspect()
+        with self.assertRaises(ota.OtaError):
+            await self.session.install(wizard.full_package(application(), 1024), before)
+        for name in ("pull_attempted", "install_attempted", "package_finalized", "cancel_sent", "cancel_confirmed"):
+            self.session._state.pop(name, None)
+        self.session.save("installing")
+        self.assertTrue(await self.session.cleanup())
+        recovery = wizard.DirectSession(self.link, KEY, "secret-for-test", self.path, progress=lambda _: None)
+        recovery._state = json.loads(self.path.read_text())
+        recovery.saved, recovery.active = recovery._state["settings"], True
+        self.assertTrue(recovery._state["install_attempted"])
+        self.assertTrue(await recovery.cleanup())
+        self.assertNotIn(("target", "ota cancel"), self.link.calls)
+        self.assertTrue(self.link.apply_pending)
+        self.assertEqual(self.link.policies["target"]["autoinstall"], "off")
+
+    async def test_malformed_install_marker_never_cancels_armed_bootloader(self):
+        self.link.defer_install = True
+        before = await self.session.inspect()
+        package = wizard.Package(boot_blob(storage=14, version=BOOT_NEW), signer=TEST_SIGNER)
+        with self.assertRaises(ota.OtaError):
+            await self.session.install(package, before)
+        original = json.loads(json.dumps(self.session._state))
+        for malformed in ("install marker", "legacy phase", "legacy missing ID"):
+            with self.subTest(malformed=malformed):
+                self.session._state = json.loads(json.dumps(original))
+                self.session.active = True
+                if malformed == "install marker":
+                    self.session.save("needs cleanup", install_attempted="false")
+                else:
+                    for name in ("pull_attempted", "install_attempted", "package_finalized",
+                                 "cancel_sent", "cancel_confirmed"):
+                        self.session._state.pop(name, None)
+                    if malformed == "legacy missing ID":
+                        self.session._state.pop("package_mid")
+                    self.session.save(["installing"] if malformed == "legacy phase" else "installing")
+                self.assertTrue(await self.session.cleanup())
+                recovery = wizard.DirectSession(self.link, KEY, "secret-for-test", self.path, progress=lambda _: None)
+                recovery._state = json.loads(self.path.read_text())
+                recovery.saved, recovery.active = recovery._state["settings"], True
+                self.assertIs(recovery._state["install_attempted"], True)
+                self.assertTrue(await recovery.cleanup())
+                self.assertNotIn(("target", "ota cancel"), self.link.calls)
+                self.assertTrue(self.link.apply_pending)
+                self.assertEqual(self.link.slot_mid, package.info.manifest_id)
+                self.assertEqual(self.link.policies["target"]["autoinstall"], "off")
+                self.assertEqual(self.link.policies["target"]["autofetch"], "off")
+
+    async def test_failed_source_stop_cannot_reenable_automatic_fetch(self):
+        from unittest import mock
+        await self.stage_and_cancel(signed=True, complete=True)
+        original = self.session._stop_serving
+        with mock.patch.object(self.session, "_stop_serving", new_callable=mock.AsyncMock,
+                               side_effect=ota.OtaError("source did not stop")):
+            self.assertTrue(await self.session.cleanup())
+        self.assertEqual(self.link.policies["target"]["autoinstall"], "off")
+        self.assertEqual(self.link.policies["target"]["autofetch"], "off")
+        self.assertFalse(self.link.auto_installed)
+        await original()
+        self.assertEqual(await self.session.cleanup(), [])
+
+    async def test_persistent_slot_invalidation_failure_keeps_both_automatic_policies_off(self):
+        package = await self.stage_and_cancel(signed=True, complete=True)
+        self.link.discard_fails = True
+        self.assertTrue(await self.session.cleanup())
+        self.assertIsNone(self.link.mid)  # IDLE does not prove durable erasure.
+        self.assertEqual(self.link.slot_mid, package.info.manifest_id)
+        self.assertEqual(self.link.policies["target"]["autoinstall"], "off")
+        self.assertEqual(self.link.policies["target"]["autofetch"], "off")
+        self.assertTrue(self.session.active)
+        self.assertFalse(self.link.auto_installed)
+
+    async def test_foreign_existing_download_is_not_canceled_or_mutated(self):
+        self.link.mid = "DEADBEEF"
+        with self.assertRaisesRegex(ota.OtaError, "already has OTA download"):
+            await self.session.begin()
+        self.assertFalse(self.session.active)
+        self.assertFalse(any(text.startswith(("ota cancel", "ota config ", "set ", "tempradio "))
+                             for _, text in self.link.calls))
+        self.assertEqual(self.link.mid, "DEADBEEF")
+
+    async def test_download_started_during_preparation_is_not_replaced(self):
+        await self.session.snapshot()
+        self.link.mid = "DEADBEEF"
+        self.link.calls.clear()
+        with self.assertRaisesRegex(ota.OtaError, "already has OTA download"):
+            await self.session.begin()
+        self.assertFalse(self.session.active)
+        self.assertFalse(any(text.startswith(("ota cancel", "ota config ", "set ", "tempradio "))
+                             for _, text in self.link.calls))
+
+    async def test_uncertain_armed_install_is_not_erased_and_recovery_verifies_it(self):
+        self.link.defer_install = True
+        before = await self.session.inspect()
+        with self.assertRaisesRegex(ota.OtaError, "version and body hash"):
+            await self.session.install(wizard.full_package(application(), 1024), before)
+        self.assertTrue(self.link.apply_pending)
+        self.assertTrue(await self.session.cleanup())
+        self.assertNotIn(("target", "ota cancel"), self.link.calls)
+        self.assertEqual(self.link.policies["target"]["autoinstall"], "off")
+        # A fresh process reads the saved exact expectations, never guesses
+        # that a timed-out install failed, and does not send install twice.
+        recovery = wizard.DirectSession(self.link, KEY, "secret-for-test", self.path,
+                                        progress=lambda _: None)
+        recovery._state = json.loads(self.path.read_text())
+        recovery.saved, recovery.active = recovery._state["settings"], True
+        self.link.finish_install()
+        self.assertEqual(await recovery.cleanup(), [])
+        self.assertEqual(self.link.policies["target"]["autoinstall"], "trusted")
+        self.assertEqual([text for _, text in self.link.calls].count("ota install"), 1)
+        self.assertEqual(json.loads(self.path.read_text())["phase"], "finished")
+
+    async def test_combined_lease_covers_two_long_transfers_and_reboots(self):
+        session = wizard.DirectSession(self.link, KEY, "secret-for-test", self.path, progress=lambda _: None)
+        await session.begin()
+        # Spend the first package's entire four-hour transfer and five-minute
+        # reboot budget, then reopen the rebooted target for the application.
+        self.link.now += 4 * 3600 + 5 * 60
+        self.assertEqual(wizard.temp_state(await self.link.local_command("get tempradio")), "active")
+        self.link.windows["target"] = False
+        await session._open_window("target")
+        self.link.now += 4 * 3600 + 5 * 60
+        self.assertEqual(wizard.temp_state(await self.link.local_command("get tempradio")), "active")
+        self.assertEqual(wizard.temp_state(await self.link.remote_command(KEY, "secret-for-test", "get tempradio")), "active")
+        source_windows = [text for label, text in self.link.calls if label == "source" and text.startswith("tempradio ")]
+        self.assertEqual(len(source_windows), 1)
+        self.assertEqual(await session.cleanup(), [])
+
+    async def test_relative_window_acknowledgments_are_read_back_without_replay(self):
+        self.link.lost_window_ack = {"source", "target"}
+        await self.session.begin()
+        for label in ("source", "target"):
+            commands = [text for side, text in self.link.calls if side == label and text.startswith("tempradio ")]
+            self.assertEqual(len(commands), 1)
+            self.assertTrue(self.link.windows[label])
+        self.assertEqual(await self.session.cleanup(), [])
 
     async def test_cleanup_requires_policy_readback_and_can_be_retried(self):
         await self.session.begin()

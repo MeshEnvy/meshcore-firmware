@@ -5,6 +5,7 @@ import asyncio
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import time
@@ -143,7 +144,7 @@ class DirectSession:
     """One target, zero-hop routing, bounded operations, and durable recovery state."""
 
     def __init__(self, transport, public_key: str, password: str, journal: Path,
-                 *, progress: Callable[[str], None] = print, poll_seconds: float = 5,
+                 *, progress: Callable[[str], None] = print, poll_seconds: float = 10,
                  transfer_timeout: float = 4 * 60 * 60, reboot_timeout: float = 300):
         if not re.fullmatch(r"[0-9a-fA-F]{64}", public_key):
             raise ota.OtaError("Choose a destination with a complete public key.")
@@ -151,6 +152,14 @@ class DirectSession:
         self.journal, self.progress = Path(journal), progress
         self.poll_seconds, self.transfer_timeout = poll_seconds, transfer_timeout
         self.reboot_timeout = reboot_timeout
+        # A run can install a bootloader and then an application. Keep one
+        # source lease valid for both complete transfer/reboot budgets, with
+        # setup and recovery slack, rather than granting each package four
+        # hours against a source window that started only once.
+        self.window_minutes = max(15, math.ceil(
+            (2 * transfer_timeout + 2 * reboot_timeout + 15 * 60) / 60))
+        if self.window_minutes > 10080:
+            raise ota.OtaError("The combined update exceeds the supported temporary radio window.")
         self.saved: dict[str, dict[str, str]] = {}
         self.active = False
         self._serve_stop = None
@@ -236,6 +245,8 @@ class DirectSession:
         self._state["source_key"] = source_key.lower()
         for label, command in (("source", self.local), ("target", self.remote)):
             await self._check_temporary_windows(command, label)
+            if label == "target":
+                await self._require_idle_download()
             config = await command("ota config")
             radio = await command("get radio")
             try:
@@ -286,6 +297,7 @@ class DirectSession:
             # the first mutation rather than replacing a newly queued lease.
             for label, command in (("source", self.local), ("target", self.remote)):
                 await self._check_temporary_windows(command, label)
+            await self._require_idle_download()
         self.active = True
         self.save("opening OTA windows")
         for label, command in (("target", self.remote), ("source", self.local)):
@@ -296,16 +308,30 @@ class DirectSession:
                 commands.append("set radio.rxps off")
             for text in commands:
                 await command(text)
+            await self._verify_paused_policy(command, label)
             if self.saved[label]["rxps"] != "unsupported":
                 current = await self._read_rxps(command, label)
                 if current.enabled:
                     raise ota.OtaError(f"The {label} did not disable RX power saving.")
             # Keep the existing RF tuple so both admin and file traffic stay
             # reachable even if the process is interrupted before cleanup.
-            values = radio_tuple(self.saved["target"]["radio"])
-            await command("tempradio " + ",".join(map(str, values)) + ",240")
-            await self._wait_window(command)
+            await self._open_window(label)
         self.save("OTA windows active")
+
+    async def _open_window(self, label: str) -> None:
+        command = self.remote if label == "target" else self.local
+        values = radio_tuple(self.saved[label]["radio"])
+        text = "tempradio " + ",".join(map(str, values)) + f",{self.window_minutes}"
+        try:
+            if label == "target":
+                await self.remote(text, retries=0)
+            else:
+                await self.local(text)
+        except (TimeoutError, ConnectionError, ota.TransmissionError):
+            # Relative leases must not be replayed after a lost acknowledgement.
+            # Both entry points have already proved the old window inactive.
+            pass
+        await self._wait_window(command)
 
     async def _stop_serving(self) -> None:
         if self._serve_task:
@@ -344,7 +370,19 @@ class DirectSession:
         raise ota.OtaError("The transfer timed out. The recovery record retains the package ID.")
 
     async def _download_state(self, info: ota.MotaInfo) -> tuple[str, bool]:
+        state, mid, status = await self._read_download()
+        if mid is None:
+            raise ota.OtaError("The destination did not confirm a live download and manifest ID.")
+        if mid != info.manifest_id.lower():
+            raise ota.OtaError("The destination's download is not the selected package.")
+        if state == "failed":
+            raise ota.OtaError("The destination reported a failed download: " + status)
+        return status, state == "complete"
+
+    async def _read_download(self) -> tuple[str, str | None, str]:
         status = await self.remote("ota status")
+        if re.search(r"\bno download\b", status, re.I):
+            return "idle", None, status
         download = re.search(r"\bdownload:\s*([^|]+)", status, re.I)
         section = download[1] if download else ""
         mid = re.search(r"\bid=([0-9A-Fa-f]{8})\b", section)
@@ -354,16 +392,22 @@ class DirectSession:
             stats = await self.remote("ota stats")
             fetch = re.search(r"\bfetch\s+([^|]+)", stats, re.I)
             section = fetch[1] if fetch else ""
+            if re.match(r"idle\b", section, re.I):
+                return "idle", None, status + " | " + stats
             mid = re.search(r"\bid=([0-9A-Fa-f]{8})\b", section)
             status += " | " + stats
         if mid is None:
             raise ota.OtaError("The destination did not confirm a live download and manifest ID.")
-        if mid[1].lower() != info.manifest_id.lower():
-            raise ota.OtaError("The destination's download is not the selected package.")
-        if re.match(r"failed\b", section, re.I):
-            raise ota.OtaError("The destination reported a failed download: " + status)
-        complete = bool(re.match(r"(?:ready to install|done)\b", section, re.I))
-        return status, complete
+        state = ("failed" if re.match(r"failed\b", section, re.I) else
+                 "complete" if re.match(r"(?:ready to install|done)\b", section, re.I) else "active")
+        return state, mid[1].lower(), status
+
+    async def _require_idle_download(self) -> None:
+        state, mid, _ = await self._read_download()
+        if state != "idle":
+            raise ota.OtaError(
+                f"The destination already has OTA download {mid or 'unknown'}. "
+                "Finish or cancel that update before starting another one.")
 
     async def _installed(self, package: Package, before: Destination) -> Destination:
         info, deadline = package.info, time.monotonic() + self.reboot_timeout
@@ -399,9 +443,17 @@ class DirectSession:
             await self.begin()
         # A bootloader reboot clears the destination's RAM-only lease.
         if temp_state(await self.remote("get tempradio")) == "off":
-            values = radio_tuple(self.saved["target"]["radio"])
-            await self.remote("tempradio " + ",".join(map(str, values)) + ",240")
-            await self._wait_window(self.remote)
+            await self._open_window("target")
+        await self._require_idle_download()
+        self.save("preparing package", package_mid=info.manifest_id, package_hash=info.image_hash.hex(),
+                  package_kind=info.kind, package_bootloader=info.is_bootloader,
+                  package_version=info.fw_version, package_target=info.target_id, package_hw=info.hw_id,
+                  package_storage=info.bootloader_storage,
+                  expected_body=package.body_hash.hex() if package.body_hash else None,
+                  previous_app=dict(target=before.target_id, hw=before.hw_id,
+                                    version=before.version, body=before.base_hash.hex()),
+                  pull_attempted=False, install_attempted=False,
+                  package_finalized=False, cancel_sent=False, cancel_confirmed=False)
         if package.signer:
             await self.remote("ota key add " + package.signer)
         if not info.is_bootloader and not info.is_full:
@@ -409,8 +461,7 @@ class DirectSession:
             if live.base_hash != info.base_hash:
                 raise ota.OtaError("The destination's firmware changed after delta preparation.")
         await self._start_serving(package)
-        self.save("downloading", package_mid=info.manifest_id, package_hash=info.image_hash.hex(),
-                  package_kind=info.kind, expected_body=package.body_hash.hex() if package.body_hash else None)
+        self.save("serving package")
         # Discovery may need more than one advertisement. It is read-only and
         # always bound to the exact selected MID before a pull is issued.
         for _ in range(12):
@@ -419,10 +470,17 @@ class DirectSession:
             await asyncio.sleep(self.poll_seconds)
         else:
             raise ota.OtaError("The selected package was not discovered over the direct link.")
+        await self._require_idle_download()
+        self.save("downloading", pull_attempted=True)
         try:
             await self.remote(f"ota pull {info.manifest_id} flash", retries=0)
         except ota.TransmissionError:
             await self._download_state(info)
+        except ota.OtaError:
+            # An explicit rejection did not grant us ownership of somebody
+            # else's slot; cleanup must not cancel that download.
+            self.save("pull rejected", pull_attempted=False)
+            raise
         await self._ready(info)
         if info.is_bootloader:
             staged = await self.remote("ota bootloader status")
@@ -432,22 +490,144 @@ class DirectSession:
             command = f"ota bootloader install {info.manifest_id} {info.image_hash[:8].hex().upper()}"
         else:
             command = "ota install"
-        self.save("installing")
+        self.save("installing", install_attempted=True)
         try:
             await self.remote(command, retries=0)
         except ota.TransmissionError:
             self.progress("The install reply was lost; checking the running image before taking further action.")
         current = await self._installed(package, before)
         await self._stop_serving()
-        self.save("installed")
+        self.save("installed", package_finalized=True, install_verified=True)
         return current
+
+    async def _verify_paused_policy(self, command, label: str) -> None:
+        policy = await command("ota config")
+        fields = ("hops",) if "mode=seeder-only" in policy else ("hops", "autofetch", "autoinstall")
+        for field in fields:
+            match = re.search(rf"\b{field}=([A-Za-z0-9]+)", policy)
+            expected = "0" if field == "hops" else "off"
+            if match is None or match[1] != expected:
+                raise ota.OtaError(f"The {label} did not confirm isolated OTA policy {field}={expected}.")
+
+    def _expected_install_matches(self, current: Destination) -> bool:
+        state = self._state
+        if state.get("package_bootloader"):
+            previous = state.get("previous_app", {})
+            boot = current.bootloader
+            return (current.boot_version == state.get("package_version") and boot is not None
+                    and boot.target_id == state.get("package_target")
+                    and boot.hw_id == state.get("package_hw")
+                    and boot.storage_flags == state.get("package_storage")
+                    and current.target_id == previous.get("target")
+                    and current.hw_id == previous.get("hw")
+                    and current.version == previous.get("version")
+                    and current.base_hash.hex() == previous.get("body"))
+        return (current.target_id == state.get("package_target")
+                and current.hw_id == state.get("package_hw")
+                and current.version == state.get("package_version")
+                and current.base_hash.hex() == state.get("expected_body"))
+
+    async def _finalize_download(self) -> bool:
+        """Free only this run's receive slot, before restoring automatic policy."""
+        state = self._state
+        if state.get("package_finalized") is True:
+            return True
+        if type(state.get("pull_attempted")) is not bool:
+            # Old journals recorded only a phase. Normalize it durably before
+            # cleanup can replace that phase with "needs cleanup"; otherwise
+            # the next recovery could forget an unresolved pull/install.
+            phase = state.get("phase")
+            owned = phase in ("downloading", "installing", "installed") or (
+                bool(state.get("package_mid")) and phase not in (
+                    "inspecting", "prepared", "opening OTA windows", "OTA windows active",
+                    "preparing package", "serving package", "pull rejected"))
+            self.save(phase or "needs cleanup", pull_attempted=owned,
+                      install_attempted=owned and phase != "downloading",
+                      cancel_sent=(state.get("cancel_sent") is True or
+                                   "cancel_sent" in state and type(state["cancel_sent"]) is not bool),
+                      cancel_confirmed=state.get("cancel_confirmed") is True,
+                      package_finalized=False)
+        attempted = state.get("pull_attempted") is True
+        if not attempted:
+            return True
+        if type(state.get("install_attempted")) is not bool:
+            # A partial or malformed journal must not turn a possibly armed
+            # install into a cancelable download when cleanup changes phase.
+            self.save(state.get("phase", "needs cleanup"), install_attempted=True)
+        if type(state.get("cancel_sent")) is not bool:
+            self.save(state.get("phase", "needs cleanup"), cancel_sent=True)
+        if type(state.get("cancel_confirmed")) is not bool:
+            self.save(state.get("phase", "needs cleanup"), cancel_confirmed=False)
+        mid = state.get("package_mid")
+        reset_session = getattr(self.link, "reset_remote_session", None)
+        if reset_session:
+            await reset_session(self.key)
+        # A canceled COMPLETE signed fetch must never become eligible merely
+        # because we restored its saved autoinstall=trusted setting.
+        await self.remote("ota config autoinstall off")
+        await self.remote("ota config autofetch off")
+        policy = await self.remote("ota config")
+        if not all(re.search(rf"\b{field}=off\b", policy) for field in ("autoinstall", "autofetch")):
+            raise ota.OtaError("The destination did not confirm automatic OTA policies are off.")
+        if not isinstance(mid, str) or not re.fullmatch(r"[0-9a-fA-F]{8}", mid):
+            raise ota.OtaError("The unfinished update has no valid package ID; automatic OTA policies remain off.")
+        if state.get("install_attempted") is True or state.get("phase") == "installing":
+            # An install may already be armed even if its acknowledgement was
+            # lost. Never erase that slot; first prove the resulting image.
+            current = await self.inspect()
+            if self._expected_install_matches(current):
+                self.save("installed", package_finalized=True, install_verified=True)
+                return True
+            raise ota.OtaError("Installation outcome is unresolved; automatic OTA policies remain off.")
+        live_state, live_mid, _ = await self._read_download()
+        if live_state == "idle":
+            if state.get("cancel_confirmed") is True:
+                return True
+            # IDLE alone says nothing about persistent media invalidation.
+            # Do not replay cancel against an unowned/unknown staged slot.
+            raise ota.OtaError("The live download is idle, but persistent slot clearance is unconfirmed; automatic OTA policies remain off.")
+        if live_mid != mid.lower():
+            raise ota.OtaError("The destination now has a different download; it was not canceled and automatic OTA policies remain off.")
+        if state.get("cancel_sent") is True:
+            raise ota.OtaError("The previous cancellation is unconfirmed; it was not replayed and automatic OTA policies remain off.")
+        self.save(state.get("phase", "downloading"), cancel_sent=True)
+        reply = None
+        try:
+            reply = await self.remote("ota cancel", retries=0)
+        except (ota.OtaError, TimeoutError, ConnectionError):
+            pass  # Read back once; never blindly repeat a destructive command.
+        live_state, _, _ = await self._read_download()
+        confirmed = (reply is not None and live_state == "idle"
+                     and re.match(r"(?i)^OK dropped session\b", reply)
+                     and re.search(rf"(?i)\bmid={re.escape(mid)}\b", reply)
+                     and "OTA receive slot confirmed clear" in reply)
+        if not confirmed:
+            raise ota.OtaError("Cancellation or persistent slot clearance is unconfirmed; automatic OTA policies remain off.")
+        self.save(state.get("phase", "downloading"), cancel_confirmed=True, package_finalized=True)
+        return True
 
     async def cleanup(self) -> list[str]:
         errors = []
+        server_stopped = True
         try:
             await self._stop_serving()
         except Exception:
+            server_stopped = False
             errors.append("Stop the USB file server before restoring settings.")
+        target_policy_safe = True
+        if self.active:
+            try:
+                target_policy_safe = await self._finalize_download()
+            except Exception as exc:
+                target_policy_safe = False
+                errors.append(f"Resolve the recorded target update before restoring automatic OTA policy: {exc}")
+            if not server_stopped:
+                target_policy_safe = False
+                try:
+                    await self.remote("ota config autoinstall off")
+                    await self.remote("ota config autofetch off")
+                except Exception:
+                    errors.append("Confirm both target automatic OTA policies are off while its source remains unconfirmed.")
         if self.active:
             for label, command in (("target", self.remote), ("source", self.local)):
                 if label not in self.saved:
@@ -465,6 +645,8 @@ class DirectSession:
                     except Exception:
                         errors.append(f"Restore the recorded {label} RXPS settings from {self.journal}.")
                 for key in ("hops", "autofetch", "autoinstall"):
+                    if label == "target" and key != "hops" and not target_policy_safe:
+                        continue
                     if key != "hops" and "mode=seeder-only" in settings["ota"]:
                         continue
                     match = re.search(rf"\b{key}=([A-Za-z0-9]+)", settings["ota"])
@@ -476,7 +658,8 @@ class DirectSession:
                     except Exception:
                         errors.append(f"{label}: {text}")
                 try:
-                    await self._verify_restored(command, label, settings)
+                    await self._verify_restored(command, label, settings,
+                                                restore_auto=label != "target" or target_policy_safe)
                 except Exception:
                     errors.append(f"Verify and restore the recorded {label} radio/RXPS/OTA settings from {self.journal}.")
         restore_path = getattr(self.link, "restore_contact_path", None)
@@ -498,7 +681,8 @@ class DirectSession:
             reply = await command("get radio.rxps")
         return ota.parse_rxps_settings(reply, label)
 
-    async def _verify_restored(self, command, label: str, settings: dict) -> None:
+    async def _verify_restored(self, command, label: str, settings: dict,
+                               *, restore_auto: bool = True) -> None:
         deadline = time.monotonic() + 45
         while temp_state(await command("get tempradio")) != "off":
             if time.monotonic() >= deadline:
@@ -512,6 +696,10 @@ class DirectSession:
                 raise ota.OtaError(f"The {label} RXPS settings did not restore exactly.")
         actual = await command("ota config")
         for key in ("hops", "autofetch", "autoinstall"):
+            if not restore_auto and key != "hops":
+                if not re.search(rf"\b{key}=off\b", actual):
+                    raise ota.OtaError(f"The {label} unsafe automatic OTA policy was not kept off.")
+                continue
             previous = re.search(rf"\b{key}=([A-Za-z0-9]+)", settings["ota"])
             current = re.search(rf"\b{key}=([A-Za-z0-9]+)", actual)
             if previous is None or current is None or previous[1] != current[1]:
