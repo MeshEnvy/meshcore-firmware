@@ -26,9 +26,11 @@ containing `ota.peer` first; older Repeater firmware cannot manage the remote
 node through USB. Check with `ota.peer status` in its USB console.
 
 The Full Companion source also needs a current build containing the wizard's
-direct admin guard. An older Full Companion may serve OTA files but cannot
+version 2 direct admin support. An older Full Companion may serve OTA files but cannot
 provide this guarded admin connection; the wizard will ask for a source
 firmware upgrade instead of proceeding with that connection.
+Check `get ota.direct` from its USB console for `v=2`. Update replies use a
+separate mailbox; ordinary queued messages and saved contact routes stay intact.
 
 For this wizard, use an ESP32 source instead of RAK4631 Full. The RAK image's
 current flash limit prevents adding the new direct admin helper. RAK4631
@@ -107,6 +109,9 @@ when a compatible builder and the **exact running firmware** are available
 and the package is smaller. A file with the same version label but a different
 body hash is not a usable base. Published bases are found through GitHub
 releases; a local base can be selected when the running image was custom.
+Unsigned full `.mota` files can also supply the new image for a differential
+update. Signed packages retain their signatures; prepared bundles retain their
+chosen transfer format.
 
 On a computer, the differential builder can be prepared automatically with a
 compatible Rust toolchain. On a Pi without a builder, a full update is made by
@@ -157,9 +162,16 @@ session for the selected destination before proceeding.
 
 Keep the recovery record until restoration is complete. A lost install reply
 is followed by a running-image check; the wizard does not blindly repeat an
-install command. Temporary radio windows use the existing main-channel
+install command. A cancelled download is cleared only when its package ID
+matches this update. Automatic installation is restored only after installation
+or receive-slot clearance is confirmed; an uncertain result leaves it off and
+keeps the recovery record.
+
+Temporary radio windows use the existing main-channel
 settings. Existing temporary schedules block an update before settings are
 changed, including on older firmware.
+The window covers both bootloader and firmware transfers, including reboot
+and setup time. Status checks normally run every ten seconds.
 
 The cache is normally `~/.cache/meshcore/ota` on Linux,
 `~/Library/Caches/MeshCore/ota` on macOS, or `%LOCALAPPDATA%\MeshCore\ota` on

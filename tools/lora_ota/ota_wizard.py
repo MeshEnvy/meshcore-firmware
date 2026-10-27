@@ -22,9 +22,9 @@ import lora_ota as ota
 from ota_wizard_catalog import GitHubCatalog, ImageCache, download_asset, load_application
 from ota_wizard_packages import (find_builder, find_running_image, install_builder,
                                  prepare_application, prepare_bootloader, small_host)
-from ota_wizard_session import DirectSession
+from ota_wizard_session import DirectSession, validate_package
 from ota_wizard_bundle import (load_bundle, load_ready_application, load_request,
-                               save_bundle, save_request)
+                               save_bundle, save_request, VerificationDependencyError)
 from ota_wizard_usb import open_serial_session
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -484,16 +484,23 @@ async def prepare_selected_firmware(args, destination, firmware, catalog):
     if prepared:
         image, application = prepared
         if args.full and not application.info.is_full:
+            if application.signer:
+                raise ota.OtaError("This signed delta cannot be converted without losing its signature. "
+                                   "Choose Automatic or provide a signed full package.")
             application = await asyncio.to_thread(prepare_application, image, destination, args.cache, full=True)
     else:
         image = await asyncio.to_thread(load_application, firmware,
                                         target_id=destination.target_id, hw_id=destination.hw_id)
-        application = await asyncio.to_thread(load_ready_application, firmware, image, destination)
+        application = await asyncio.to_thread(load_ready_application, firmware, image, destination,
+                                              validate_receiver=False)
+        if application and not application.signer and not args.full:
+            application = None  # Automatic also considers deltas for unsigned full mOTA inputs.
     ImageCache(args.cache).remember(image)
     if image.fw_version <= destination.version:
         print("The selected firmware is already installed or older; keeping the running firmware.")
         return image, None
     if application:
+        validate_package(application, destination)
         return image, application
     builder = None if args.full else find_builder(args.cache, args.motatool)
     if not args.full and not builder and not small_host():
@@ -501,6 +508,9 @@ async def prepare_selected_firmware(args, destination, firmware, catalog):
     base = None
     if builder:
         base = await asyncio.to_thread(find_running_image, destination, args.cache, catalog, supplied=args.base)
+        if base is None and catalog is None and args.base is None:
+            catalog = GitHubCatalog()
+            base = await asyncio.to_thread(find_running_image, destination, args.cache, catalog)
         if base is None and getattr(args, "interactive_menu", False):
             base = await choose_missing_base(args, destination, catalog)
     if not builder and not args.full:
@@ -529,7 +539,7 @@ async def prepare_interactively(args) -> int:
             pass  # A working system verifier may already be loaded.
     try:
         image, package = await prepare_selected_firmware(args, destination, firmware, catalog)
-    except ImportError:
+    except (ImportError, VerificationDependencyError):
         # Unsigned full packaging stays dependency-free. Signed inputs request
         # their verifier only when it is actually needed; no USB SDK is loaded.
         await asyncio.to_thread(ensure_signature_support)
@@ -703,17 +713,9 @@ def prepare_without_radios(args) -> int:
     if not args.request or not args.firmware or not args.output:
         raise ota.OtaError("Use --prepare-only --request DEVICE.json --firmware FILE --output update.ota.zip.")
     destination = load_request(args.request)
-    image = load_application(args.firmware, target_id=destination.target_id, hw_id=destination.hw_id)
-    package = load_ready_application(args.firmware, image, destination)
+    image, package = asyncio.run(prepare_selected_firmware(args, destination, args.firmware, None))
     if package is None:
-        catalog = GitHubCatalog()
-        builder = find_builder(args.cache, args.motatool)
-        if not builder and not args.full:
-            builder = install_builder(args.cache)
-        base = None
-        if builder and not args.full:
-            base = find_running_image(destination, args.cache, catalog, supplied=args.base)
-        package = prepare_application(image, destination, args.cache, base=base, builder=builder, full=args.full)
+        raise ota.OtaError("Choose firmware newer than the running version.")
     save_bundle(args.output, image, package)
     print(f"Prepared {package.info.kind}: {args.output} ({len(package.blob):,} transfer bytes)")
     print("Copy this ZIP to the Pi and select it as the custom firmware file.")

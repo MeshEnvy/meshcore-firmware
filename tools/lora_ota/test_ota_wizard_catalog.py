@@ -92,6 +92,65 @@ class CatalogTest(unittest.TestCase):
         with self.assertRaises(ota.OtaError):
             source.choose_asset("another_repeater")
 
+    def test_latest_compatible_uses_previous_stable_family_when_newest_omits_board(self):
+        newest = "v1.18.0.2"
+        rows = [release(newest, [asset_row(f"another_repeater-full-ota-{newest}.zip", newest)]),
+                release(FAMILY, [asset_row()]),
+                release("v1.19.0-preview.1", [asset_row(
+                    f"{ENV}-full-ota-v1.19.0-preview.1.zip", "v1.19.0-preview.1")])]
+        source = catalog.GitHubCatalog(opener=lambda req, timeout: Response(json.dumps(rows).encode(), req.full_url))
+        self.assertEqual(source.choose_asset(target_id=TARGET).release_tag, FAMILY)
+
+    def test_latest_compatible_keeps_profile_and_role_gates_across_families(self):
+        newest = "v1.18.0.2"
+        rows = [release(newest, [
+            asset_row(f"{ENV}-reduced-ota-{newest}.zip", newest),
+            asset_row(f"{ENV}-with-bootloader-2.4.12-full-ota-{newest}.zip", newest),
+            asset_row(f"ikoka_stick_nrf_33dbm_room_server-full-ota-{newest}.zip", newest)]),
+            release(FAMILY, [asset_row()])]
+        source = catalog.GitHubCatalog(opener=lambda req, timeout: Response(json.dumps(rows).encode(), req.full_url))
+        self.assertEqual(source.choose_asset(ENV).release_tag, FAMILY)
+        self.assertEqual(source.choose_asset(ENV, profile="reduced").release_tag, newest)
+
+    def test_latest_compatible_loads_late_new_family_shard_before_using_older_match(self):
+        newest = "v1.18.0.2"
+        shard = f"lora-ota-3-{newest}"
+        pages = {
+            1: [release(newest), release(FAMILY, [asset_row()])],
+            4: [release(shard, [asset_row(f"{ENV}-full-ota-{newest}.zip", shard)])],
+        }
+        calls = []
+        def opener(request, timeout):
+            page = int(request.full_url.rsplit("=", 1)[1])
+            calls.append(page)
+            rows = pages.get(page, [])
+            if page < 4:
+                rows += [release(f"v0.0.0-empty-{page}-{index}") for index in range(10-len(rows))]
+            return Response(json.dumps(rows).encode(), request.full_url)
+        source = catalog.GitHubCatalog(opener=opener)
+        selected = source.choose_asset(target_id=TARGET)
+        self.assertEqual(selected.release_tag, shard)
+        self.assertEqual(selected.version, 0x01120002)
+        self.assertEqual(calls, [1, 2, 3, 4])
+        self.assertEqual(source.choose_asset(target_id=TARGET), selected)
+        self.assertEqual(calls, [1, 2, 3, 4])
+
+    def test_latest_compatible_search_is_bounded_and_reuses_loaded_pages(self):
+        calls = []
+        def opener(request, timeout):
+            page = int(request.full_url.rsplit("=", 1)[1])
+            calls.append(page)
+            rows = [release("v1.18.0.2")] if page == 1 else []
+            rows += [release(f"v0.0.0-empty-{page}-{index}") for index in range(10-len(rows))]
+            return Response(json.dumps(rows).encode(), request.full_url)
+        source = catalog.GitHubCatalog(opener=opener)
+        with self.assertRaisesRegex(ota.OtaError, "No published application"):
+            source.choose_asset(target_id=TARGET)
+        self.assertEqual(calls, list(range(1, 11)))
+        with self.assertRaisesRegex(ota.OtaError, "No published application"):
+            source.choose_asset(target_id=TARGET)
+        self.assertEqual(calls, list(range(1, 11)))
+
     def test_release_menu_groups_shards_and_offers_exact_board_previews(self):
         shard = f"lora-ota-10-{FAMILY}"
         preview = "ikoka-v1.18.0.2-alpha2"

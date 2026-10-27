@@ -12,8 +12,12 @@ import lora_ota as ota
 from ota_wizard_session import Destination, Package, validate_package
 
 
+class VerificationDependencyError(ota.OtaError):
+    """The package needs the optional signature verifier."""
+
+
 def load_ready_application(path: Path, image: ota.EndFInfo,
-                           destination: Destination) -> Package | None:
+                           destination: Destination, *, validate_receiver: bool = True) -> Package | None:
     """Keep a supplied full mOTA intact, including its verified signing key."""
     if Path(path).suffix.lower() != ".mota":
         return None
@@ -35,9 +39,16 @@ def load_ready_application(path: Path, image: ota.EndFInfo,
         parsed = lib.parse_container(blob)
         signer = parsed.manifest.signer_pubkey.hex().upper() if parsed.manifest.is_signed else None
         package = Package(blob, expected.body_hash, signer)
-        validate_package(package, destination)
+        if validate_receiver:
+            validate_package(package, destination)
+        else:
+            # A full unsigned container can supply the complete new image for
+            # a delta even when the receiver cannot install that full format.
+            problems = lib.verify(parsed)
+            if problems:
+                raise ota.OtaError("Application mOTA integrity failed: " + "; ".join(problems))
     except ImportError as exc:
-        raise ota.OtaError("Install Python cryptography to verify this signed application mOTA.") from exc
+        raise VerificationDependencyError("Signature verification support is required for this application mOTA.") from exc
     except (ValueError, TypeError) as exc:
         raise ota.OtaError("Invalid supplied application mOTA: " + str(exc)) from exc
     return package
@@ -148,7 +159,10 @@ def _load_bundle(path: Path, destination: Destination) -> tuple[ota.EndFInfo, Pa
             or info.fw_version != image.fw_version):
         raise ota.OtaError("The complete firmware does not match the prepared package.")
     lib = ota.bootloader_library()
-    problems = lib.verify(lib.parse_container(blob))
+    try:
+        problems = lib.verify(lib.parse_container(blob))
+    except ImportError as exc:
+        raise VerificationDependencyError("Signature verification support is required for this OTA bundle.") from exc
     if problems:
         raise ota.OtaError("Prepared OTA package integrity failed: " + "; ".join(problems))
     parsed = lib.parse_container(blob)

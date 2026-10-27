@@ -300,8 +300,31 @@ class GitHubCatalog:
 
     def candidates(self, target_env: str | None = None, *, target_id: int | None = None,
                    profile: str = "full", include_embedded: bool = False) -> list[ReleaseAsset]:
-        assets = self.fetch_assets() if self._assets is None else self._assets
-        return self._compatible(assets, target_env, target_id, profile, include_embedded)
+        if target_env is None and target_id is None:
+            raise ota.OtaError("Select an exact firmware target")
+        if self._assets is not None and not self._pages:
+            # An explicitly supplied asset list has no further release pages.
+            return self._compatible(self._assets, target_env, target_id, profile, include_embedded)
+        pages = max(3, max(self._pages, default=0))
+        while True:
+            releases = [release for release in self._releases(pages) if not release.prerelease]
+            mains = sorted((release for release in releases if re.match(r"^v\d", release.tag, re.I)),
+                           key=lambda release: (_version(release.tag), release.published_at), reverse=True)
+            matches = []
+            for main in mains:
+                assets = [asset for release in releases if _release_family(release.tag) == main.tag
+                          for asset in release.assets]
+                matches.append(self._compatible(assets, target_env, target_id, profile, include_embedded))
+            if matches and matches[0]:
+                return matches[0]
+            # A missing board in the newest family may be in a later split
+            # shard. Finish the bounded search before selecting an older family.
+            if pages < 10 and self.has_more_releases:
+                pages = min(10, pages + 3)
+                continue
+            if not mains:
+                raise ota.OtaError("No published main firmware release was found")
+            return next((choice for choice in matches if choice), [])
 
     def choose_asset(self, target_env: str | None = None, **kwargs) -> ReleaseAsset:
         choices = self.candidates(target_env, **kwargs)
