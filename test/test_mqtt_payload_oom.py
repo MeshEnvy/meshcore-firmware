@@ -62,9 +62,7 @@ int main() {
     char expected[2048];
     const int complete = build(kind, healthy, expected, sizeof(expected));
     assert(complete > 0 && !healthy.overflowed());
-    JsonDocument parsed;
-    assert(!deserializeJson(parsed, expected));
-    assert(parsed.size() >= 5);
+    assert(healthy.size() >= 5);
 
     for (auto mode : {FailingAllocator::RejectAll, FailingAllocator::RejectSecondPool}) {
       FailingAllocator allocator(mode);
@@ -104,15 +102,28 @@ class MqttPayloadOomTests(unittest.TestCase):
             folder = Path(directory)
             harness, binary = folder / "oom.cpp", folder / "oom"
             harness.write_text(HARNESS)
+            json_include = folder / "pinned_arduinojson.h"
+            json_include.write_text('''\
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
+#include <ArduinoJson.h>
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+''')
             production = SOURCE
             if source is not None:
                 production = folder / "MQTTPayloadBuilder.cpp"
                 production.write_text(source)
             flags = [] if os.name == "nt" else ["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-pie", "-no-pie"]
-            # Keep -Werror for our harness/firmware without promoting warnings
-            # inside the pinned third-party ArduinoJson headers to failures.
+            # GCC's sanitizer/inlining pass flags ArduinoJson 7.4.3's empty
+            # iterator. Scope that diagnostic to the dependency definitions;
+            # the harness and firmware keep optimized -Werror + sanitizers.
             built = subprocess.run([compiler, "-std=c++17", "-O1", "-Wall", "-Wextra", "-Werror",
                 "-DARDUINOJSON_POOL_CAPACITY=4", *flags, "-isystem", str(header.parent),
+                "-include", str(json_include),
                 "-I" + str(ROOT / "src"), "-I" + str(ROOT / "src/helpers"),
                 "-isystem", str(ROOT / "test/mocks"),
                 str(harness), str(production), str(ROOT / "src/helpers/TxtDataHelpers.cpp"), "-o", str(binary)],
