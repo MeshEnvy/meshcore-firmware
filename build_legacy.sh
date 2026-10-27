@@ -4120,6 +4120,12 @@ apply_lora_ota_no_external_sensors_profile() {
     for flag in $voltage_monitor_flags; do
       retain_overrides+=" -D${flag}=1"
     done
+    # Keep only this image's readable OTA name in the reduced RAK profiles.
+    # A non-OTA-prefixed marker is deliberately not copied from a reduced
+    # logical recipe into the Full sensor pass by apply_logical_ota_tuning_flags.
+    retain_overrides+=" -DMESH_OTA_LOCAL_TARGET_NAME_ONLY=1"
+    record_build_reduction \
+      "ota target-name catalog omitted; local target name and numeric OTA matching retained"
     export PLATFORMIO_BUILD_FLAGS="${PLATFORMIO_BUILD_FLAGS}${omit_overrides}${retain_overrides}"
     if is_rak_gps_retaining_ota_target "$env_name"; then
       record_build_reduction \

@@ -141,6 +141,20 @@ def trim_policy(platform, mcu, env_name, src_filter, flags=(), cppdefines=(),
     if ota_name_mode != "front-coded":
         raise ValueError("unsupported nRF52 OTA name trim policy: " + ota_name_mode)
     definitions = dict(TRIM_DEFINES, OTA_TARGET_NAME_FRONT_CODED=1)
+    if _enabled(values.get("MESH_OTA_LOCAL_TARGET_NAME_ONLY")):
+        # Release overlays can compile a different PIOENV from their deployed
+        # OTA identity. Keep the logical name/ID in that case; direct builds
+        # use the same PIOENV hash as the ordinary EndF/board identity code.
+        target_id = values.get("MOTA_TARGET_ID")
+        if target_id is None:
+            target_id = "0x%08x" % int.from_bytes(
+                hashlib.sha256(str(env_name).encode()).digest()[:4], "little")
+        definitions.update(
+            OTA_TARGET_NAME_TABLE=0,
+            OTA_LOCAL_TARGET_ID=target_id,
+            OTA_LOCAL_TARGET_NAME="OTA_VARIANT" if values.get("OTA_VARIANT")
+                                  else '"%s"' % env_name,
+        )
     # Explicit board/user flags retain their value. In particular never undo
     # an opt-out or a board-specific USB configuration by re-defining it.
     return {name: value for name, value in definitions.items() if name not in values}
@@ -241,6 +255,9 @@ def install(build_env):
                                             build_env.get("SRC_FILTER", ()), flags, cppdefines)
     if not definitions:
         return
+    local_name = definitions.get("OTA_LOCAL_TARGET_NAME", "")
+    if local_name.startswith('"') and local_name.endswith('"'):
+        definitions["OTA_LOCAL_TARGET_NAME"] = build_env.StringifyMacro(local_name[1:-1])
     build_env["MESH_NRF52_FLASH_TRIM_ACTIVE"] = True
     build_env.AppendUnique(CPPDEFINES=list(definitions.items()))
     hook_path = build_env.subst("$PROJECT_DIR/scripts/nrf52_vl53l0x_const.py")
@@ -249,7 +266,10 @@ def install(build_env):
     hook_spec.loader.exec_module(hook)
     hook.install(build_env)
     if infrastructure:
-        print("nRF52 infrastructure flash trim: compact crypto, unused USB device classes/GPS cache/vendor splash, compact OTA target names")
+        names = ("local OTA target name only" if definitions.get("OTA_TARGET_NAME_TABLE") == 0
+                 or flag_defines(flags, cppdefines).get("OTA_TARGET_NAME_TABLE") == "0"
+                 else "compact OTA target names")
+        print("nRF52 infrastructure flash trim: compact crypto, unused USB device classes/GPS cache/vendor splash, " + names)
     else:
         print("nRF52 Companion flash trim: small crypto table, unused USB device classes/GPS cache/vendor splash; fonts and Reader retained")
         hook_path = build_env.subst("$PROJECT_DIR/scripts/nrf52_gnss_version_trim.py")
