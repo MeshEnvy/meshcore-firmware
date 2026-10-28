@@ -22,6 +22,7 @@ LINK_SIZE_FLAGS = (
     "-fno-reorder-blocks",
     "-fno-reorder-functions",
     "-fno-tree-switch-conversion",
+    "-fno-inline-functions-called-once",
 )
 OPTIONAL_CUTS = (
     "MESH_ENABLE_CARRIER_TOOLS",

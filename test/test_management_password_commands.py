@@ -26,6 +26,9 @@ class ManagementPasswordCommandsTest(unittest.TestCase):
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
+struct HardwareSerial {};
+static HardwareSerial Serial;
+#include <helpers/UsbMode.h>
 using namespace mesh::esp32::managementPassword;
 bool save_ok = true; int saves = 0;
 bool durableSave() {

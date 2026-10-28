@@ -20,6 +20,7 @@ HARNESS = r'''
 #include <vector>
 #include <Identity.h>
 #include <helpers/CompanionPowerDiagnostics.h>
+#include "usb_mode_console.h"
 
 // Keep the production diagnostics delegate in the command path. Identity
 // requests must not consult board power state or trigger a hardware query.
@@ -190,6 +191,7 @@ class CompanionIdentityCliTests(unittest.TestCase):
                         '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                         '-fno-pie', '-no-pie', *['-D' + flag for flag in flags],
                         '-I', str(ROOT / 'src'), '-I', str(ROOT / 'test/mocks'),
+                        '-I', str(ROOT / 'test/fixtures'),
                         str(cpp), '-o', str(binary)], capture_output=True, text=True)
                     self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
                     ran = subprocess.run([str(binary)], capture_output=True, text=True)
