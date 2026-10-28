@@ -18,6 +18,7 @@ class CardputerMesh : public MyMesh {
   uint8_t last_message_hash[MAX_HASH_SIZE] = { 0 };
   uint16_t last_message_heard_repeats = 0;
   CustomNodePrefs _custom_prefs{ .battery_correction = 1.0f, .brightness = 128, .text_level = 1 };
+  CustomNodePrefs _saved_custom_prefs = _custom_prefs;
   LastSentMessage last_msg;
   unsigned long resend_timeout = 0;
 
@@ -30,16 +31,12 @@ public:
                    const uint8_t *path_snrs, const uint8_t *path_hashes, uint8_t path_len) override;
   void onControlDataRecv(mesh::Packet *packet) override;
   mesh::DispatcherAction onRecvPacket(mesh::Packet *pkt) override;
-  void onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint32_t timestamp,
-                            const char *text) override;
-  void onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
-                     const char *text) override;
+  void onUiChannelMessage(const uint8_t secret[32], const char *text) override;
+  void onUiContactMessage(const ContactInfo &from, const char *text) override;
   bool sendFloodScoped(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint32_t delay_millis = 0) override;
   using MyMesh::sendFloodScoped;
 
-  // not virtual; using function hiding
-  bool sendGroupMessage(uint32_t timestamp, mesh::GroupChannel &channel, const char *sender_name,
-                        const char *text, int text_len);
+  bool sendChannelMessage(int channel_idx, uint32_t timestamp, const char *text, size_t length);
 
   int sendDirectMessage(const ContactInfo &recipient, uint32_t timestamp, const char *text);
 
@@ -53,9 +50,8 @@ public:
 
   // Loads Cardputer UI prefs; call after MyMesh::begin().
   void beginCustom();
-  void savePrefs();
-  // Same effect as the CLI's "powersaving on|off".
-  void setPowerSaving(bool enabled);
+  bool savePrefs();
+  bool saveCustomPrefs();
   bool sendPing(ContactInfo &contact);
   bool sendAdvert(bool flood);
   bool sendRepeatersDiscover();

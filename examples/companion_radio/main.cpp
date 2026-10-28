@@ -3991,6 +3991,8 @@ void setup() {
   the_mesh.begin(
     #ifdef DISPLAY_CLASS
         disp != NULL
+    #elif CARDPUTER_ADV_UI
+        cardputer_disp != NULL
     #else
         false
     #endif

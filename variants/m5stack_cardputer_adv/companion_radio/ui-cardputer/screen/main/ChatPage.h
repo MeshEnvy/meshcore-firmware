@@ -20,6 +20,7 @@ private:
   int chat_history_offset = 0; // from bottom
 
   void sendChatMessage();
+  bool refreshSelectedChannel();
 
 public:
   ChatPage(MainScreen *parent) : _p(parent) { chat_text_box.reserve(MAX_MESSAGE_LENGTH); };

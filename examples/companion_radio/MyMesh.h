@@ -389,6 +389,12 @@ public:
 #endif
 
 protected:
+#if CARDPUTER_ADV_UI
+  // Run after the shared duplicate/retention checks, including room posts and
+  // Meshtext. Variant history must not bypass the Companion delivery policy.
+  virtual void onUiContactMessage(const ContactInfo&, const char*) {}
+  virtual void onUiChannelMessage(const uint8_t[32], const char*) {}
+#endif
 #if COMPANION_FEATURE_TEMP_RADIO
   bool isTempRadioActive() const override {
     return _temp_radio_applied && _temp_radio_revert_at != 0
@@ -609,6 +615,12 @@ public:
   // Runtime copies use the wire PSK; storage/app keep the original alias PSK.
   bool getChannel(int channel_idx, ChannelDetails& channel);
   bool setChannel(int channel_idx, const ChannelDetails& channel);
+#if CARDPUTER_ADV_UI
+  uint16_t getPrimaryRadioPreamble() const { return _radio_profiles.primaryPreamble(); }
+  bool queueUiContactWrite(const ContactInfo& contact) { return scheduleContactWrite(contact); }
+  bool sendUiChannelMessage(int channel_idx, uint32_t timestamp,
+                            const char* text, size_t length);
+#endif
   bool savePrefs() {
     const uint8_t previous_tail_flags[] = {
         _prefs.usb_debug_enabled, _prefs.usb_logging_always};

@@ -3,6 +3,8 @@
 #include "helpers.h"
 
 int ChatPage::render(CardputerDisplay &lcd) {
+  refreshSelectedContact();
+  refreshSelectedChannel();
   char buf[64];
   const int row = display.getRowHeight();
   const int line_h = display.getFontLineHeight();  // advance used when print() wraps
@@ -101,7 +103,9 @@ void ChatPage::sendChatMessage() {
     return;
   }
 
-  uint32_t ts = the_mesh_cp.getRTCClock()->getCurrentTime();
+  refreshSelectedContact();
+  refreshSelectedChannel();
+  uint32_t ts = the_mesh_cp.getRTCClock()->getCurrentTimeUnique();
 
   if (current_contact_idx != -1 && current_contact.type == ADV_TYPE_CHAT) { // direct msg
     int result = the_mesh_cp.sendDirectMessage(current_contact, ts, chat_text_box.c_str());
@@ -114,14 +118,16 @@ void ChatPage::sendChatMessage() {
       last_sent_message = chat_text_box;
       chat_text_box.clear();
       chat_history_offset = 0;
+    } else {
+      _p->getUiTask()->showAlert("Unable to send message", 2000);
     }
     return;
   }
 
   if (current_channel_idx != -1) { // channel msg
 
-    bool ok = the_mesh_cp.sendGroupMessage(ts, current_channel.channel, _p->getUiTask()->getNodeName(),
-                                           chat_text_box.c_str(), chat_text_box.length());
+    bool ok = the_mesh_cp.sendChannelMessage(current_channel_idx, ts,
+                                             chat_text_box.c_str(), chat_text_box.length());
     if (ok) {
       HistoryMessage *msg = chat_history.push_ref();
       msg->out = true;
@@ -132,6 +138,8 @@ void ChatPage::sendChatMessage() {
       chat_text_box.clear();
       chat_history_offset = 0;
       _p->getUiTask()->showAlert("Waiting for repeats...", 2000);
+    } else {
+      _p->getUiTask()->showAlert("Unable to send message", 2000);
     }
     return;
   }
@@ -181,7 +189,7 @@ bool ChatPage::handleInput(Keyboard::Event &e) {
     }
 
     if (e.key == Keyboard::ARROW_UP) {
-      if (chat_history_offset < chat_history.count() - 1) {
+      if (chat_history.count() > 0 && chat_history_offset < (int)chat_history.count() - 1) {
         chat_history_offset++;
       }
       return true;
@@ -212,6 +220,7 @@ void ChatPage::selectContact(const ContactInfo &contact, int idx) {
   current_channel_idx = -1;
   the_mesh_cp.loadMessageHistory(contact.id.pub_key, false, chat_history);
   chat_history_offset = 0;
+  last_sent_message = "";
 
   const HistoryMessage *msg;
   for (size_t i = chat_history.count(); i > 0; i--) {
@@ -228,6 +237,7 @@ void ChatPage::selectChannel(const ChannelDetails &channel, int idx) {
   current_contact_idx = -1;
   the_mesh_cp.loadMessageHistory(channel.channel.secret, true, chat_history);
   chat_history_offset = 0;
+  last_sent_message = "";
 
   const HistoryMessage *msg;
   for (size_t i = chat_history.count(); i > 0; i--) {
@@ -241,7 +251,7 @@ void ChatPage::selectChannel(const ChannelDetails &channel, int idx) {
 bool ChatPage::onChannelMessageRecv(const mesh::GroupChannel &channel, const char *text) {
 
   if (current_channel_idx != -1 &&
-      memcmp(channel.secret, current_channel.channel.secret, CONTACT_LOOKUP_BYTES) == 0) {
+      memcmp(channel.secret, current_channel.channel.secret, PUB_KEY_SIZE) == 0) {
     HistoryMessage *msg = chat_history.push_ref();
     msg->out = false;
     snprintf(msg->text, MAX_MESSAGE_LENGTH, "%s", text);
@@ -253,7 +263,7 @@ bool ChatPage::onChannelMessageRecv(const mesh::GroupChannel &channel, const cha
 
 bool ChatPage::onContactMessageRecv(const ContactInfo &contact, const char *text) {
   if (current_contact_idx != -1 &&
-      memcmp(contact.id.pub_key, current_contact.id.pub_key, CONTACT_LOOKUP_BYTES) == 0) {
+      memcmp(contact.id.pub_key, current_contact.id.pub_key, PUB_KEY_SIZE) == 0) {
     HistoryMessage *msg = chat_history.push_ref();
     msg->out = false;
     snprintf(msg->text, MAX_MESSAGE_LENGTH, "%s", text);
@@ -265,9 +275,31 @@ bool ChatPage::onContactMessageRecv(const ContactInfo &contact, const char *text
 
 void ChatPage::refreshSelectedContact() {
   if (current_contact_idx != -1) {
-    ContactInfo c;
-    if (the_mesh_cp.getContactByIdx(current_contact_idx, c)) {
-      current_contact = c;
+    ContactInfo *contact = the_mesh_cp.lookupPersistentContactByPubKey(current_contact.id.pub_key, PUB_KEY_SIZE);
+    if (contact) {
+      current_contact = *contact;
+    } else {
+      current_contact_idx = -1;
+      current_contact = ContactInfo{};
+      chat_history.clear();
+      chat_history_offset = 0;
+      last_sent_message = "";
     }
   }
+}
+
+bool ChatPage::refreshSelectedChannel() {
+  if (current_channel_idx == -1) return false;
+  ChannelDetails channel;
+  if (!the_mesh_cp.getChannel(current_channel_idx, channel) || !channel.name[0]
+      || memcmp(channel.channel.secret, current_channel.channel.secret, PUB_KEY_SIZE) != 0) {
+    current_channel_idx = -1;
+    current_channel = ChannelDetails{};
+    chat_history.clear();
+    chat_history_offset = 0;
+    last_sent_message = "";
+    return false;
+  }
+  current_channel = channel;
+  return true;
 }

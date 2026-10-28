@@ -87,6 +87,7 @@ struct Task {
   bool getGPSState() const { return true; }
   bool isBluetoothEnabled() const { return true; }
   bool powerSaveEnabled() const { return true; }
+  void showAlert(const char*,int) {}
 };
 struct Prefs {
   char node_name[32]="node",default_scope_name[31]="";
@@ -98,9 +99,33 @@ struct Prefs {
 struct CustomPrefs { float battery_correction=1; };
 struct ChannelDetails { char name[32]={}; };
 struct Mesh {
-  unsigned saves=0;
+  unsigned saves=0,applies=0;
+  Prefs* prefs=nullptr;
+  CustomPrefs* custom=nullptr;
+  CustomPrefs committed;
+  bool fail=false;
+  std::string command;
   ChannelDetails channels[MAX_GROUP_CHANNELS];
-  void savePrefs() { ++saves; }
+  bool savePrefs() { if(fail) return false; ++saves; return true; }
+  bool saveCustomPrefs() {
+    if(fail) { *custom=committed; return false; }
+    committed=*custom; ++saves; return true;
+  }
+  uint16_t getPrimaryRadioPreamble() const { return 96; }
+  bool handleLocalCommand(const char* text,char* reply) {
+    command=text;
+    if(fail) { strcpy(reply,"Error: save failed"); return true; }
+    if(command.rfind("set radio ",0)==0) {
+      float f,bw; unsigned sf,cr,pre;
+      assert(sscanf(text+10,"%f,%f,%u,%u,%u",&f,&bw,&sf,&cr,&pre)==5 && pre==96);
+      prefs->freq=f; prefs->bw=bw; prefs->sf=sf; prefs->cr=cr; ++applies;
+    } else if(command.rfind("set tx ",0)==0) {
+      prefs->tx_power_dbm=std::stoi(command.substr(7)); ++applies;
+    } else if(command.rfind("set name ",0)==0) {
+      snprintf(prefs->node_name,sizeof(prefs->node_name),"%s",text+9);
+    } else { assert(false); }
+    ++saves; strcpy(reply,"OK"); return true;
+  }
   bool getChannel(int i,ChannelDetails& result) {
     if(i<0 || i>=MAX_GROUP_CHANNELS) return false;
     result=channels[i]; return true;
@@ -150,17 +175,22 @@ struct SettingsScreen {
   String edit_buffer;
   uint8_t edit_u8=0;
   int menu_index=RadioFreq;
-  bool restart_required=false,is_editing=true;
+  char edit_error[80]="Invalid value";
+  bool is_editing=true;
   void renderItem(CardputerDisplay&,SettingsItem,int,int);
   bool commitItemEdit(SettingsItem);
   void handleEditInput(SettingsItem,Keyboard::Event&);
   bool inputParsePositiveFloat(float&);
   bool validRadioParams(float,float,uint8_t,uint8_t) const;
+  bool commitCommand(const char*);
+  bool commitRadio(float,float,uint8_t,uint8_t);
   int render(CardputerDisplay&);
 };
 '''
         for signature in (
             "void SettingsScreen::renderItem(",
+            "bool SettingsScreen::commitCommand(",
+            "bool SettingsScreen::commitRadio(",
             "bool SettingsScreen::commitItemEdit(",
             "void SettingsScreen::handleEditInput(",
             "bool SettingsScreen::inputParsePositiveFloat(",
@@ -172,6 +202,9 @@ struct SettingsScreen {
 struct CardputerUITask {
   CardputerDisplay* _display=nullptr;
   Board* _board;
+  bool allow_shutdown=true;
+  bool prepareForShutdown() { return allow_shutdown; }
+  void showAlert(const char*,int) {}
   void shutdown(bool restart=false);
 };
 '''
@@ -199,6 +232,7 @@ struct ChannelsPage {
 int main() {
   Prefs prefs; CustomPrefs custom; Task task; CardputerDisplay display;
   SettingsScreen s{&prefs,&custom,&task};
+  the_mesh_cp.prefs=&prefs; the_mesh_cp.custom=&custom;
   Keyboard::Event digit{Keyboard::KEY_1,"9"};
   for(int i=0;i<4096;++i) s.handleEditInput(SettingsScreen::RadioFreq,digit);
   assert(s.edit_buffer.length()==s.MAX_NUMERIC_EDIT_BYTES);
@@ -213,11 +247,11 @@ int main() {
   for(const char* bad:{"0","149.9","960.1","42949672960"}) {
     s.edit_buffer=bad;
     assert(!s.commitItemEdit(SettingsScreen::RadioFreq));
-    assert(prefs.freq==910.525f && the_mesh_cp.saves==0 && !s.restart_required);
+    assert(prefs.freq==910.525f && the_mesh_cp.saves==0);
   }
   s.edit_buffer="915.25";
   assert(s.commitItemEdit(SettingsScreen::RadioFreq));
-  assert(prefs.freq==915.25f && the_mesh_cp.saves==1 && s.restart_required);
+  assert(prefs.freq==915.25f && the_mesh_cp.saves==1 && the_mesh_cp.applies==1);
   for(const char* bad:{"0","123.45","812.5"}) {
     s.edit_buffer=bad;
     assert(!s.commitItemEdit(SettingsScreen::RadioBw));
@@ -229,10 +263,35 @@ int main() {
   assert(!s.commitItemEdit(SettingsScreen::RadioCr));
   s.edit_u8=23; assert(!s.commitItemEdit(SettingsScreen::RadioPwr));
   assert(prefs.sf==8 && prefs.cr==5 && prefs.tx_power_dbm==22 && the_mesh_cp.saves==2);
+  // The UI must use the live shared command path and leave prefs untouched on failure.
+  assert(the_mesh_cp.command=="set radio 915.250000,125.000000,8,5,96");
+  the_mesh_cp.fail=true;
+  s.edit_buffer="916"; assert(!s.commitItemEdit(SettingsScreen::RadioFreq));
+  assert(prefs.freq==915.25f && strstr(s.edit_error,"save failed"));
+  s.edit_buffer="renamed"; assert(!s.commitItemEdit(SettingsScreen::PublicInfoName));
+  assert(!strcmp(prefs.node_name,"node"));
+  strcpy(prefs.default_scope_name,"original"); memset(prefs.default_scope_key,0xA5,sizeof(prefs.default_scope_key));
+  s.edit_buffer="replacement"; assert(!s.commitItemEdit(SettingsScreen::MeshDefaultScope));
+  assert(!strcmp(prefs.default_scope_name,"original") && prefs.default_scope_key[0]==0xA5);
+  s.edit_u8=3; assert(!s.commitItemEdit(SettingsScreen::MeshPathSize));
+  assert(prefs.path_hash_mode==1);
+  s.edit_buffer="4400"; assert(!s.commitItemEdit(SettingsScreen::DeviceBatteryCorrection));
+  assert(custom.battery_correction==1.0f);
+  the_mesh_cp.fail=false;
+  s.edit_buffer="node renamed"; assert(s.commitItemEdit(SettingsScreen::PublicInfoName));
+  assert(!strcmp(prefs.node_name,"node renamed"));
+  for(const char* bad:{"0","1","9999"}) {
+    s.edit_buffer=bad; assert(!s.commitItemEdit(SettingsScreen::DeviceBatteryCorrection));
+    assert(custom.battery_correction==1.0f);
+  }
+  s.edit_buffer="4400"; assert(s.commitItemEdit(SettingsScreen::DeviceBatteryCorrection));
+  assert(custom.battery_correction==1.1f);
   // A missing/failed display cannot turn a battery shutdown into a null dereference.
   CardputerUITask ui{nullptr,&task.board};
   ui.shutdown(); assert(task.board.off==1 && radio_driver.off==1);
   ui.shutdown(true); assert(task.board.boots==1);
+  ui.allow_shutdown=false; ui.shutdown(); ui.shutdown(true);
+  assert(task.board.off==1 && task.board.boots==1 && radio_driver.off==1);
   // Channel list indices must map back to actual sparse channel slots.
   MainScreen main_screen; ChannelsPage list{&main_screen};
   for(int i:{2,7,39}) strcpy(the_mesh_cp.channels[i].name,"channel");

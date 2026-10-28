@@ -400,7 +400,11 @@ jobs:
           python3 -B test/test_cardputer_board_policy.py -v
           python3 -B test/test_cardputer_layout.py -v
           python3 -B test/test_cardputer_ui.py -v
+          python3 -B test/test_cardputer_ui_lifecycle.py -v
           python3 -B test/test_cardputer_mesh_storage.py -v
+          python3 -B test/test_cardputer_messaging.py -v
+          python3 -B test/test_cardputer_delivery.py -v
+          python3 -B test/test_cardputer_gps.py -v
           python3 -B test/test_cardputer_runtime_memory.py -v
           python3 -B test/test_cardputer_license.py -v
           python3 -B test/test_protocol_parser_bounds.py -v

@@ -1717,9 +1717,12 @@ bool MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   const bool notification_managed = false;
 #endif
 
-#ifdef DISPLAY_CLASS
+#if defined(DISPLAY_CLASS) || CARDPUTER_ADV_UI
   // we only want to show text messages on display, not cli data
   bool should_display = txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN;
+#if CARDPUTER_ADV_UI
+  if (should_display) onUiContactMessage(from, text);
+#endif
   if (should_display && _ui) {
     _ui->newMsg(path_len, from.name, text, offline_queue_len,
                 -1, nullptr, queued ? offline_queue_len - 1 : -1);
@@ -2340,6 +2343,9 @@ bool MyMesh::queueChannelText(uint8_t channel_idx, const uint8_t secret[32], flo
   const bool queued = addToOfflineQueue(out_frame, i);
   if (!queued) return false;
 
+#if CARDPUTER_ADV_UI
+  onUiChannelMessage(secret, text);
+#endif
 #if COMPANION_FEATURE_NOTIFICATIONS
   const bool notification_managed = notify && _notifications.message(nullptr, secret, _serial && _serial->isConnected(), millis());
   if (_ui) _ui->setMessageNotificationOverride(notification_managed, _notifications.overridesScreen());
@@ -2354,7 +2360,7 @@ bool MyMesh::queueChannelText(uint8_t channel_idx, const uint8_t secret[32], flo
     frame[0] = PUSH_CODE_MSG_WAITING;
     _serial->writeFrame(frame, 1);
   } else {
-#ifdef DISPLAY_CLASS
+#if defined(DISPLAY_CLASS) || CARDPUTER_ADV_UI
     if (notify && _ui && !notification_managed) _ui->notify(UIEventType::channelMessage);
 #endif
   }
@@ -2369,7 +2375,7 @@ bool MyMesh::queueChannelText(uint8_t channel_idx, const uint8_t secret[32], flo
         path_len == 0xFF ? "DIRECT" : "FLOOD", text);
   }
 #endif
-#ifdef DISPLAY_CLASS
+#if defined(DISPLAY_CLASS) || CARDPUTER_ADV_UI
   // Get the channel name from the channel index
   const char *channel_name = "Unknown";
   ChannelDetails channel_details;
@@ -9543,6 +9549,23 @@ void MyMesh::appendRxPowerSavingAdjustmentNote(char* reply, size_t reply_size,
            (unsigned)effective_level, (unsigned)effective_preamble,
            (unsigned)_prefs.rx_ps_level);
 }
+
+#if CARDPUTER_ADV_UI
+bool MyMesh::sendUiChannelMessage(int channel_idx, uint32_t timestamp,
+                                 const char* text, size_t length) {
+  ChannelDetails channel;
+  if (!text || !length || length != strlen(text)
+      || !getChannel(channel_idx, channel) || !channel.name[0]) return false;
+#if MESH_ENABLE_MESHTEXT_CHAT
+  if (isMeshtextChannel(channel)) return sendMeshtextText(channel, text, length);
+#endif
+  if (isAliasRadio2Defined()
+      && parseCompanionChannelAlias(channel.name).kind == CompanionChannelKind::Meshtext) return false;
+  const size_t prefix_length = strlen(_prefs.node_name) + 2;
+  if (prefix_length >= MAX_TEXT_LEN || length > MAX_TEXT_LEN - prefix_length) return false;
+  return sendGroupMessage(timestamp, channel.channel, _prefs.node_name, text, length);
+}
+#endif
 
 #if COMPANION_FEATURE_TEXT_TERMINAL
 Stream& MyMesh::terminalOutput() {

@@ -23,6 +23,8 @@ FILESYSTEM_STUB = r'''
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <limits>
+#define ESP32_PLATFORM 1
 #define PUB_KEY_SIZE 32
 #define FILE_READ "r"
 #define FILE_WRITE "w"
@@ -31,24 +33,31 @@ namespace mesh { struct RTCClock {}; }
 struct Entry {
   std::string bytes;
   bool no_progress = false;
+  bool corrupt_read = false;
   unsigned reads = 0;
 };
 struct File {
   std::shared_ptr<Entry> entry;
   size_t position = 0;
+  size_t max_write = std::numeric_limits<size_t>::max();
   explicit operator bool() const { return bool(entry); }
   size_t size() const { return entry ? entry->bytes.size() : 0; }
   size_t available() const { return size() - position; }
+  bool isDirectory() const { return false; }
+  bool setBufferSize(size_t) { return true; }
+  void flush() {}
   size_t read(uint8_t* dest, size_t count) {
     if (!entry) return 0;
     if (++entry->reads > 100) throw std::runtime_error("read made no progress");
     if (entry->no_progress) return 0;
     count = std::min(count, available());
     memcpy(dest, entry->bytes.data() + position, count);
+    if (entry->corrupt_read && count) dest[0] ^= 1;
     position += count;
     return count;
   }
   size_t write(const uint8_t* src, size_t count) {
+    count = std::min(count, max_write);
     entry->bytes.append(reinterpret_cast<const char*>(src), count);
     return count;
   }
@@ -60,17 +69,34 @@ struct FILESYSTEM {
   std::map<std::string, std::shared_ptr<Entry>> files;
   unsigned opens = 0;
   bool fail_open = false;
+  bool fail_stat = false;
+  size_t max_write = std::numeric_limits<size_t>::max();
+  unsigned rename_calls = 0, fail_rename = 0;
+  bool corrupt_public_read = false;
   bool exists(const char* path) const { return files.count(path) != 0; }
   bool mkdir(const char*) { return true; }
   File open(const char* path, const char* mode, bool = false) {
     ++opens;
     if (fail_open) return {};
+    if (*mode == 'r' && !files.count(path)) return {};
     auto& entry = files[path];
     if (!entry) entry = std::make_shared<Entry>();
     if (*mode == 'w') entry->bytes.clear();
-    return File{entry};
+    return File{entry, 0, max_write};
+  }
+  bool remove(const char* path) { return files.erase(path) != 0; }
+  bool rename(const char* from, const char* to) {
+    if (++rename_calls == fail_rename || !files.count(from) || files.count(to)) return false;
+    files[to] = files.at(from);
+    files.erase(from);
+    if (corrupt_public_read && std::string(to) == "/meshcore_custom/prefs") {
+      files[to]->corrupt_read = true;
+      corrupt_public_read = false;
+    }
+    return true;
   }
 };
+static FILESYSTEM* stat_fs = nullptr;
 struct DataStore { DataStore(FILESYSTEM&, mesh::RTCClock&) {} };
 '''
 
@@ -80,6 +106,7 @@ STORAGE_CHECKS = r'''
 int main() {
   mesh::RTCClock clock;
   FILESYSTEM primary, sd;
+  stat_fs = &primary;
   CardputerDataStore store(primary, clock);
   uint8_t key[PUB_KEY_SIZE] = {};
   ChatHistory history;
@@ -92,7 +119,7 @@ int main() {
 
   CustomNodePrefs prefs{1.1f, 127, 2};
   store.beginCustom(&sd);
-  store.saveCustomPrefs(prefs);
+  assert(store.saveCustomPrefs(prefs));
   assert(primary.files.count(CUSTOM_PREFS_FILE) == 1 && sd.files.empty());
   CustomNodePrefs restored{};
   store.loadCustomPrefs(restored);
@@ -145,6 +172,7 @@ MESH_HARNESS = r'''
 #include <cstdint>
 #include <cstring>
 #define MAX_HASH_SIZE 8
+#define MAX_MESSAGE_LENGTH 150
 #define PAYLOAD_TYPE_GRP_TXT 5
 namespace mesh {
 struct GroupChannel { uint8_t secret[32] = {}; };
@@ -154,6 +182,7 @@ struct Packet {
   void calculatePacketHash(uint8_t* hash) const { memset(hash, value, MAX_HASH_SIZE); }
 };
 }
+struct ChannelDetails { mesh::GroupChannel channel; char name[32] = "channel"; };
 struct Store {
   unsigned writes = 0;
   void storeMessage(const uint8_t*, const char*, bool, bool) { ++writes; }
@@ -166,7 +195,12 @@ struct MyMesh {
     if (!admit || !pkt) { delete pkt; return false; }
     return true;
   }
-  bool sendGroupMessage(uint32_t, mesh::GroupChannel&, const char*, const char*, int) { return admit; }
+  bool getChannel(int index, ChannelDetails& channel) {
+    assert(index == 7);
+    channel.channel.secret[31] = 99;
+    return true;
+  }
+  bool sendUiChannelMessage(int index, uint32_t, const char*, size_t) { assert(index == 7); return admit; }
   void loop() { ++base_loops; }
   bool millisHasNowPassed(unsigned long at) const { return int32_t(now - at) > 0; }
 };
@@ -178,7 +212,7 @@ struct CardputerMesh : MyMesh {
   unsigned long resend_timeout = 0;
   unsigned resends = 0;
   bool sendFloodScoped(const mesh::GroupChannel&, mesh::Packet*, uint32_t);
-  bool sendGroupMessage(uint32_t, mesh::GroupChannel&, const char*, const char*, int);
+  bool sendChannelMessage(int, uint32_t, const char*, size_t);
   void checkResend() { ++resends; }
   void loop();
 };
@@ -189,7 +223,7 @@ int main() {
   node.admit = false;
   assert(!node.sendFloodScoped(channel, new mesh::Packet{PAYLOAD_TYPE_GRP_TXT, 42}, 0));
   assert(node.last_message_hash[0] == 0 && node.last_message_heard_repeats == 9);
-  assert(!node.sendGroupMessage(0, channel, "name", "text", 4) && node.store.writes == 0);
+  assert(!node.sendChannelMessage(7, 0, "text", 4) && node.store.writes == 0);
   node.admit = true;
   auto* group = new mesh::Packet{PAYLOAD_TYPE_GRP_TXT, 77};
   assert(node.sendFloodScoped(channel, group, 0));
@@ -201,7 +235,7 @@ int main() {
   assert(node.sendFloodScoped(channel, other, 0));
   assert(node.last_message_hash[0] == 77 && node.last_message_heard_repeats == 3);
   delete other;
-  assert(node.sendGroupMessage(0, channel, "name", "text", 4) && node.store.writes == 1);
+  assert(node.sendChannelMessage(7, 0, "text", 4) && node.store.writes == 1);
   node.resend_timeout = 10;
   node.now = 9;
   node.loop();
@@ -309,6 +343,7 @@ class CardputerMeshStorageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
             for name, content in (headers or {}).items():
+                (work / name).parent.mkdir(parents=True, exist_ok=True)
                 (work / name).write_text(content, encoding="ascii")
             program = work / "test.cpp"
             program.write_text(source, encoding="ascii")
@@ -334,18 +369,82 @@ class CardputerMeshStorageTests(unittest.TestCase):
     def mesh_source(self):
         source = (VARIANT / "companion_radio/CardputerMesh.cpp").read_text()
         methods = "\n".join(body(source, signature) for signature in (
-            "bool CardputerMesh::sendFloodScoped(", "bool CardputerMesh::sendGroupMessage(",
+            "bool CardputerMesh::sendFloodScoped(", "bool CardputerMesh::sendChannelMessage(",
             "void CardputerMesh::loop()"))
         return MESH_HARNESS.replace("@METHODS@", methods)
 
     def test_history_storage_and_faults(self):
         self.run_cpp(self.storage_source(), headers=self.storage_headers())
 
+    def test_custom_preferences_verified_rollback_and_recovery(self):
+        checks = r'''
+#include <cassert>
+#include <limits>
+int main() {
+  mesh::RTCClock clock;
+  const CustomNodePrefs previous{1.0f, 128, 1}, candidate{1.2f, 240, 2};
+  for (unsigned fault = 0; fault < 6; ++fault) {
+    FILESYSTEM fs; stat_fs = &fs;
+    CardputerDataStore store(fs, clock);
+    assert(store.saveCustomPrefs(previous));
+    fs.rename_calls = 0;
+    if (fault == 0) fs.max_write = 3;
+    if (fault == 1) fs.fail_open = true;
+    if (fault == 2) fs.fail_rename = 1;
+    if (fault == 3) fs.fail_rename = 2;
+    if (fault == 4) fs.corrupt_public_read = true;
+    if (fault == 5) fs.fail_stat = true;
+    assert(!store.saveCustomPrefs(candidate));
+    fs.max_write = 100; fs.fail_open = false; fs.fail_rename = 0; fs.fail_stat = false;
+    CustomNodePrefs restored{};
+    CardputerDataStore rebooted(fs, clock);
+    assert(rebooted.loadCustomPrefs(restored));
+    assert(!memcmp(&restored, &previous, sizeof(previous)));
+    assert(!fs.exists(CUSTOM_PREFS_FILE ".tmp"));
+  }
+  FILESYSTEM fs; stat_fs = &fs;
+  CardputerDataStore store(fs, clock);
+  assert(store.saveCustomPrefs(previous));
+  assert(fs.rename(CUSTOM_PREFS_FILE, CUSTOM_PREFS_FILE ".bak"));
+  auto temp = fs.open(CUSTOM_PREFS_FILE ".tmp", FILE_WRITE);
+  temp.write(reinterpret_cast<const uint8_t*>(&candidate), sizeof(candidate)); temp.close();
+  CustomNodePrefs restored{};
+  assert(store.loadCustomPrefs(restored));
+  assert(!memcmp(&restored, &previous, sizeof(previous)));
+  assert(fs.exists(CUSTOM_PREFS_FILE) && !fs.exists(CUSTOM_PREFS_FILE ".bak"));
+  for (CustomNodePrefs invalid : {CustomNodePrefs{0.49f, 1, 1}, CustomNodePrefs{2.01f, 1, 1},
+       CustomNodePrefs{1.0f, 1, 3}, CustomNodePrefs{std::numeric_limits<float>::quiet_NaN(), 1, 1}}) {
+    assert(!store.saveCustomPrefs(invalid));
+  }
+  fs.files.at(CUSTOM_PREFS_FILE)->bytes.resize(3);
+  restored = candidate;
+  assert(!store.loadCustomPrefs(restored));
+  assert(!memcmp(&restored, &candidate, sizeof(candidate)));
+  assert(!store.saveCustomPrefs(previous));
+}
+'''
+        self.run_cpp((VARIANT / "CardputerDataStore.cpp").read_text() + checks,
+                     headers=self.storage_headers())
+
     def storage_headers(self):
         # Production includes SD.h for PlatformIO's variant-local dependency
         # discovery. The filesystem stub supplies every API this source uses;
         # no concrete SD driver is needed by the native ownership/fault tests.
-        return {"DataStore.h": FILESYSTEM_STUB, "SD.h": "#pragma once\n"}
+        return {"DataStore.h": FILESYSTEM_STUB, "SD.h": "#pragma once\n",
+                "helpers/ContactFileTransaction.h": (ROOT / "src/helpers/ContactFileTransaction.h").read_text(),
+                "helpers/IdentityStore.h": "#pragma once\n",
+                "helpers/PersistentStoreFormat.h": (ROOT / "src/helpers/PersistentStoreFormat.h").read_text(),
+                "sys/stat.h": r'''
+#pragma once
+#include <cerrno>
+struct stat {};
+inline int stat(const char* path, struct stat*) {
+  if (!stat_fs || stat_fs->fail_stat) { errno = EIO; return -1; }
+  if (stat_fs->exists(path + 7)) return 0;
+  errno = ENOENT;
+  return -1;
+}
+'''}
 
     def test_history_source_bound_negative_control(self):
         source = self.storage_source().replace(
