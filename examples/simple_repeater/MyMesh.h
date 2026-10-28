@@ -559,10 +559,10 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   // is 0 when the allocation failed: every loop below is bounded by it, so a
   // zero-capacity node simply forwards without rule filtering.
   FloodPacketFilterEntry* flood_packet_filters;
-  uint8_t flood_packet_filter_slots;
 #if MESH_ENABLE_FLOOD_RULE_ENGINE
   uint32_t flood_filter_probability_seed;
 #endif
+  uint8_t flood_packet_filter_slots;
   uint8_t flood_packet_filter_blacklist_count;
   uint8_t flood_packet_filter_blacklist[FLOOD_PACKET_FILTER_BLACKLIST_MAX]
                                        [FLOOD_PACKET_FILTER_PATH_ID_SIZE];
@@ -651,6 +651,14 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   uint8_t flood_channel_data_rule_max_hops;
 #endif
   ClockSyncSample clock_sync_samples[CLOCK_SYNC_SAMPLE_SLOTS];
+  uint64_t clock_sync_next_attempt_uptime;
+  uint32_t clock_sync_drift_seconds;
+  uint32_t clock_sync_last_estimate;
+  uint32_t clock_sync_last_abs_drift;
+  uint32_t clock_sync_internet_requested_millis;
+  uint32_t pending_discover_tag;
+  unsigned long pending_discover_until;
+  unsigned long dirty_contacts_expiry;
   bool clock_sync_mesh_enabled;
   bool clock_sync_mesh_edge_enabled;
   bool clock_sync_internet_enabled;
@@ -664,15 +672,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   uint8_t clock_sync_last_fresh_count;
   uint8_t clock_sync_last_required_count;
   uint8_t clock_sync_required_samples;
-  uint32_t clock_sync_drift_seconds;
-  uint32_t clock_sync_last_estimate;
-  uint32_t clock_sync_last_abs_drift;
-  uint32_t clock_sync_internet_requested_millis;
-  uint64_t clock_sync_next_attempt_uptime;
-  uint32_t pending_discover_tag;
-  unsigned long pending_discover_until;
   bool region_load_active;
-  unsigned long dirty_contacts_expiry;
   uint8_t contacts_save_failures;
 #if MAX_NEIGHBOURS
   NeighbourInfo neighbours[MAX_NEIGHBOURS];
@@ -697,19 +697,19 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
 #endif
   unsigned long _ota_update_at = 0;  // deferred `ota update` fire time (0 = none scheduled)
   float active_bw;  // live BW, including temporary radio overrides
+  uint32_t next_scheduled_radio_time;
+  unsigned long next_scheduled_radio_check_at;
+  uint32_t scheduled_temp_radio_end_time;
+  unsigned long scheduled_temp_radio_end_check_at;
+  unsigned long scheduled_radio_retry_at;
+  unsigned long scheduled_radio_save_retry_at;
   uint8_t active_sf;  // live SF, including temporary radio overrides
   uint8_t active_cr;   // live CR, including temporary radio overrides
   bool saved_radio_apply_pending;
   bool temp_radio_handoff_pending;
   bool temp_radio_applied;
   bool scheduled_temp_radio_started;
-  uint32_t next_scheduled_radio_time;
-  unsigned long next_scheduled_radio_check_at;
-  uint32_t scheduled_temp_radio_end_time;
-  unsigned long scheduled_temp_radio_end_check_at;
   bool scheduled_temp_radio_end_check_final;
-  unsigned long scheduled_radio_retry_at;
-  unsigned long scheduled_radio_save_retry_at;
   uint8_t scheduled_radio_retry_failures;
   ScheduledRadioSetting scheduled_radio_settings[MAX_SCHEDULED_RADIO_SETTINGS];
 #if MESH_ENABLE_FLEET_CONTROL
