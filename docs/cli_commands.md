@@ -3134,6 +3134,8 @@ five seconds for its reply. `power.awake` keeps the node up for the next given
 number of minutes (0 cancels; maximum 10080), even outside the hourly window.
 That override is held in RAM and ends on reboot; it never disables hard
 low-voltage shutdown. Use it before maintenance that needs continuous uptime.
+LoRa commands must arrive during an awake window. Local USB commands can wait
+up to one ten-second maintenance interval while the node is sleeping.
 
 `get power.emergency` reports the mode, battery estimate, desired `window`,
 actual radio ownership, seconds until the next awake window, and remaining

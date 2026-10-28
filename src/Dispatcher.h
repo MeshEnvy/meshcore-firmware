@@ -20,6 +20,10 @@
 
 namespace mesh {
 
+#if MESH_ENABLE_EMERGENCY_POWER
+namespace power { class EmergencyPowerRuntime; }
+#endif
+
 enum class RadioParamApplyResult : uint8_t {
   APPLIED,
   BUSY,
@@ -421,6 +425,9 @@ typedef uint32_t  DispatcherAction;
  *      and scheduling of outbound Packets.
 */
 class Dispatcher {
+#if MESH_ENABLE_EMERGENCY_POWER
+  friend class power::EmergencyPowerRuntime;
+#endif
   friend class FleetChannel;  // bounded deferred receiver and exact reply retirement
   enum class OutboundCancellation : uint8_t { None, Cancelled, Delivered };
   Packet* outbound;  // current outbound packet

@@ -1,9 +1,12 @@
 """Run actual emergency RF/wireless ownership and restoration with fake hardware."""
 from pathlib import Path
 import os
+import re
 import subprocess
 import tempfile
 import unittest
+
+from test_replay_reset_integration import extract_braced
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +18,7 @@ HARNESS = r'''
 #include <string>
 #include <vector>
 using namespace mesh::wireless;
+namespace power = mesh::power;
 static std::vector<std::string> events;
 void delay(uint32_t milliseconds) {
   events.push_back("backoff:" + std::to_string(milliseconds));
@@ -40,6 +44,8 @@ struct Mesh {
   bool available = true, inFlight = false;
   unsigned queuedFuturePackets = 20;
   bool hasOutbound() const { return inFlight; }
+protected:
+  @RUNTIME_FRIEND@
   bool isRadioAvailable() const { return available; }
   void setRadioAvailable(bool value) {
     events.push_back(value ? "mesh:on" : "mesh:off"); available = value;
@@ -65,11 +71,30 @@ struct Board {
   bool supportsEmergencySleep() const { return supported; }
   bool isOTAUpdateRunning() const { return ota; }
   bool isRadioTestActive() const { return radioTest; }
+  virtual void setEmergencyRadioSleeping(bool) {}
   bool emergencySleepMilliseconds(uint32_t budget) {
     events.push_back("cpu:" + std::to_string(budget));
     ++sleeps; lastBudget = budget; return sleepOk;
   }
 };
+static constexpr int HIGH = 1, LOW = 0;
+static constexpr unsigned SX126X_POWER_EN = @FEM_PIN@, PIN_3V3_EN = @RAIL_PIN@;
+static int levels[64] = {};
+static int digitalRead(unsigned pin) {
+  assert(pin == SX126X_POWER_EN);
+  events.push_back("fem:read");
+  return levels[pin];
+}
+static void digitalWrite(unsigned pin, int value) {
+  assert(pin == SX126X_POWER_EN); // Shared IO2/storage rail must never change.
+  levels[pin] = value;
+  events.push_back(value ? "fem:on" : "fem:off");
+}
+struct RAK3401Board : Board {
+  @RAK_FIELDS@
+  void setEmergencyRadioSleeping(bool sleeping) override;
+};
+@RAK_FEM_METHOD@
 struct CLI {
   uint32_t budget = 2700000;
   bool radioSleeping = false;
@@ -273,6 +298,49 @@ int main(int argc, char** argv) {
     events.clear(); f.cli.budget = 0;
     assert(!f.service() && f.mesh.available && !f.cli.radioSleeping);
     assert(f.wireless.active == All);
+  } else if (scenario == 10) {
+    for (int starting_level : {LOW, HIGH}) {
+      Wireless wireless; control().begin(wireless);
+      Mesh mesh; Radio radio; RAK3401Board board; CLI cli;
+      mesh::power::EmergencyPowerRuntime runtime;
+      levels[SX126X_POWER_EN] = starting_level; levels[PIN_3V3_EN] = HIGH;
+      events.clear();
+      // Failed warm sleep never captures/disables the FEM.
+      radio.failSleep = true;
+      assert(!runtime.service(mesh, radio, board, cli, false));
+      assert(levels[SX126X_POWER_EN] == starting_level);
+      assert(events.back() == "radio:sleep");
+      radio.failSleep = false; events.clear();
+      assert(runtime.service(mesh, radio, board, cli, false));
+      assert((events == std::vector<std::string>{"wifi:off", "espnow:off", "ble:off",
+          "radio:sleep", "mesh:off", "fem:read", "fem:off", "status:sleep", "cpu:10000"}));
+      assert(levels[SX126X_POWER_EN] == LOW && levels[PIN_3V3_EN] == HIGH);
+      events.clear();
+      // Maintenance and duplicate suspension must not overwrite the snapshot.
+      board.setEmergencyRadioSleeping(true);
+      assert(runtime.service(mesh, radio, board, cli, false));
+      assert((events == std::vector<std::string>{"cpu:10000"}));
+      cli.budget = 0; events.clear();
+      radio.failWake = true;
+      assert(!runtime.service(mesh, radio, board, cli, false));
+      std::vector<std::string> expected = {starting_level ? "fem:on" : "fem:off"};
+      if (starting_level) expected.push_back("backoff:1");
+      const std::vector<std::string> after = {"radio:wake", "radio:recover", "mesh:on",
+          "status:awake", "espnow:on", "wifi:on", "ble:on"};
+      expected.insert(expected.end(), after.begin(), after.end());
+      assert(events == expected);
+      assert(levels[SX126X_POWER_EN] == starting_level && levels[PIN_3V3_EN] == HIGH);
+      events.clear(); board.setEmergencyRadioSleeping(false); assert(events.empty());
+    }
+    Wireless wireless; control().begin(wireless);
+    Mesh mesh; mesh.available = false; // Tracker owns RF; its FEM is untouched.
+    Radio radio; RAK3401Board board; CLI cli;
+    mesh::power::EmergencyPowerRuntime runtime;
+    levels[SX126X_POWER_EN] = HIGH; events.clear();
+    assert(runtime.service(mesh, radio, board, cli, false));
+    cli.budget = 0; assert(!runtime.service(mesh, radio, board, cli, false));
+    for (const auto& event : events) assert(event.find("fem:") == std::string::npos);
+    assert(levels[SX126X_POWER_EN] == HIGH);
   } else assert(false);
 }
 '''
@@ -286,7 +354,22 @@ class EmergencyPowerRuntimeTests(unittest.TestCase):
         source, cls.binary = work / "main.cpp", work / "check"
         (work / "Arduino.h").write_text(
             "#pragma once\n#include <stdint.h>\nvoid delay(uint32_t);\n", encoding="ascii")
-        source.write_text(HARNESS, encoding="ascii")
+        board_header = (ROOT / "variants/rak3401/RAK3401Board.h").read_text()
+        board_source = (ROOT / "variants/rak3401/RAK3401Board.cpp").read_text()
+        dispatcher = (ROOT / "src/Dispatcher.h").read_text()
+        variant = (ROOT / "variants/rak3401/variant.h").read_text()
+        fields = re.search(r"class RAK3401Board[^\n]*\{\n#if MESH_ENABLE_EMERGENCY_POWER\n(.*?)#endif",
+                           board_header, re.S).group(1)
+        code = HARNESS.replace("@RAK_FIELDS@", fields)
+        code = code.replace("@RAK_FEM_METHOD@", extract_braced(
+            board_source, "void RAK3401Board::setEmergencyRadioSleeping("))
+        code = code.replace("@RUNTIME_FRIEND@", re.search(
+            r"friend class power::EmergencyPowerRuntime;", dispatcher).group(0))
+        for marker, name, body in (("FEM_PIN", "SX126X_POWER_EN", variant),
+                                   ("RAIL_PIN", "PIN_3V3_EN", board_header)):
+            pin = re.search(rf"#define\s+{name}\s+\(?\s*(\d+)", body).group(1)
+            code = code.replace("@" + marker + "@", pin)
+        source.write_text(code, encoding="ascii")
         result = subprocess.run([
             os.environ.get("CXX", "g++"), "-std=c++17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
             "-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer",
@@ -335,6 +418,9 @@ class EmergencyPowerRuntimeTests(unittest.TestCase):
 
     def test_cpu_sleep_refusal_yields_without_resuming_normal_rf_work(self):
         self.scenario(9)
+
+    def test_rak3401_actual_fem_pin_restores_before_radio_wake_without_cutting_shared_rail(self):
+        self.scenario(10)
 
     def test_room_maintenance_runs_before_emergency_early_return(self):
         source = (ROOT / "examples/simple_room_server/main.cpp").read_text()

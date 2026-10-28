@@ -211,6 +211,9 @@ public:
     (void)millisecs;
     return false;
   }
+  // Quiesce only board-specific RF controls after owned warm radio sleep;
+  // restore their prior state before the caller wakes the radio.
+  virtual void setEmergencyRadioSleeping(bool sleeping) { (void)sleeping; }
 #endif
   // Called by example setup() functions to signal that boot is complete.
   // Boards may override to stop a boot-indicator LED sequence or similar.

@@ -22,6 +22,7 @@ public:
     if (budget == 0 || active_operation) {
       if (radio_asleep_) {
         if (radio_was_available_) {
+          board.setEmergencyRadioSleeping(false);
           if (!radio.setTrackerSleep(false)) radio.recoverRadio(true);
           mesh.setRadioAvailable(true);
         }
@@ -40,6 +41,7 @@ public:
       if (radio_was_available_) {
         if (!radio.setTrackerSleep(true)) return false;
         mesh.setRadioAvailable(false);
+        board.setEmergencyRadioSleeping(true);
       }
       radio_asleep_ = true;
       cli.setEmergencyRadioSleeping(true);
