@@ -12,7 +12,7 @@ if env["PIOENV"] == "wio-e5-mini_repeater":
     # Reuse the qualified RAK CLI's equivalent libc reply copies. Restrict
     # this flag to CommonCLI.cpp; radio, framework and other objects retain
     # the existing optimizer recipe.
-    source = Path(__file__).resolve().with_name("nrf52_flash_trim.py")
+    source = Path(env.subst("$PROJECT_DIR/scripts/nrf52_flash_trim.py")).resolve()
     spec = importlib.util.spec_from_file_location("mesh_mini_cli_replies", source)
     replies = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(replies)

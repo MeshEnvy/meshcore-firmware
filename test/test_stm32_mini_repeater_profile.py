@@ -159,6 +159,17 @@ class MiniRepeaterProfileTest(unittest.TestCase):
             other = Node(ROOT / path)
             self.assertIs(callback(environment, other), other)
 
+    def test_scons_script_context_without_file_still_installs_exact_cli_policy(self):
+        script = ROOT / "scripts/stm32_mini_size.py"
+        environment = FakeEnvironment(PIOENV=TARGET)
+        namespace = {"env": environment,
+                     "Import": lambda name: self.assertEqual(name, "env")}
+        exec(compile(script.read_text(), str(script), "exec"), namespace)
+        self.assertNotIn("__file__", namespace)
+        self.assertEqual(environment["LINKFLAGS"], list(LINK_SIZE_FLAGS))
+        self.assertEqual(len(environment.middleware), 1)
+        self.assertEqual(environment.middleware[0][1], "*CommonCLI.cpp")
+
     def test_capability_contract_declares_only_exact_mini_repeater_omissions(self):
         command = r'''
 set -euo pipefail
