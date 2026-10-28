@@ -182,8 +182,12 @@ int main(){
     def test_actual_infrastructure_loop_services_saved_choice_and_quiet_deadline(self):
         for role in ("simple_repeater","simple_room_server","simple_sensor"):
             source=(ROOT/"examples"/role/"main.cpp").read_text()
-            start=source.index("  board.servicePowerTestControls();",source.index("void loop()"))
-            end=source.index("#endif",start)
+            loop_start=source.index("void loop()")
+            clock_service=source.index("mesh::esp32::serviceCpuFrequencyPolicy(",loop_start)
+            # Emergency maintenance also services UART restoration before its
+            # early return. Keep this fixture anchored to the clock policy.
+            start=source.rindex("  board.servicePowerTestControls();",loop_start,clock_service)
+            end=source.index("#endif",clock_service)
             service=source[start:end]
             tests="void role_service(){\n"+service+"}\n"+r'''
 int main(){

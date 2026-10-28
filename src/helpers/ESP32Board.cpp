@@ -1432,11 +1432,23 @@ bool ESP32Board::emergencySleepMilliseconds(uint32_t millisecs) {
 #endif
   const TickType_t usb_ticks = usb_held ? pdMS_TO_TICKS(millisecs) : 0;
   if (usb_held && usb_ticks == 0) return false;
+  TickType_t usb_service_ticks = 0;
+#if MESH_ESP32_USB_CONSOLE_COOPERATIVE
+  if (!usb_held) {
+    // SOF/connection state is sampled by RTOS hooks. Reserve awake service
+    // time after a timer wake so a newly attached host can become visible
+    // before the next sleep attempt. Keep the whole wait within this budget.
+    const uint32_t service_ms = millisecs > 100UL ? 100UL : millisecs;
+    usb_service_ticks = pdMS_TO_TICKS(service_ms);
+    if (usb_service_ticks == 0) return false;
+    millisecs -= service_ms;
+  }
+#endif
   if (watched && esp_task_wdt_reset() != ESP_OK) return false;
-  if (usb_held) {
+  if (usb_held || millisecs == 0) {
     // This also remains safe during asynchronous wireless teardown. Do not
     // arm or clear wake sources while yielding with the USB peripheral live.
-    vTaskDelay(usb_ticks);
+    vTaskDelay(usb_held ? usb_ticks : usb_service_ticks);
     return !watched || esp_task_wdt_reset() == ESP_OK;
   }
   if (esp_sleep_enable_timer_wakeup(uint64_t(millisecs) * 1000ULL) != ESP_OK)
@@ -1445,6 +1457,8 @@ bool ESP32Board::emergencySleepMilliseconds(uint32_t millisecs) {
   // normal sleep path installs its own next timer; never leave ours armed.
   const esp_err_t slept = esp_light_sleep_start();
   const esp_err_t cleared = esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+  if (slept == ESP_OK && cleared == ESP_OK && usb_service_ticks != 0)
+    vTaskDelay(usb_service_ticks);
   const bool watchdog_ok = !watched || esp_task_wdt_reset() == ESP_OK;
   return slept == ESP_OK && cleared == ESP_OK && watchdog_ok;
 }

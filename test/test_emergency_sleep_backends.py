@@ -223,9 +223,7 @@ int main() {
 
 
 class EmergencySleepBackendTests(unittest.TestCase):
-    def test_actual_platform_waits_and_cleanup(self):
-        compiler = shutil.which("g++") or shutil.which("clang++")
-        self.assertIsNotNone(compiler)
+    def platform_code(self):
         sources = {name: (ROOT / path).read_text() for name, path in (
             ("core", "src/MeshCore.h"),
             ("nrf", "src/helpers/NRF52Board.cpp"),
@@ -242,16 +240,62 @@ class EmergencySleepBackendTests(unittest.TestCase):
             ("NRF_SLEEP", "nrf", "bool NRF52Board::emergencySleepMilliseconds("),
             ("ESP_SLEEP", "esp", "bool ESP32Board::emergencySleepMilliseconds(")):
             code = code.replace("@" + marker + "@", extract_braced(sources[source], signature))
+        return code
+
+    def run_code(self, code, flags=()):
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        self.assertIsNotNone(compiler)
         with tempfile.TemporaryDirectory(prefix="emergency-sleep-backends-") as directory:
             work = Path(directory)
             cpp, binary = work / "test.cpp", work / "test"
             cpp.write_text(code)
             subprocess.run([compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror",
-                            "-DCONFIG_ESP_TASK_WDT_TIMEOUT_S=4", *SANITIZERS,
+                            "-DCONFIG_ESP_TASK_WDT_TIMEOUT_S=4", *flags, *SANITIZERS,
                             str(cpp), "-o", str(binary)], check=True,
                            capture_output=True, text=True, timeout=60)
             subprocess.run([str(binary)], check=True, capture_output=True,
                            text=True, timeout=20)
+
+    def test_actual_platform_waits_and_cleanup(self):
+        self.run_code(self.platform_code())
+
+    def test_native_usb_timer_wake_reserves_enumeration_service_without_extending_budget(self):
+        code = self.platform_code().split("int main() {", 1)[0] + r'''
+int main() {
+  ESP32Board esp;
+  reset(); assert(esp.emergencySleepMilliseconds(10000));
+  assert(last_armed_us == 9900000ULL && delayed_ticks == 100);
+  assert((events == std::vector<std::string>{"timer", "sleep", "clear_timer", "delay"}));
+  assert(timer_us == 0 && other_wake_sources == 0x71);
+  reset(); task_watchdog_status = ESP_OK;
+  assert(esp.emergencySleepMilliseconds(10000));
+  assert(last_armed_us == 1900000ULL && delayed_ticks == 100 && task_watchdog_feeds == 2);
+  assert((events == std::vector<std::string>{"task_feed", "timer", "sleep", "clear_timer", "delay", "task_feed"}));
+  reset(); assert(esp.emergencySleepMilliseconds(125));
+  assert(last_armed_us == 25000 && delayed_ticks == 100);
+  reset(); assert(esp.emergencySleepMilliseconds(30));
+  assert(delayed_ticks == 30 && events == std::vector<std::string>{"delay"});
+  assert(!timer_calls && !sleep_calls && !clear_calls);
+  reset(); tick_ms = 10;
+  assert(esp.emergencySleepMilliseconds(129));
+  assert(last_armed_us == 29000 && delayed_ticks == 10); // Timer + floored RTOS wait <=129ms.
+  reset(); tick_ms = 1000;
+  assert(!esp.emergencySleepMilliseconds(10000) && events.empty());
+  for (int* failed : {&sleep_error, &clear_error}) {
+    reset(); *failed = 9;
+    assert(!esp.emergencySleepMilliseconds(10000));
+    assert(!delayed_ticks && clear_calls == 1);
+    assert((events == std::vector<std::string>{"timer", "sleep", "clear_timer"}));
+  }
+  reset(); timer_error = 9;
+  assert(!esp.emergencySleepMilliseconds(10000));
+  assert(!delayed_ticks && !sleep_calls && !clear_calls);
+  reset(); usb_held = true; wireless_ready = false;
+  assert(esp.emergencySleepMilliseconds(10000));
+  assert(delayed_ticks == 100 && !sleep_calls); // Existing host still bypasses physical USB sleep.
+}
+'''
+        self.run_code(code, ("-DMESH_ESP32_USB_CONSOLE_COOPERATIVE=1",))
 
     def test_disabled_feature_has_no_new_base_virtuals(self):
         compiler = shutil.which("g++") or shutil.which("clang++")
