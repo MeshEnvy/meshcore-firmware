@@ -124,6 +124,33 @@ class Nrf52FlashTrimTest(unittest.TestCase):
         other = Node(ROOT / "test/fixtures/CommonCLI.cpp")
         self.assertIs(TRIM.compile_shared_cli_replies(env, other), other)
 
+        companion = Node(ROOT / "examples/companion_radio/MyMesh.cpp")
+        result, flags = TRIM.compile_shared_companion_replies(env, companion)
+        self.assertIs(result, companion)
+        self.assertEqual(flags["CCFLAGS"], ["-Os", "-flto", "-fno-builtin-strcpy"])
+        self.assertEqual(env["CCFLAGS"], ["-Os", "-flto"])
+        for path in ("examples/simple_repeater/MyMesh.cpp", "test/fixtures/MyMesh.cpp",
+                     "src/helpers/CommonCLI.cpp", "src/helpers/RadioProfileCLI.cpp"):
+            other = Node(ROOT / path)
+            self.assertIs(TRIM.compile_shared_companion_replies(env, other), other)
+
+    def test_companion_shared_replies_are_limited_to_the_qualified_rak_full_image(self):
+        defaults = dict(platform="nordicnrf52", mcu="nrf52840",
+                        env_name="RAK_4631_companion_radio_full",
+                        src_filter="+<../examples/companion_radio/*.cpp>")
+        self.assertTrue(TRIM.companion_shared_replies_policy(**defaults))
+        for changes in (dict(env_name="RAK_3401_companion_radio_full"),
+                        dict(env_name="RAK_4631_companion_radio_usb"),
+                        dict(env_name="custom_companion_radio_full"),
+                        dict(mcu="nrf52832"), dict(platform="ststm32"),
+                        dict(src_filter="+<../examples/simple_repeater>"),
+                        dict(src_filter="+<../examples/companion_radio> +<../examples/simple_sensor>"),
+                        dict(flags="-DMESH_CLI_SHARE_REPLIES=0"),
+                        dict(flags="-UMESH_CLI_SHARE_REPLIES"),
+                        dict(flags="-DMESH_NRF52_COMPANION_TRIM=0")):
+            with self.subTest(changes=changes):
+                self.assertFalse(TRIM.companion_shared_replies_policy(**(defaults | changes)))
+
     def test_local_names_do_not_change_companion_or_unqualified_roles(self):
         for options in (dict(name="RAK_4631_companion_radio_full"),
                         dict(role="custom"), dict(platform="espressif32", mcu="esp32")):

@@ -259,10 +259,9 @@ def compile_packed_help(build_env, node):
     return build_env.Object(node, **flags)
 
 
-def compile_shared_cli_replies(build_env, node):
-    """Keep constant reply copies out of line in the qualified CLI object only."""
+def _compile_shared_reply_copies(build_env, node, relative_path):
     source = Path(node.srcnode().get_abspath()).resolve()
-    expected = Path(build_env.subst("$PROJECT_DIR/src/helpers/CommonCLI.cpp")).resolve()
+    expected = Path(build_env.subst("$PROJECT_DIR/" + relative_path)).resolve()
     if source != expected:
         return node
     # GCC otherwise expands many constant strcpy replies into repeated stores.
@@ -271,6 +270,25 @@ def compile_shared_cli_replies(build_env, node):
     if "-fno-builtin-strcpy" not in flags:
         flags.append("-fno-builtin-strcpy")
     return build_env.Object(node, CCFLAGS=flags)
+
+
+def compile_shared_cli_replies(build_env, node):
+    """Keep constant reply copies out of line in the qualified CLI object only."""
+    return _compile_shared_reply_copies(build_env, node, "src/helpers/CommonCLI.cpp")
+
+
+def compile_shared_companion_replies(build_env, node):
+    return _compile_shared_reply_copies(build_env, node, "examples/companion_radio/MyMesh.cpp")
+
+
+def companion_shared_replies_policy(platform, mcu, env_name, src_filter,
+                                   flags=(), cppdefines=()):
+    if env_name != "RAK_4631_companion_radio_full" or str(mcu).lower() != "nrf52840":
+        return False
+    values = flag_defines(flags, cppdefines)
+    return (bool(companion_trim_policy(platform, mcu, src_filter, flags, cppdefines))
+            and ("MESH_CLI_SHARE_REPLIES" not in values
+                 or _enabled(values["MESH_CLI_SHARE_REPLIES"])))
 
 
 def install(build_env):
@@ -304,6 +322,10 @@ def install(build_env):
     if rak_repeater and _enabled(values.get("MESH_CLI_SHARE_REPLIES",
                                             definitions.get("MESH_CLI_SHARE_REPLIES"))):
         build_env.AddBuildMiddleware(compile_shared_cli_replies, "*CommonCLI.cpp")
+    if not infrastructure and companion_shared_replies_policy(
+            platform.name, mcu, build_env["PIOENV"], build_env.get("SRC_FILTER", ()),
+            flags, cppdefines):
+        build_env.AddBuildMiddleware(compile_shared_companion_replies, "*MyMesh.cpp")
     if infrastructure:
         names = ("local OTA target name only" if definitions.get("OTA_TARGET_NAME_TABLE") == 0
                  or flag_defines(flags, cppdefines).get("OTA_TARGET_NAME_TABLE") == "0"
