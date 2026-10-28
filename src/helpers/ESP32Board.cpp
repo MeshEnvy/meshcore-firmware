@@ -1413,12 +1413,15 @@ void ESP32Board::powerOff() {
 
 #if MESH_ENABLE_EMERGENCY_POWER
 bool ESP32Board::emergencySleepMilliseconds(uint32_t millisecs) {
-  // The caller owns radio suspension and reversible wireless shutdown. Never
-  // force a live WiFi/Bluetooth stack through explicit light sleep.
   if (millisecs == 0 || isRadioTestActive() || xPortInIsrContext()
-      || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING
-      || !mesh::esp32::manualLightSleepReady()) return false;
+      || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return false;
+  // Native USB loses its connection in light sleep, even without an open CDC
+  // reader. Retain the ordinary physical-host/loss-grace policy here too.
+  // RF remains suspended, but an attached host gets frequent command service.
+  const bool usb_held = isUsbSleepHeld();
+  if (!usb_held && !mesh::esp32::manualLightSleepReady()) return false;
   if (millisecs > 10000UL) millisecs = 10000UL;
+  if (usb_held && millisecs > 100UL) millisecs = 100UL;
   const esp_err_t watchdog_status = esp_task_wdt_status(nullptr);
   const bool watched = watchdog_status == ESP_OK;
   if (!watched && watchdog_status != ESP_ERR_NOT_FOUND
@@ -1427,7 +1430,15 @@ bool ESP32Board::emergencySleepMilliseconds(uint32_t millisecs) {
   if (watched && millisecs > uint32_t(CONFIG_ESP_TASK_WDT_TIMEOUT_S) * 500UL)
     millisecs = uint32_t(CONFIG_ESP_TASK_WDT_TIMEOUT_S) * 500UL;
 #endif
+  const TickType_t usb_ticks = usb_held ? pdMS_TO_TICKS(millisecs) : 0;
+  if (usb_held && usb_ticks == 0) return false;
   if (watched && esp_task_wdt_reset() != ESP_OK) return false;
+  if (usb_held) {
+    // This also remains safe during asynchronous wireless teardown. Do not
+    // arm or clear wake sources while yielding with the USB peripheral live.
+    vTaskDelay(usb_ticks);
+    return !watched || esp_task_wdt_reset() == ESP_OK;
+  }
   if (esp_sleep_enable_timer_wakeup(uint64_t(millisecs) * 1000ULL) != ESP_OK)
     return false;
   // Add no radio/GPIO wake. Existing button sources remain untouched. The

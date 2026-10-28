@@ -22,6 +22,7 @@ HARNESS = r'''
 #include <vector>
 static std::vector<std::string> events;
 static bool radio_test = false, interrupt_context = false, wireless_ready = true;
+static bool usb_held = false;
 static unsigned primask = 0, basepri = 0, faultmask = 0;
 static unsigned __get_IPSR() { return interrupt_context; }
 static unsigned __get_PRIMASK() { return primask; }
@@ -102,6 +103,7 @@ struct NRF52Board : Base {
 };
 struct ESP32Board : Base {
   bool isRadioTestActive() const { return radio_test; }
+  bool isUsbSleepHeld() const { return usb_held; }
   @ESP_SUPPORT@
   bool emergencySleepMilliseconds(uint32_t millisecs) override;
 };
@@ -109,6 +111,7 @@ struct ESP32Board : Base {
 @ESP_SLEEP@
 static void reset() {
   events.clear(); radio_test = interrupt_context = false; wireless_ready = true;
+  usb_held = false;
   primask = basepri = faultmask = 0; nrf_nvic_state.__cr_flag = 0;
   scheduler = taskSCHEDULER_RUNNING;
   tick_ms = 1; delayed_ticks = nrf_feeds = 0;
@@ -165,6 +168,29 @@ int main() {
 
   reset(); wireless_ready = false;
   assert(!esp.emergencySleepMilliseconds(100)); assert(events.empty());
+  reset(); usb_held = true; wireless_ready = false; timer_us = 555;
+  assert(esp.emergencySleepMilliseconds(UINT32_MAX));
+  assert(delayed_ticks == 100 && events == std::vector<std::string>{"delay"});
+  assert(!timer_calls && !sleep_calls && !clear_calls && timer_us == 555);
+  assert(other_wake_sources == 0x71); // USB, RF and existing wake ownership are untouched.
+  usb_held = false; events.clear();
+  assert(!esp.emergencySleepMilliseconds(100) && events.empty()); // Teardown is still live.
+  wireless_ready = true;
+  assert(esp.emergencySleepMilliseconds(100)); // Recheck the host on every call; detach permits light sleep.
+  assert(last_armed_us == 100000 && sleep_calls == 1 && !timer_us);
+  reset(); usb_held = true; task_watchdog_status = ESP_OK;
+  assert(esp.emergencySleepMilliseconds(250));
+  assert(delayed_ticks == 100 && task_watchdog_feeds == 2);
+  assert((events == std::vector<std::string>{"task_feed", "delay", "task_feed"}));
+  assert(!timer_calls && !sleep_calls && !clear_calls);
+  reset(); usb_held = true; tick_ms = 1000;
+  assert(!esp.emergencySleepMilliseconds(100) && events.empty());
+  for (unsigned failure : {1U, 2U}) {
+    reset(); usb_held = true; task_watchdog_status = ESP_OK; fail_watchdog_feed = failure;
+    assert(!esp.emergencySleepMilliseconds(100));
+    assert(delayed_ticks == (failure == 1 ? 0U : 100U));
+    assert(!timer_calls && !sleep_calls && !clear_calls);
+  }
   reset(); task_watchdog_status = 99;
   assert(!esp.emergencySleepMilliseconds(100)); assert(events.empty());
   reset(); assert(esp.emergencySleepMilliseconds(UINT32_MAX));
