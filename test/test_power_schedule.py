@@ -86,10 +86,11 @@ class PowerScheduleTests(unittest.TestCase):
   State state; state.begin(settings);
   assert(state.sleepMilliseconds(june + 20 * 3600, true, 47600000, -122300000) == 0);
   assert(state.sleepMilliseconds(june + 8 * 3600, true, 47600000, -122300000) > 0);
-  // Changing location or its availability inside one UTC minute invalidates the cache.
+  // Known coordinates are cached for at most one UTC second, preserving scarce node RAM.
   assert(state.sleepMilliseconds(june, true, 85000000, 0) == 0);
+  assert(state.sleepMilliseconds(june, true, -85000000, 0) == 0);
   assert(state.sleepMilliseconds(june + 1, true, -85000000, 0) > 0);
-  assert(state.sleepMilliseconds(june + 2, false, 0, 0) == 0);
+  assert(state.sleepMilliseconds(june + 1, false, 0, 0) == 0); // Validity loss is immediate.
   assert(state.sleepMilliseconds(june + 3, true, 91000000, 0) == 0);
   assert(state.sleepMilliseconds(0, true, -85000000, 0) == 0);
 
@@ -156,6 +157,16 @@ class PowerScheduleTests(unittest.TestCase):
     Settings actual;
     assert(decode(bytes, sizeof(bytes), actual) && actual.offsetMinutes == offset);
   }
+  // Validate raw wire ranges before assigning compact11-bit in-memory fields.
+  for (unsigned field : {6U, 8U}) for (uint16_t bad : {uint16_t(2048), uint16_t(65535)}) {
+    Settings good; good.hours = true; good.startMinute = 480; good.endMinute = 1080;
+    uint8_t bytes[RecordSize]; encode(bytes, good);
+    bytes[field] = uint8_t(bad); bytes[field + 1] = uint8_t(bad >> 8);
+    const uint16_t crc = mesh::emergencypower::checksum(bytes, 12);
+    bytes[12] = uint8_t(crc); bytes[13] = uint8_t(crc >> 8);
+    Settings actual;
+    assert(!decode(bytes, sizeof(bytes), actual) && !actual.daylight && !actual.hours);
+  }
 ''')
 
     def test_clock_rollback_across_dawn_inside_one_cached_minute(self):
@@ -175,6 +186,17 @@ class PowerScheduleTests(unittest.TestCase):
     exercised = true;
   }
   assert(exercised);
+''')
+
+    def test_invalid_clock_then_uint32_ceiling_recomputes_daylight(self):
+        self.exercise(r'''
+  Settings settings; settings.daylight = true;
+  State state; state.begin(settings);
+  assert(mesh::solar::evaluate(UINT32_MAX, 47600000, -122300000).state
+      == mesh::solar::State::Night);
+  assert(state.sleepMilliseconds(UINT32_MAX, true, 47600000, -122300000) > 0);
+  assert(state.sleepMilliseconds(0, true, 47600000, -122300000) == 0);
+  assert(state.sleepMilliseconds(UINT32_MAX, true, 47600000, -122300000) > 0);
 ''')
 
     def test_actual_cli_standalone_hour_schedule_reply_grace_awake_override_and_persistence(self):
@@ -254,6 +276,7 @@ class PowerScheduleTests(unittest.TestCase):
   assert(strstr(reply, "on"));
   prefs.node_lat = prefs.node_lon = 0;
   sensors.latitude = 85; sensors.longitude = 0;
+  ++clock.time; // New known coordinates take effect by the next UTC second.
   assert(cli.emergencySleepMilliseconds() == 0); // Cached polar-day GPS, without starting receiver.
   assert(sensors.reads > 0);
   sensors.cached = false;
@@ -265,6 +288,31 @@ class PowerScheduleTests(unittest.TestCase):
   assert(cli.emergencySleepMilliseconds() > 0); // Missing GPS cannot open a closed civil-hour gate.
   clock.time = 0;
   assert(cli.emergencySleepMilliseconds() == 0); // Missing time fails open for standalone schedules.
+''')
+
+    def test_actual_cli_recovery_failure_is_isolated_to_its_settings_path(self):
+        self.cli(r'''
+  for (bool bad_emergency : {false, true}) {
+    Board board; Clock clock; FILESYSTEM fs;
+    fs.blockedPath = bad_emergency ? "/power_emergency" : "/power_schedule";
+    CommonCLI cli(board, clock); nowMs = 0; cli.loadEmergencyPower(&fs);
+    char reply[160];
+    const char* blocked = bad_emergency ? "set power.emergency on" : "set power.daylight on";
+    assert(cli.handleEmergencyPowerCommand(blocked, reply));
+    assert(strstr(reply, "save unconfirmed") && fs.writes == 0);
+    const char* allowed = bad_emergency ? "set power.hours 08:00-18:00" : "set power.emergency on";
+    assert(cli.handleEmergencyPowerCommand(allowed, reply));
+    assert(!strncmp(reply, "OK", 2) && fs.commits == 1);
+    assert(cli.emergencyActive() != bad_emergency);
+    assert(fs.files.count(bad_emergency ? "/power_schedule" : "/power_emergency") == 1);
+    assert(fs.files.count(bad_emergency ? "/power_emergency" : "/power_schedule") == 0);
+    CommonCLI reboot(board, clock); reboot.loadEmergencyPower(&fs);
+    assert(reboot.emergencyActive() != bad_emergency);
+    assert(reboot.handleEmergencyPowerCommand("get power.hours", reply));
+    assert(strstr(reply, bad_emergency ? "08:00-18:00" : "off"));
+    assert(reboot.handleEmergencyPowerCommand("get power.daylight", reply));
+    assert(strstr(reply, "off"));
+  }
 ''')
 
     def test_actual_cli_preserves_legacy_manual_state_and_atomic_failure_leaves_schedule_inactive(self):

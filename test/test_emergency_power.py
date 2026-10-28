@@ -197,6 +197,7 @@ struct FILESYSTEM {
   std::map<std::string, std::vector<uint8_t>> files;
   bool shortWrite = false, failCommit = false, badRead = false, corruptCommit = false;
   bool recoverOk = true;
+  std::string blockedPath;
   unsigned commits = 0, writes = 0;
 };
 namespace mesh {
@@ -225,7 +226,9 @@ public:
 class ContactFileTransaction : public AtomicFileWriter {
 public:
   using AtomicFileWriter::AtomicFileWriter;
-  static bool recover(FILESYSTEM* fs, const char*) { return fs && fs->recoverOk; }
+  static bool recover(FILESYSTEM* fs, const char* path) {
+    return fs && fs->recoverOk && fs->blockedPath != path;
+  }
 };
 namespace storage {
 static bool readFixedSettingsFile(FILESYSTEM* fs, const char* path, uint8_t* bytes, size_t n) {

@@ -106,10 +106,11 @@ void operatingHoursText(const mesh::powerschedule::Settings& settings, char* tex
 
 void CommonCLI::loadEmergencyPower(FILESYSTEM* fs) {
   _emergency_power_fs = fs;
+  _power_settings_blocked = 0;
   mesh::emergencypower::Settings loaded;
 #if defined(ESP32_PLATFORM) || defined(RP2040_PLATFORM)
   if (!mesh::ContactFileTransaction::recover(fs, EMERGENCY_POWER_PATH))
-    _emergency_power_fs = nullptr;
+    _power_settings_blocked |= 1;
   else
 #endif
   if (!readEmergencyPower(fs, EMERGENCY_POWER_PATH, loaded))
@@ -120,19 +121,20 @@ void CommonCLI::loadEmergencyPower(FILESYSTEM* fs) {
 }
 
 bool CommonCLI::saveEmergencyPower(const mesh::emergencypower::Settings& settings) {
+  if (_power_settings_blocked & 1) return false;
   uint8_t bytes[mesh::emergencypower::RecordSize];
   mesh::emergencypower::encode(bytes, settings);
   return writePowerSettings(_emergency_power_fs, EMERGENCY_POWER_PATH, bytes, sizeof(bytes));
 }
 
 void CommonCLI::loadPowerSchedule(FILESYSTEM* fs) {
-  _power_schedule_fs = fs;
+  _power_settings_blocked &= uint8_t(~2U);
   mesh::powerschedule::Settings loaded;
 #if defined(ESP32_PLATFORM) || defined(RP2040_PLATFORM)
   if (!mesh::ContactFileTransaction::recover(fs, POWER_SCHEDULE_PATH))
-    _power_schedule_fs = nullptr;
+    _power_settings_blocked |= 2;
 #endif
-  if (_power_schedule_fs) {
+  if (fs && !(_power_settings_blocked & 2)) {
     uint8_t bytes[mesh::powerschedule::RecordSize];
     if (!(mesh::storage::readFixedSettingsFile(fs, POWER_SCHEDULE_PATH, bytes, sizeof(bytes))
           && mesh::powerschedule::decode(bytes, sizeof(bytes), loaded))) {
@@ -145,9 +147,10 @@ void CommonCLI::loadPowerSchedule(FILESYSTEM* fs) {
 }
 
 bool CommonCLI::savePowerSchedule(const mesh::powerschedule::Settings& settings) {
+  if (_power_settings_blocked & 2) return false;
   uint8_t bytes[mesh::powerschedule::RecordSize];
   mesh::powerschedule::encode(bytes, settings);
-  return writePowerSettings(_power_schedule_fs, POWER_SCHEDULE_PATH, bytes, sizeof(bytes));
+  return writePowerSettings(_emergency_power_fs, POWER_SCHEDULE_PATH, bytes, sizeof(bytes));
 }
 
 uint32_t CommonCLI::powerScheduleSleepMilliseconds(uint32_t epoch) {
@@ -209,9 +212,11 @@ bool CommonCLI::handlePowerScheduleCommand(const char* command, char* reply) {
       snprintf(reply, 157, "Error: use set power.hours HH:MM-HH:MM|off"); return true;
     }
   } else if (emergencyCommand(command, "set power.hours.offset", value)) {
-    if (!operatingOffset(value, candidate.offsetMinutes)) {
+    int16_t offset;
+    if (!operatingOffset(value, offset)) {
       snprintf(reply, 157, "Error: offset must be -720..840 minutes"); return true;
     }
+    candidate.offsetMinutes = offset;
   } else if (emergencyCommand(command, "set power.schedule", value)) {
     if (!emergencyValue(value, "off")) {
       snprintf(reply, 157, "Error: use set power.schedule off"); return true;

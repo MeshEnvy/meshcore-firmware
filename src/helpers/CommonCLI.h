@@ -951,7 +951,6 @@ class CommonCLI {
   bool saveEmergencyPower(const mesh::emergencypower::Settings& settings);
   void loopEmergencyPower();
   bool handleEmergencyPowerCommand(const char* command, char* reply);
-  FILESYSTEM* _power_schedule_fs = nullptr;
   mesh::powerschedule::State _power_schedule;
   void loadPowerSchedule(FILESYSTEM* fs);
   bool savePowerSchedule(const mesh::powerschedule::Settings& settings);
@@ -1000,6 +999,8 @@ class CommonCLI {
   bool _media_regions_ready = false;
 #if MESH_ENABLE_EMERGENCY_POWER
   bool _emergency_radio_sleeping = false;
+  // Share the filesystem, but a failed recovery blocks only that record.
+  uint8_t _power_settings_blocked = 0;
 #endif
   uint8_t _rx_settings_pending = 0;
   bool _com_prefs_needs_upgrade = false;  // old-format legacy prefs detected; rewrite once after load

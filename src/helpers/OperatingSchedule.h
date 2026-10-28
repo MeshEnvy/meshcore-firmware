@@ -9,12 +9,15 @@ static constexpr size_t RecordSize = 14;
 static constexpr uint32_t DaySeconds = 86400;
 
 struct Settings {
-  bool daylight = false;
-  bool hours = false;
-  uint16_t startMinute = 0;
-  uint16_t endMinute = 0;
-  int16_t offsetMinutes = 0;
+  // Natural 16-bit allocation units; only explicit encode/decode is persisted.
+  uint16_t startMinute : 11;
+  bool daylight : 1;
+  bool hours : 1;
+  uint16_t endMinute : 11;
+  int16_t offsetMinutes : 11;
+  Settings() : startMinute(0), daylight(false), hours(false), endMinute(0), offsetMinutes(0) {}
 };
+static_assert(sizeof(Settings) <= 6, "Operating settings must retain their compact layout");
 
 inline bool valid(const Settings& settings) {
   return settings.startMinute < 1440 && settings.endMinute <= 1440
@@ -51,10 +54,12 @@ inline bool decode(const uint8_t* in, size_t size, Settings& settings) {
   Settings loaded;
   loaded.daylight = (in[4] & 1) != 0;
   loaded.hours = (in[4] & 2) != 0;
-  loaded.startMinute = uint16_t(in[6] | uint16_t(in[7]) << 8);
-  loaded.endMinute = uint16_t(in[8] | uint16_t(in[9]) << 8);
+  const uint16_t start = uint16_t(in[6] | uint16_t(in[7]) << 8);
+  const uint16_t end = uint16_t(in[8] | uint16_t(in[9]) << 8);
   const uint16_t offset = uint16_t(in[10] | uint16_t(in[11]) << 8);
-  if (offset > 1560) return false;
+  if (start >= 1440 || end > 1440 || offset > 1560) return false;
+  loaded.startMinute = start;
+  loaded.endMinute = end;
   loaded.offsetMinutes = int16_t(offset) - 720;
   if (!valid(loaded)) return false;
   settings = loaded;
@@ -62,10 +67,9 @@ inline bool decode(const uint8_t* in, size_t size, Settings& settings) {
 }
 
 struct State {
-  Settings settings;
   uint32_t evaluatedUtc = UINT32_MAX;
   uint32_t nextChangeUtc = 0;
-  int32_t latitude = 0, longitude = 0;
+  Settings settings;
   solar::State daylightState = solar::State::Unknown;
   bool hasLocation = false;
 
@@ -96,16 +100,14 @@ struct State {
       if (!inside) budget = uint32_t((start - local + DaySeconds) % DaySeconds) * 1000UL;
     }
     if (settings.daylight) {
-      // Clock corrections and a changed location invalidate the minute cache.
-      // A transition within this minute is evaluated again at its boundary.
-      if (evaluatedUtc / 60 != epoch / 60 || epoch < evaluatedUtc || located != hasLocation
-          || latitude != latitude_e6 || longitude != longitude_e6
-          || (nextChangeUtc && epoch >= nextChangeUtc)) {
+      // Bound calculations to once per UTC second. Location availability is
+      // immediate; a changed known position is observed within one second.
+      // The explicit sentinel check also handles clock recovery at UINT32_MAX.
+      if (evaluatedUtc == UINT32_MAX || evaluatedUtc != epoch || located != hasLocation) {
         const solar::Window window = located ? solar::evaluate(epoch, latitude_e6, longitude_e6)
             : solar::Window{solar::State::Unknown, 0};
         evaluatedUtc = epoch;
         hasLocation = located;
-        latitude = latitude_e6; longitude = longitude_e6;
         daylightState = window.state;
         nextChangeUtc = window.nextChangeUtc;
       }
@@ -122,6 +124,6 @@ struct State {
   }
 };
 
-static_assert(sizeof(State) <= 32, "Operating schedule must keep its bounded RAM footprint");
+static_assert(sizeof(State) <= 16, "Operating schedule must keep its bounded RAM footprint");
 
 }} // namespace mesh::powerschedule
