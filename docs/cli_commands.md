@@ -1658,6 +1658,61 @@ Older firmware may reject this command. A flasher should retain its manual
 connection option when the report is absent, unknown or conflicts with the
 selected USB device; it must not guess from the board name or shared USB ID.
 
+### Report optional settings support
+
+`get config.cap` is a read-only, bounded settings-capability query shared by
+the infrastructure CLI and Companion CLI. It reports no setting values or
+secrets, saves nothing, and does not change radio or Bluetooth state. One
+reply lets backup tools distinguish an unavailable setting from a real
+getter failure without issuing unsupported requests for every board.
+
+The exact v1 reply format is:
+
+```text
+config.cap v1 get=XXXXXXXX set=XXXXXXXX fixed=XXXXXXXX na=XXXXXXXX
+```
+
+Each field is eight hexadecimal digits, using these stable bit assignments:
+
+| Bit | Setting |
+| --- | --- |
+| 0 | `system.watchdog` |
+| 1 | `radio.cad` scan/retry/max timings |
+| 2 | `radio.fem.rxgain` |
+| 3 | `radio.fem.txgain` |
+| 4 | `radio.rxps.rfrx_disabled` |
+| 5 | `bluetooth` |
+| 6 | `bluetooth.name` |
+| 7 | `display.rotation` |
+| 8 | `usb.logging.always` |
+| 9 | `usb.logging` |
+| 10 | `usb.debug` |
+| 11 | `radio.preamble` saved primary preference |
+
+`get` means a genuine reader exists; `set` means an existing setting command
+can restore the value. For `radio.preamble`, restoration uses the fifth
+`set radio` field, not a separate `set radio.preamble` command. `fixed`
+means there is no user-configurable preference for that setting; a fixed
+diagnostic may also have a `get` bit. `na` means the setting does not apply
+to this board/build/role. `na` never overlaps another field, and `fixed`
+never overlaps `set`. All four bits clear means unknown, not a successful
+backup. Bits 12-31 are reserved and zero in v1. This limited manifest does
+not claim that all stored preferences are exportable.
+
+Infrastructure firmware has no mutable CAD scan/retry/max preferences, so
+bit 1 is `fixed` there; its existing `get cad` enable/busy diagnostic remains
+unchanged. Companion does store and export those timings through
+`get radio.cad`. Companion watchdog status is diagnostic only where the
+board can report it; it has no persisted Companion watchdog-control policy.
+Front-end gain, RX power-saving RF-switch, display rotation and Bluetooth
+support follow the actual board and role rather than the firmware filename.
+The always-on USB logging preference is not applicable to a separate
+dual-CDC logging interface.
+
+Older firmware may not implement this query. Clients must keep legacy
+per-setting reads and report unconfirmed/failed reads honestly instead of
+treating an absent or malformed capability response as not applicable.
+
 ### Control live USB logging
 
 **Search terms:** serial logging, USB debug log, enable logging, disable logging, debug output.
@@ -1999,7 +2054,8 @@ node after the save succeeds. See [regulator recovery and hardware checks](power
 #### View or change this node's radio parameters
 **Usage:**
 - `get radio`
-- `set radio <freq>,<bw>,<sf>,<cr>`
+- `get radio.preamble`
+- `set radio <freq>,<bw>,<sf>,<cr>[,<preamble|auto>]`
 
 **Parameters:**
 - `freq`: Frequency in MHz
@@ -2014,6 +2070,12 @@ node after the save succeeds. See [regulator recovery and hardware checks](power
 `get radio` returns exactly four comma-separated fields for compatibility with
 existing Companion apps. On dual-radio builds, use `get radio2` and
 `get radio.timing` for profile and timing diagnostics.
+
+`get radio.preamble` reads the **saved primary** preamble preference: `auto`
+or an explicit symbol count from `8` through `65528`. It does not report a
+temporary profile or replace `auto` with a computed recommendation. Backup
+tools can restore it using the optional fifth `set radio` field. Omitting
+that field retains the existing setter behavior: select `auto`.
 
 **Note:** Companion USB, BLE and WebConfig changes apply automatically when
 the radio is free. A busy radio keeps the saved target across disconnects.

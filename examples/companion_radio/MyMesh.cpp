@@ -1,4 +1,5 @@
 #include <helpers/CLIReplyText.h>
+#include <helpers/ConfigCapabilities.h>
 #include <helpers/RegulatorSettings.h>
 #if defined(USE_LR2021)
 #include <helpers/radiolib/LR2021CalibrationSettings.h>
@@ -4116,6 +4117,32 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
     return true;
   }
 #endif
+  if (mesh::configcap::isCommand(command)) {
+    mesh::configcap::Features features;
+    bool watchdog_running = false;
+    features.watchdog_read = board.getSystemWatchdogRunning(watchdog_running);
+    features.cad_timings = true;
+    features.fem_rxgain = board.canControlLoRaFemLna();
+    features.fem_txgain = board.canControlLoRaFemPaGain();
+    features.fem_txgain_fixed = board.isLoRaFemPaGainEnabled();
+    features.rxps_rfrx_disabled = radio_driver.supportsRxPowerSavingRfRxDisable();
+#if defined(BLE_PIN_CODE)
+    features.bluetooth = true;
+    features.bluetooth_name = true;
+#endif
+    features.display_rotation = _ui != nullptr && _ui->supportsDisplayRotation();
+#if MESH_USB_LOGGING_AVAILABLE
+    features.usb_logging = true;
+#if !defined(MESH_DUAL_CDC_LOGGING)
+    features.usb_logging_always = true;
+#endif
+#endif
+    return mesh::configcap::handleCommand(command, reply, reply_size, features);
+  }
+  if (strcmp(command, "get radio.preamble") == 0) {
+    mesh::configcap::formatPrimaryPreamble(_radio_profiles.primaryPreamble(), reply, reply_size);
+    return true;
+  }
   if (mesh::powerdiag::handleCommand(command, reply, reply_size, millis())) return true;
   if (mesh::companion::handlePowerDiagnosticsCommand(board, command, reply, reply_size)) return true;
 #if defined(ESP32_PLATFORM)

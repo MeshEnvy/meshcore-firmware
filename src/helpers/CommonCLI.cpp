@@ -1,4 +1,5 @@
 #include "CLIReplyText.h"
+#include "ConfigCapabilities.h"
 #include <helpers/RegulatorSettings.h>
 #if defined(USE_LR2021)
 #include <helpers/radiolib/LR2021CalibrationSettings.h>
@@ -5994,6 +5995,31 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
 void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* reply) {
   if (mesh::handleUsbModeCommand(command, reply, 160, Serial)) return;
   const char* config = &command[4];
+  if (mesh::configcap::isCommand(command)) {
+    mesh::configcap::Features features;
+#if defined(NRF52_PLATFORM)
+    features.watchdog_read = features.watchdog_write = true;
+#endif
+    features.fem_rxgain = _board->canControlLoRaFemLna();
+    features.fem_txgain = _board->canControlLoRaFemPaGain();
+    features.rxps_rfrx_disabled = _callbacks->supportsRxPowerSavingRfRxDisable();
+#if defined(HELTEC_V4_R8_TFT) && defined(HELTEC_TFT_RUNTIME_ROTATION) \
+    && HELTEC_TFT_RUNTIME_ROTATION == 1
+    features.display_rotation = true;
+#endif
+#if MESH_USB_LOGGING_AVAILABLE
+    features.usb_logging = true;
+#if !defined(MESH_DUAL_CDC_LOGGING)
+    features.usb_logging_always = true;
+#endif
+#endif
+    mesh::configcap::handleCommand(command, reply, 160, features);
+    return;
+  }
+  if (strcmp(config, "radio.preamble") == 0) {
+    mesh::configcap::formatPrimaryPreamble(_prefs->primary_radio_preamble, reply, 160);
+    return;
+  }
 #if defined(RAK_4631)
   if (mesh::peripherals::handleCommand(_prefs->peripherals_shared, command,
           reply, 160, _sensors->supportsSharedPeripheralMode(),
