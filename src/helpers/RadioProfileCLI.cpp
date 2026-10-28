@@ -746,6 +746,29 @@ bool RadioProfileCLI::finishReplyMutation(bool delivered) {
       || !fs_ || !fs_->exists(ReplyPath) || fs_->remove(ReplyPath);
 }
 
+bool RadioProfileCLI::stageChannelPreset(const char* name) {
+  if (!name || !cli::radio2PresetTuple(name) || remote_command_
+      || !secondaryRuntimeAvailable()) return false;
+  const auto& secondary = radio_->profiles()->secondary;
+  if (secondary.mode != RadioProfileMode::Off
+      && secondary.params.protocol != RadioProfileProtocol::MeshCore) return false;
+  char command[48], reply[160];
+  snprintf(command, sizeof(command), "set radio2 %s", name);
+  beginReplyCommand();
+  const bool handled = handle(command, reply, sizeof(reply));
+  endReplyCommand();
+  return handled && !strncmp(reply, "OK", 2)
+      && remote_mutation_ == RemoteMutation::Saved;
+}
+
+bool RadioProfileCLI::finishChannelPreset(bool commit) {
+  if (remote_command_ || remote_mutation_ != RemoteMutation::Saved) return false;
+  if (!commit) return finishReplyMutation(false);
+  if (!applyReplyMutation()) return false;
+  publish_after_ms_ = millis() + 2000;
+  return true;
+}
+
 #if MESH_ENABLE_FLEET_CONTROL
 bool RadioProfileCLI::stageRemoteSchedule(unsigned slot, const Schedule& schedule) {
   if (slot >= 4 || !stageRemoteMutation(schedule.temporary

@@ -7491,10 +7491,45 @@ void MyMesh::handleCmdFrame(size_t len) {
         && !memcmp(wire_channel.channel.secret, previous_wire_channel.channel.secret, sizeof(channel.channel.secret))) {
       channel.channel.tx_radio = previous.channel.tx_radio;
     }
+    const char* preset = companionChannelRadio2Preset(channel.name);
+    const char* previous_preset = companionChannelRadio2Preset(previous.name);
+    // A join or rename selects the saved preset, just like set radio2. App
+    // replays/key edits must not undo a later manual Off or custom RF setting.
+    const bool setup_preset = have_previous && preset
+        && (!previous_preset || strcmp(preset, previous_preset));
+    if (setup_preset) {
+#if !MESH_ENABLE_MESHTEXT_CHAT
+      // Even without the foreign-protocol backend, do not turn old fallback
+      // mt- channels into inactive protocol requests as a hidden side effect.
+      for (int i = 0; i < MAX_GROUP_CHANNELS; ++i) {
+        ChannelDetails other;
+        if (i != channel_idx && BaseChatMesh::getChannel(i, other)
+            && parseCompanionChannelAlias(other.name).kind == CompanionChannelKind::Meshtext) {
+          writeErrFrame(ERR_CODE_BAD_STATE);
+          return;
+        }
+      }
+#endif
+      if (!_radio_profiles.stageChannelPreset(preset)) {
+        writeErrFrame(ERR_CODE_BAD_STATE);
+        return;
+      }
+    }
     if (!have_previous
         || !setChannel(channel_idx, channel)) {
+      if (setup_preset) _radio_profiles.finishChannelPreset(false);
       writeErrFrame(ERR_CODE_NOT_FOUND); // bad channel_idx
     } else if (saveChannels()) {
+      if (setup_preset && !_radio_profiles.finishChannelPreset(true)) {
+        // Never report a complete setup when the RF image did not commit.
+        // Restore the channel when storage permits; report failure even if
+        // an indeterminate channels write has quarantined further saves.
+        setChannel(channel_idx, previous);
+        saveChannels();
+        _radio_profiles.finishChannelPreset(false);
+        writeErrFrame(ERR_CODE_FILE_IO_ERROR);
+        return;
+      }
 #if MESH_ENABLE_MESHTEXT_CHAT
       _mt_seen.clear();
       _mt_profile_dirty = true;
@@ -7509,6 +7544,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       // commit this update, and never acknowledge a change that will disappear
       // after reboot.
       setChannel(channel_idx, previous);
+      if (setup_preset) _radio_profiles.finishChannelPreset(false);
       writeErrFrame(ERR_CODE_FILE_IO_ERROR);
     }
   } else if (cmd_frame[0] == CMD_SIGN_START) {

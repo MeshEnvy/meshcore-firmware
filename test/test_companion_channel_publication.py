@@ -115,6 +115,13 @@ struct StrHelper {
 #endif
 """, 1)
     source = source.replace(" bool handleTxRoutingCommand(const char*,char*,size_t);", """
+ using BaseChatMesh = MyMesh;
+ // This publication fixture only mutates ordinary channels. RF preset
+ // behavior is exercised with the real CLI by the Meshtext fixture.
+ struct {
+   bool stageChannelPreset(const char*) { assert(false); return false; }
+   bool finishChannelPreset(bool) { assert(false); return false; }
+ } _radio_profiles;
  bool handleTxRoutingCommand(const char*,char*,size_t);
  int last_error = 0;
  bool binary_ack = false;
