@@ -268,11 +268,20 @@ static bool isNetworkTerminalActive();
   DataStore store(LittleFS, rtc_clock);
 #elif defined(ESP32)
   #include <SPIFFS.h>
-  DataStore store(SPIFFS, rtc_clock);
+  #if CARDPUTER_ADV_UI
+    #include "CardputerDataStore.h"
+    CardputerDataStore store(SPIFFS, rtc_clock);
+  #else
+    DataStore store(SPIFFS, rtc_clock);
+  #endif
 #endif
 
 /* GLOBAL OBJECTS */
-#ifdef DISPLAY_CLASS
+#if CARDPUTER_ADV_UI
+  // Keyboard/display UI for the M5Stack Cardputer-Adv (variant-provided).
+  #include "CardputerMesh.h"
+  CardputerUITask ui_task(&board, &interface_manager);
+#elif defined(DISPLAY_CLASS)
   #include "UITask.h"
   UITask ui_task(&board, &interface_manager);
 #endif
@@ -293,6 +302,9 @@ static bool initializeCompanionMeshStorage() {
       : "ERROR: insufficient PSRAM for Full Companion; startup stopped");
   return false;
 }
+#elif CARDPUTER_ADV_UI
+CardputerMesh the_mesh_cp(radio_driver, fast_rng, rtc_clock, tables, store, &ui_task);
+MyMesh& cardputerMeshInstance() { return the_mesh_cp; }
 #else
 MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
    #ifdef DISPLAY_CLASS
@@ -3832,6 +3844,16 @@ void setup() {
 #endif
 #endif
 #endif
+#if CARDPUTER_ADV_UI
+  DisplayDriver* cardputer_disp = NULL;
+  if (display.begin()) {
+    cardputer_disp = &display;
+    display.startFrame();
+    display.setTextSize(2);
+    display.drawTextCentered(display.width() / 2, 28, "Loading...");
+    display.endFrame();
+  }
+#endif
 
   int radioinit_attempts = 0;
   bool radio_available = false;
@@ -4268,7 +4290,17 @@ void setup() {
   the_mesh.applyGpsPrefs();
 #endif
 
-#ifdef DISPLAY_CLASS
+#if CARDPUTER_ADV_UI
+  // microSD is optional: chat history and keyboard layouts.
+  FILESYSTEM* cardputer_sd = NULL;
+  if (SD.begin(PIN_SD_CS, lora_spi, 25000000)) {
+    cardputer_sd = &SD;
+    board.readKeyboardLayout(SD);
+  }
+  store.beginCustom(cardputer_sd);
+  the_mesh_cp.beginCustom();
+  ui_task.begin(cardputer_disp, &sensors, the_mesh.getNodePrefs(), the_mesh_cp.getCustomNodePrefs());
+#elif defined(DISPLAY_CLASS)
 #if defined(HELTEC_V4_DISPLAY_UNIFIED) && HELTEC_V4_DISPLAY_UNIFIED
   // Retain the wrapper dependency in headless mode so live selection can
   // enable a screen. The UI skips rendering while no backend is selected.
@@ -4370,7 +4402,11 @@ void loop() {
 #if defined(ENABLE_USB_INTERFACE)
   if (!host_kiss_usb_claimed) syncUsbTerminalInputEditing();
 #endif
+#if CARDPUTER_ADV_UI
+  the_mesh_cp.loop();
+#else
   the_mesh.loop();
+#endif
 #if defined(NRF52_PLATFORM) && defined(EXTRAFS) && !defined(QSPIFLASH)
   // The flash-page number is retained across a software reset without trying
   // to write primary identity storage while radio/BLE tasks are running.
@@ -4409,6 +4445,9 @@ void loop() {
   if (!morse_timing) sensors.loop();
 #if defined(WIO_E5_MINI_HEADLESS_COMPANION_UI) && defined(PIN_USER_BTN)
   serviceWioE5HeadlessControls();
+#endif
+#if CARDPUTER_ADV_UI
+  ui_task.loop();
 #endif
 #ifdef DISPLAY_CLASS
   // Keep button/touch and critical UI power checks live. UITask itself skips
@@ -4478,6 +4517,9 @@ void loop() {
     if (pending) return pending;
     if (mesh::isUsbLoggingWatchdogArmed()) return mask(Reason::UsbRecovery);
     if (mesh::wireless::control().pending()) return mask(Reason::Wireless);
+#if CARDPUTER_ADV_UI
+    if (ui_task.isAwake()) return mask(Reason::Button);
+#endif
     return 0;
   }();
 #if defined(ESP32_PLATFORM) && MESH_USB_LOGGING_AVAILABLE

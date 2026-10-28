@@ -207,6 +207,22 @@ def requirements(platform, defines, target):
     else:
         raise ValueError(f"add a runtime allocation budget for display {display!r}")
     parts = {}
+    if integer(defines, "CARDPUTER_ADV_UI", 0):
+        if platform != "ESP32_PLATFORM" or not companion:
+            raise ValueError("Cardputer UI budget requires an ESP32 Companion")
+        # LovyanGFX renders directly to the panel, without a full RGB canvas.
+        # One loaded VLW font retains five metadata arrays (9 bytes/glyph),
+        # at most 716 glyphs. Old font metadata is freed on a text-size change.
+        parts["cardputer_font_metadata"] = 8192
+        # The source bounds all twelve screen/page objects to 8 KiB. Retain
+        # another 4 KiB for their bounded strings and allocation metadata.
+        parts["cardputer_ui_objects_and_strings"] = 12288
+        # Two optional keyboard layouts, each with at most 32 unique masks,
+        # plus one replacement candidate and allocation metadata (< 22 KiB).
+        parts["cardputer_keyboard_layouts"] = 22528
+        # Private I2C, optional SD, direct SPI DMA/driver state and I2S audio
+        # coexist with the UI. Keep this additive to existing core reserves.
+        parts["cardputer_io_drivers"] = 16384
     if display == "WioTrackerL2Display":
         # The pinned LGFX QSPI bus has two DMA flip buffers. RGB565 conversion
         # requests at most 2048 bytes each (2304 for RGB888); shrinking can

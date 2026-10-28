@@ -25,7 +25,7 @@ RECIPE_ENVIRONMENT = (
 )
 PACKAGE_SUFFIXES = (".bin", "-merged.bin", ".uf2", ".zip", ".hex",
                     ".capabilities.json", ".memory.json", ".font-license.txt",
-                    ".meshtext-license.txt", ".pocket-gui-license.txt")
+                    ".meshtext-license.txt", ".pocket-gui-license.txt", ".cardputer-license.txt")
 
 
 def canonical_digest(value):

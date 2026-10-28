@@ -1,0 +1,394 @@
+#!/usr/bin/env python3
+"""Exercise Cardputer packet ownership, loop dispatch and optional SD history."""
+
+from pathlib import Path
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+from cpp_source import body
+
+ROOT = Path(__file__).resolve().parents[1]
+VARIANT = ROOT / "variants/m5stack_cardputer_adv"
+
+FILESYSTEM_STUB = r'''
+#pragma once
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <map>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#define PUB_KEY_SIZE 32
+#define FILE_READ "r"
+#define FILE_WRITE "w"
+#define FILE_APPEND "a"
+namespace mesh { struct RTCClock {}; }
+struct Entry {
+  std::string bytes;
+  bool no_progress = false;
+  unsigned reads = 0;
+};
+struct File {
+  std::shared_ptr<Entry> entry;
+  size_t position = 0;
+  explicit operator bool() const { return bool(entry); }
+  size_t size() const { return entry ? entry->bytes.size() : 0; }
+  size_t available() const { return size() - position; }
+  size_t read(uint8_t* dest, size_t count) {
+    if (!entry) return 0;
+    if (++entry->reads > 100) throw std::runtime_error("read made no progress");
+    if (entry->no_progress) return 0;
+    count = std::min(count, available());
+    memcpy(dest, entry->bytes.data() + position, count);
+    position += count;
+    return count;
+  }
+  size_t write(const uint8_t* src, size_t count) {
+    entry->bytes.append(reinterpret_cast<const char*>(src), count);
+    return count;
+  }
+  void print(const char* text) { entry->bytes += text; }
+  void println(const char* text) { entry->bytes += std::string(text) + "\n"; }
+  void close() { entry.reset(); }
+};
+struct FILESYSTEM {
+  std::map<std::string, std::shared_ptr<Entry>> files;
+  unsigned opens = 0;
+  bool fail_open = false;
+  bool exists(const char* path) const { return files.count(path) != 0; }
+  bool mkdir(const char*) { return true; }
+  File open(const char* path, const char* mode, bool = false) {
+    ++opens;
+    if (fail_open) return {};
+    auto& entry = files[path];
+    if (!entry) entry = std::make_shared<Entry>();
+    if (*mode == 'w') entry->bytes.clear();
+    return File{entry};
+  }
+};
+struct DataStore { DataStore(FILESYSTEM&, mesh::RTCClock&) {} };
+'''
+
+STORAGE_CHECKS = r'''
+#include <cassert>
+#include <cstdio>
+int main() {
+  mesh::RTCClock clock;
+  FILESYSTEM primary, sd;
+  CardputerDataStore store(primary, clock);
+  uint8_t key[PUB_KEY_SIZE] = {};
+  ChatHistory history;
+  history.push_ref()->out = true;
+  store.beginCustom(nullptr);
+  assert(!store.hasHistory());
+  store.storeMessage(key, "without SD", false, false);
+  store.loadMessages(key, false, history);
+  assert(history.count() == 0 && primary.opens == 0);
+
+  CustomNodePrefs prefs{1.1f, 127, 2};
+  store.beginCustom(&sd);
+  store.saveCustomPrefs(prefs);
+  assert(primary.files.count(CUSTOM_PREFS_FILE) == 1 && sd.files.empty());
+  CustomNodePrefs restored{};
+  store.loadCustomPrefs(restored);
+  assert(!memcmp(&prefs, &restored, sizeof(prefs)));
+
+  // A bounded source need not have a terminator after its last allowed byte.
+  char* bounded = new char[MAX_MESSAGE_LENGTH];
+  memset(bounded, 'x', MAX_MESSAGE_LENGTH);
+  store.storeMessage(key, bounded, false, true);
+  delete[] bounded;
+  const std::string channel_path = std::string(HISTORY_DIR_CHANNEL) + "/" + std::string(32, '0');
+  assert(sd.files.at(channel_path)->bytes == "<< " + std::string(MAX_MESSAGE_LENGTH, 'x') + "\n");
+  store.storeMessage(key, "line1\r\nline2", true, true);
+  assert(sd.files.at(channel_path)->bytes.find(">> line1  line2\n") != std::string::npos);
+
+  // Direct and channel namespaces remain separate; loading retains the last 15.
+  for (unsigned i = 0; i < CHAT_HISTORY_RINGBUF_SIZE + 5; ++i) {
+    char text[32];
+    snprintf(text, sizeof(text), "message %u", i);
+    store.storeMessage(key, text, i % 2, false);
+  }
+  store.loadMessages(key, false, history);
+  assert(history.count() == CHAT_HISTORY_RINGBUF_SIZE);
+  for (unsigned i = 0; i < history.count(); ++i) {
+    const HistoryMessage* msg = nullptr;
+    assert(history.get(i, msg));
+    char expected[32];
+    snprintf(expected, sizeof(expected), "message %u", i + 5);
+    assert(!strcmp(msg->text, expected) && msg->out == bool((i + 5) % 2));
+  }
+  const HistoryMessage* absent = nullptr;
+  assert(!history.get(history.count(), absent));
+  assert(primary.files.size() == 1 && sd.files.size() == 2);
+
+  const std::string direct_path = std::string(HISTORY_DIR_DIRECT) + "/" + std::string(64, '0');
+  auto direct = sd.files.at(direct_path);
+  direct->no_progress = true;
+  direct->reads = 0;
+  store.loadMessages(key, false, history);
+  assert(direct->reads == 1 && history.count() == 0);
+  sd.fail_open = true;
+  store.storeMessage(key, "write failure", true, false);
+  store.loadMessages(key, false, history);
+  assert(history.count() == 0);
+}
+'''
+
+MESH_HARNESS = r'''
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#define MAX_HASH_SIZE 8
+#define PAYLOAD_TYPE_GRP_TXT 5
+namespace mesh {
+struct GroupChannel { uint8_t secret[32] = {}; };
+struct Packet {
+  uint8_t type, value;
+  uint8_t getPayloadType() const { return type; }
+  void calculatePacketHash(uint8_t* hash) const { memset(hash, value, MAX_HASH_SIZE); }
+};
+}
+struct Store {
+  unsigned writes = 0;
+  void storeMessage(const uint8_t*, const char*, bool, bool) { ++writes; }
+};
+struct MyMesh {
+  bool admit = true;
+  unsigned base_loops = 0;
+  uint32_t now = 0;
+  bool sendFloodScoped(const mesh::GroupChannel&, mesh::Packet* pkt, uint32_t) {
+    if (!admit || !pkt) { delete pkt; return false; }
+    return true;
+  }
+  bool sendGroupMessage(uint32_t, mesh::GroupChannel&, const char*, const char*, int) { return admit; }
+  void loop() { ++base_loops; }
+  bool millisHasNowPassed(unsigned long at) const { return int32_t(now - at) > 0; }
+};
+struct CardputerMesh : MyMesh {
+  Store store;
+  Store* _store = &store;
+  uint8_t last_message_hash[MAX_HASH_SIZE] = {};
+  uint16_t last_message_heard_repeats = 9;
+  unsigned long resend_timeout = 0;
+  unsigned resends = 0;
+  bool sendFloodScoped(const mesh::GroupChannel&, mesh::Packet*, uint32_t);
+  bool sendGroupMessage(uint32_t, mesh::GroupChannel&, const char*, const char*, int);
+  void checkResend() { ++resends; }
+  void loop();
+};
+@METHODS@
+int main() {
+  CardputerMesh node;
+  mesh::GroupChannel channel;
+  node.admit = false;
+  assert(!node.sendFloodScoped(channel, new mesh::Packet{PAYLOAD_TYPE_GRP_TXT, 42}, 0));
+  assert(node.last_message_hash[0] == 0 && node.last_message_heard_repeats == 9);
+  assert(!node.sendGroupMessage(0, channel, "name", "text", 4) && node.store.writes == 0);
+  node.admit = true;
+  auto* group = new mesh::Packet{PAYLOAD_TYPE_GRP_TXT, 77};
+  assert(node.sendFloodScoped(channel, group, 0));
+  for (uint8_t byte : node.last_message_hash) assert(byte == 77);
+  assert(node.last_message_heard_repeats == 0);
+  delete group;
+  node.last_message_heard_repeats = 3;
+  auto* other = new mesh::Packet{1, 66};
+  assert(node.sendFloodScoped(channel, other, 0));
+  assert(node.last_message_hash[0] == 77 && node.last_message_heard_repeats == 3);
+  delete other;
+  assert(node.sendGroupMessage(0, channel, "name", "text", 4) && node.store.writes == 1);
+  node.resend_timeout = 10;
+  node.now = 9;
+  node.loop();
+  assert(node.base_loops == 1 && node.resends == 0);
+  node.now = 11;
+  node.loop();
+  assert(node.base_loops == 2 && node.resends == 1 && node.resend_timeout == 0);
+  node.loop();
+  assert(node.base_loops == 3 && node.resends == 1);
+}
+'''
+
+ACK_HARNESS = r'''
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#define PUB_KEY_SIZE 32
+enum MessageSendState { MESSAGE_SENDING, MESSAGE_DELIVERED, MESSAGE_FAILED };
+struct ContactInfo { struct { uint8_t pub_key[PUB_KEY_SIZE] = {}; } id; };
+struct MyMesh {
+  unsigned base_calls = 0;
+  bool base_owned = false;
+  ContactInfo base_peer;
+  bool processAck(const uint8_t*, ContactInfo*& peer) {
+    ++base_calls;
+    peer = base_owned ? &base_peer : nullptr;
+    return base_owned;
+  }
+};
+struct UI {
+  unsigned notifications = 0;
+  void onMessageSendAttempt(uint8_t, uint8_t, MessageSendState state) {
+    assert(state == MESSAGE_DELIVERED);
+    ++notifications;
+  }
+};
+struct CardputerMesh : MyMesh {
+  struct {
+    MessageSendState state = MESSAGE_SENDING;
+    uint32_t expected_ack = 123;
+    uint8_t attempt = 1, total_attempts = 3;
+    ContactInfo recipient;
+  } last_msg;
+  UI ui;
+  UI* _ui = &ui;
+  unsigned long resend_timeout = 100;
+  ContactInfo accepted_peer;
+  bool contact_present = true;
+  unsigned lookups = 0;
+  ContactInfo* lookupContactByPubKey(const uint8_t* key, size_t len) {
+    ++lookups;
+    assert(len == PUB_KEY_SIZE);
+    assert(!memcmp(key, last_msg.recipient.id.pub_key, PUB_KEY_SIZE));
+    return contact_present ? &accepted_peer : nullptr;
+  }
+  bool processAck(const uint8_t*, ContactInfo*&);
+};
+@METHOD@
+int main() {
+  CardputerMesh node;
+  uint32_t ack = 123;
+  ContactInfo* peer = nullptr;
+  assert(node.processAck(reinterpret_cast<const uint8_t*>(&ack), peer));
+  assert(node.base_calls == 1 && node.lookups == 1 && peer == &node.accepted_peer);
+  assert(node.last_msg.state == MESSAGE_DELIVERED && node.last_msg.expected_ack == 0);
+  assert(node.resend_timeout == 0 && node.ui.notifications == 1);
+  assert(!node.processAck(reinterpret_cast<const uint8_t*>(&ack), peer));
+  assert(node.base_calls == 2 && node.ui.notifications == 1 && peer == nullptr);
+
+  CardputerMesh unrelated;
+  ack = 456;
+  assert(!unrelated.processAck(reinterpret_cast<const uint8_t*>(&ack), peer));
+  assert(unrelated.resend_timeout == 100 && unrelated.ui.notifications == 0 && unrelated.lookups == 0);
+  unrelated.base_owned = true;
+  assert(unrelated.processAck(reinterpret_cast<const uint8_t*>(&ack), peer));
+  assert(peer == &unrelated.base_peer && unrelated.base_calls == 2);
+  assert(unrelated.last_msg.state == MESSAGE_SENDING && unrelated.resend_timeout == 100);
+
+  CardputerMesh shared;
+  shared.base_owned = true;
+  ack = 123;
+  assert(shared.processAck(reinterpret_cast<const uint8_t*>(&ack), peer));
+  assert(peer == &shared.base_peer && shared.lookups == 0 && shared.ui.notifications == 1);
+
+  CardputerMesh removed;
+  removed.contact_present = false;
+  assert(removed.processAck(reinterpret_cast<const uint8_t*>(&ack), peer));
+  assert(peer == nullptr && removed.lookups == 1 && removed.resend_timeout == 0);
+
+  CardputerMesh no_ack;
+  no_ack.last_msg.expected_ack = 0;
+  ack = 0;
+  assert(!no_ack.processAck(reinterpret_cast<const uint8_t*>(&ack), peer));
+  assert(no_ack.last_msg.state == MESSAGE_SENDING && no_ack.resend_timeout == 100);
+  assert(no_ack.ui.notifications == 0 && no_ack.lookups == 0);
+}
+'''
+
+
+class CardputerMeshStorageTests(unittest.TestCase):
+    def run_cpp(self, source, *, headers=None, flags=(), fails=False):
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        if not compiler:
+            self.skipTest("A host C++ compiler is required")
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            for name, content in (headers or {}).items():
+                (work / name).write_text(content, encoding="ascii")
+            program = work / "test.cpp"
+            program.write_text(source, encoding="ascii")
+            executable = work / "test"
+            built = subprocess.run([
+                compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-O1", "-g",
+                "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-pie", "-no-pie",
+                "-I", str(work), "-I", str(VARIANT), *flags, str(program), "-o", str(executable),
+            ], text=True, capture_output=True, timeout=60)
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            env = dict(os.environ, ASAN_OPTIONS="detect_leaks=1:halt_on_error=1",
+                       UBSAN_OPTIONS="halt_on_error=1")
+            result = subprocess.run([str(executable)], text=True, capture_output=True, env=env, timeout=10)
+            if fails:
+                self.assertNotEqual(result.returncode, 0, "negative control unexpectedly passed")
+            else:
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def storage_source(self):
+        source = (VARIANT / "CardputerDataStore.cpp").read_text()
+        return source + STORAGE_CHECKS
+
+    def mesh_source(self):
+        source = (VARIANT / "companion_radio/CardputerMesh.cpp").read_text()
+        methods = "\n".join(body(source, signature) for signature in (
+            "bool CardputerMesh::sendFloodScoped(", "bool CardputerMesh::sendGroupMessage(",
+            "void CardputerMesh::loop()"))
+        return MESH_HARNESS.replace("@METHODS@", methods)
+
+    def test_history_storage_and_faults(self):
+        self.run_cpp(self.storage_source(), headers={"DataStore.h": FILESYSTEM_STUB})
+
+    def test_history_source_bound_negative_control(self):
+        source = self.storage_source().replace(
+            "msg_len < MAX_MESSAGE_LENGTH && text[msg_len] != '\\0'",
+            "text[msg_len] != '\\0' && msg_len < MAX_MESSAGE_LENGTH")
+        self.assertNotEqual(source, self.storage_source())
+        self.run_cpp(source, headers={"DataStore.h": FILESYSTEM_STUB}, fails=True)
+
+    def test_sd_no_progress_negative_control(self):
+        source = self.storage_source().replace("    if (bytesRead <= 0) {\n      break;\n    }\n", "")
+        self.assertNotEqual(source, self.storage_source())
+        self.run_cpp(source, headers={"DataStore.h": FILESYSTEM_STUB}, fails=True)
+
+    def test_group_admission_and_packet_ownership(self):
+        self.run_cpp(self.mesh_source())
+
+    def test_cardputer_ack_ownership_preserves_base_processing(self):
+        source = (VARIANT / "companion_radio/CardputerMesh.cpp").read_text()
+        self.run_cpp(ACK_HARNESS.replace("@METHOD@", body(source, "bool CardputerMesh::processAck(")))
+
+    def test_packet_ownership_negative_control(self):
+        source = self.mesh_source().replace(
+            "  if (sent && is_group_text) {",
+            "  if (pkt->getPayloadType() == PAYLOAD_TYPE_GRP_TXT) {")
+        self.assertNotEqual(source, self.mesh_source())
+        self.run_cpp(source, fails=True)
+
+    def test_main_loop_dispatch(self):
+        source = (ROOT / "examples/companion_radio/main.cpp").read_text()
+        dispatch = re.search(
+            r"#if CARDPUTER_ADV_UI\n  the_mesh_cp\.loop\(\);\n#else\n  the_mesh\.loop\(\);\n#endif",
+            source)
+        self.assertIsNotNone(dispatch)
+        harness = r'''
+#include <cassert>
+struct MyMesh { unsigned base_calls = 0; void loop() { ++base_calls; } };
+struct CardputerMesh : MyMesh { unsigned custom_calls = 0; void loop() { MyMesh::loop(); ++custom_calls; } };
+CardputerMesh the_mesh_cp;
+MyMesh& the_mesh = the_mesh_cp;
+int main() {
+@DISPATCH@
+  assert(the_mesh.base_calls == 1);
+  assert(the_mesh_cp.custom_calls == CARDPUTER_ADV_UI);
+}
+'''.replace("@DISPATCH@", dispatch.group())
+        for enabled in (0, 1):
+            with self.subTest(cardputer=enabled):
+                self.run_cpp(harness, flags=(f"-DCARDPUTER_ADV_UI={enabled}",))
+
+
+if __name__ == "__main__":
+    unittest.main()

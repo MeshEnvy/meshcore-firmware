@@ -5163,6 +5163,9 @@ collect_build_artifacts() {
   python3 scripts/package_pocket_gui_license.py collect "$build_output_dir" \
     --stem "${OUTPUT_DIR}/${firmware_filename}" || return $?
 
+  python3 scripts/package_cardputer_license.py collect "$build_output_dir" \
+    --stem "${OUTPUT_DIR}/${firmware_filename}" || return $?
+
   if [ -n "${MESHCORE_NRF52_EMBED_BOOTLOADER:-}" ]; then
     python3 scripts/qualify_nrf52_embedded_bootloader.py "$build_output_dir" \
       "${OUTPUT_DIR}/${firmware_filename}.capabilities.json" || return $?

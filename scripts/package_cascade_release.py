@@ -20,6 +20,7 @@ from check_nrf52_uf2 import check_uf2
 from package_nrf52_font_license import validate_artifact_notice
 from package_meshtext_license import validate_artifact_notice as validate_meshtext_notice
 from package_pocket_gui_license import validate_artifact_notice as validate_pocket_gui_notice
+from package_cardputer_license import validate_artifact_notice as validate_cardputer_notice
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -315,6 +316,9 @@ def collect_artifacts(directory, version):
         pocket_gui_notice = validate_pocket_gui_notice(directory / stem)
         if pocket_gui_notice is not None:
             files.append(pocket_gui_notice)
+        cardputer_notice = validate_cardputer_notice(directory / stem)
+        if cardputer_notice is not None:
+            files.append(cardputer_notice)
         manifest["runtime_ram"] = {key: memory[key] for key in (
             "passed", "available_internal_bytes", "required_heap_bytes", "elf_sha256")}
         accounted.update(files)

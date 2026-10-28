@@ -1195,6 +1195,10 @@ private:
 MyMesh& companionMeshInstance();
 // Keep the shared UI/CLI lvalue interface; the accessor never allocates.
 #define the_mesh companionMeshInstance()
+#elif CARDPUTER_ADV_UI
+// The Cardputer-Adv UI owns a MyMesh subclass (variants/m5stack_cardputer_adv).
+MyMesh& cardputerMeshInstance();
+#define the_mesh cardputerMeshInstance()
 #else
 extern MyMesh the_mesh;
 #endif
