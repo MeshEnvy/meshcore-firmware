@@ -1,7 +1,12 @@
 {
   "schema": 1,
   "profiles": [
-    "wio-e5-mini_repeater"
+    "wio-e5-mini_repeater",
+    "RAK_4631_companion_radio_full",
+    "RAK_3x72_companion_radio_usb",
+    "wio-e5-mini_companion_radio_usb",
+    "wio-e5_companion_radio_usb",
+    "Tiny_Relay_companion_radio_usb"
   ],
   "messages": [
     {
@@ -583,6 +588,271 @@
       "file": "src/helpers/StorageLayout.cpp",
       "verbose": "Error: use get storage.layout",
       "concise": "Error: get storage.layout"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use set radio.rxps.rfrx_disabled on|off",
+      "concise": "set radio.rxps.rfrx_disabled on|off"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "CAD changed but save failed",
+      "concise": "CAD changed; save failed"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use set radio.cad timings <auto|100-3500> <auto|1-60000> <auto|1-60000>",
+      "concise": "set radio.cad timings <auto|100-3500> <auto|1-60000> <auto|1-60000>"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "CAD scan timing is unsupported",
+      "concise": "CAD scan timing unsupported"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "CAD timings changed but save failed",
+      "concise": "CAD timings changed; save failed"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use set radio.cad <on|off> or set radio.cad timings <scan_ms|auto> <retry_ms|auto> <max_ms|auto>",
+      "concise": "set radio.cad <on|off>; set radio.cad timings <scan_ms|auto> <retry_ms|auto> <max_ms|auto>"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "Error: use get tx.%s or set tx.%s auto|radio|radio2|both|off",
+      "concise": "Error: get tx.%s; set tx.%s auto|radio|radio2|both|off"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "Error: tx.%s was not saved",
+      "concise": "Error: tx.%s not saved"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "Error: use get/set tx.%s <name|%s> [auto|radio|radio2|both|off]",
+      "concise": "Error: get/set tx.%s <name|%s> [auto|radio|radio2|both|off]"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "storage unavailable; TX routing not saved",
+      "concise": "storage unavailable; TX route not saved"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "key: needs 12-64 hexadecimal digits (whole bytes)",
+      "concise": "key: 12-64 hex digits (whole bytes)"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "prefix controls routing; rename channel",
+      "concise": "prefix sets routing; rename channel"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "GPS sync interval must be 1..336 hours",
+      "concise": "GPS sync interval 1..336 hours"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "GPS sync interval could not be saved",
+      "concise": "GPS sync interval not saved"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use set gps on|off",
+      "concise": "set gps on|off"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "GPS could not be saved",
+      "concise": "GPS not saved"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use set usb.debug <on|off>",
+      "concise": "set usb.debug <on|off>"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "USB debug setting could not be saved",
+      "concise": "USB debug setting not saved"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use set usb.logging <on|off|stream> [reboot]",
+      "concise": "set usb.logging <on|off|stream> [reboot]"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "USB logging changed for this boot but save failed",
+      "concise": "USB logging changed for this boot; save failed"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use set radio.rxgain on|off",
+      "concise": "set radio.rxgain on|off"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use set radio.fem.rxgain on|off",
+      "concise": "set radio.fem.rxgain on|off"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use set radio.fem.txgain on|off",
+      "concise": "set radio.fem.txgain on|off"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "touchscreen diagnostics unsupported",
+      "concise": "touch diagnostics unsupported"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use set display.touch on|off",
+      "concise": "set display.touch on|off"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "touchscreen diagnostics unavailable",
+      "concise": "touch diagnostics unavailable"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "display rotation is unsupported",
+      "concise": "display rotation unsupported"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use set display.rotation <0|90|180|270>",
+      "concise": "set display.rotation <0|90|180|270>"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "display rotation changed but save failed",
+      "concise": "display rotation changed; save failed"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use set bluetooth.name <name|default>",
+      "concise": "set bluetooth.name <name|default>"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use set bluetooth.mac <address|random|random-every-boot|random-after-connect|default>",
+      "concise": "set bluetooth.mac <address|random|random-every-boot|random-after-connect|default>"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "invalid preamble",
+      "concise": "bad preamble"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "Error: name could not be saved",
+      "concise": "Error: name not saved"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "Error: setting could not be saved",
+      "concise": "Error: setting not saved"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "Error: Bluetooth name must be 1-%u valid UTF-8 bytes without control characters",
+      "concise": "Error: Bluetooth name: 1-%u valid UTF-8 bytes, no control chars"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use a random-static address (first byte C0-FF), random, random-every-boot, random-after-connect, or default",
+      "concise": "random-static address (first byte C0-FF)|random|random-every-boot|random-after-connect|default"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use set bluetooth.stealth on|off",
+      "concise": "set bluetooth.stealth on|off"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use set powersaving on|off",
+      "concise": "set powersaving on|off"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "power saving could not be saved",
+      "concise": "power saving not saved"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use off, level 1-10, or RX_US SLEEP_US",
+      "concise": "off | level 1-10 | RX_US SLEEP_US"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "Error: level must be 1-10",
+      "concise": "Error: level 1-10"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "could not save DM setting",
+      "concise": "DM setting not saved"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "use fleet send <channel> [all|key|region:name|home:name|gps:lat,lon:km[;target...]] <command>",
+      "concise": "fleet send <channel> [all|key|region:name|home:name|gps:lat,lon:km[;target...]] <command>"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "invalid fleet channel index",
+      "concise": "bad fleet channel index"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "targets: all, 8/12/64-hex keys, region names, home:name or gps:lat,lon:km; semicolon-separated",
+      "concise": "targets: all|8/12/64-hex keys|region names|home:name|gps:lat,lon:km; semicolon-separated"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "fleet channel is not configured",
+      "concise": "fleet channel not configured"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "set the Companion clock before fleet send",
+      "concise": "set Companion clock before fleet send"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "wait for the next clock second before fleet send",
+      "concise": "wait for next clock second before fleet send"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "fleet targets and command exceed two packets; use fewer targets",
+      "concise": "fleet targets+command exceed two packets; use fewer targets"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "could not queue fleet command",
+      "concise": "fleet command not queued"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "invalid radio params",
+      "concise": "bad radio params"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "frequency must be 150-2500 MHz",
+      "concise": "frequency 150-2500 MHz"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "Error, must be from -12 to +14",
+      "concise": "Error, -12 to +14"
     }
   ],
   "noncompact_tokens_sha256": {
@@ -593,6 +863,7 @@
     "src/helpers/PowerSavingDiagnostics.h": "18b78f5780046ea8c772c4ce6c337741ae0c027039d9399c94c5f4205d114000",
     "src/helpers/FloodAdvertCLI.h": "0f378e4d0f6c3b9b79991068a4b4208139484d2144ee1d7c5094d39043463be4",
     "src/helpers/LedSettings.cpp": "df0681234ca1337148ad59caa935857bc692f98bf18603ca6d099c0382028400",
-    "src/helpers/StorageLayout.cpp": "5dd1c8bcbe2902e1f22d14f9ab425465bdc38926fae23989987d850b484cbb18"
+    "src/helpers/StorageLayout.cpp": "5dd1c8bcbe2902e1f22d14f9ab425465bdc38926fae23989987d850b484cbb18",
+    "examples/companion_radio/MyMesh.cpp": "4ed72908fa1b986edb27c7a74acaccd5fda212c68f2f41537692739c040bb392"
   }
 }

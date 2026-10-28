@@ -4,7 +4,11 @@
 // replies, protocol acknowledgements, destructive and rollback warnings keep
 // their exact text.
 #ifndef MESH_CLI_COMPACT_REPLIES
+#if defined(MESH_CLI_COMPACT_REPLIES_DEFAULT)
+#define MESH_CLI_COMPACT_REPLIES MESH_CLI_COMPACT_REPLIES_DEFAULT
+#else
 #define MESH_CLI_COMPACT_REPLIES 0
+#endif
 #endif
 
 #if MESH_CLI_COMPACT_REPLIES

@@ -1,3 +1,4 @@
+#include <helpers/CLIReplyText.h>
 #include <helpers/RegulatorSettings.h>
 #if defined(USE_LR2021)
 #include <helpers/radiolib/LR2021CalibrationSettings.h>
@@ -3663,7 +3664,7 @@ MyMesh::RadioSettingResult MyMesh::applyAndSaveRadioParams(
 
 bool MyMesh::applyRxPowerSavingRfRxDisabled(const char* value, char* reply, size_t capacity) {
   if (strcmp(value, "on") && strcmp(value, "off")) {
-    mesh::cli::formatError(reply, capacity, "use set radio.rxps.rfrx_disabled on|off");
+    mesh::cli::formatError(reply, capacity, MESH_CLI_REPLY_TEXT("use set radio.rxps.rfrx_disabled on|off", "set radio.rxps.rfrx_disabled on|off"));
   } else if (!radio_driver.supportsRxPowerSavingRfRxDisable()) {
     mesh::cli::formatError(reply, capacity, "unsupported");
   } else {
@@ -3861,7 +3862,7 @@ bool MyMesh::handleCadCommand(const char* command, char* reply,
     if (!savePrefs()) {
       _prefs.cad_enabled = previous;
       if (_radio_available) _radio->setCADEnabled(previous != 0);
-      mesh::cli::formatError(reply, reply_size, "CAD changed but save failed");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("CAD changed but save failed", "CAD changed; save failed"));
     } else {
       snprintf(reply, reply_size, "OK - radio.cad %s", value);
     }
@@ -3887,7 +3888,7 @@ bool MyMesh::handleCadCommand(const char* command, char* reply,
               mesh::CAD_SCAN_MAX_TIMEOUT_MS, scan_ms)
         || !parseCadTimingMillis(tokens[1], 1, 60000, retry_ms)
         || !parseCadTimingMillis(tokens[2], 1, 60000, max_ms)) {
-      mesh::cli::formatError(reply, reply_size, "use set radio.cad timings <auto|100-3500> <auto|1-60000> <auto|1-60000>");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("use set radio.cad timings <auto|100-3500> <auto|1-60000> <auto|1-60000>", "set radio.cad timings <auto|100-3500> <auto|1-60000> <auto|1-60000>"));
       return true;
     }
 
@@ -3895,7 +3896,7 @@ bool MyMesh::handleCadCommand(const char* command, char* reply,
     const uint16_t previous_retry = _prefs.cad_retry_delay_ms;
     const uint16_t previous_max = _prefs.cad_max_duration_ms;
     if (_radio_available && !radio_driver.setCADScanTimeoutMillis(scan_ms)) {
-      mesh::cli::formatError(reply, reply_size, "CAD scan timing is unsupported");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("CAD scan timing is unsupported", "CAD scan timing unsupported"));
       return true;
     }
     _prefs.cad_scan_timeout_ms = scan_ms;
@@ -3906,14 +3907,14 @@ bool MyMesh::handleCadCommand(const char* command, char* reply,
       _prefs.cad_retry_delay_ms = previous_retry;
       _prefs.cad_max_duration_ms = previous_max;
       if (_radio_available) radio_driver.setCADScanTimeoutMillis(previous_scan);
-      mesh::cli::formatError(reply, reply_size, "CAD timings changed but save failed");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("CAD timings changed but save failed", "CAD timings changed; save failed"));
     } else {
       snprintf(reply, reply_size, "OK - radio.cad timings saved");
     }
     return true;
   }
 
-  mesh::cli::formatError(reply, reply_size, "use set radio.cad <on|off> or set radio.cad timings <scan_ms|auto> <retry_ms|auto> <max_ms|auto>");
+  mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("use set radio.cad <on|off> or set radio.cad timings <scan_ms|auto> <retry_ms|auto> <max_ms|auto>", "set radio.cad <on|off>; set radio.cad timings <scan_ms|auto> <retry_ms|auto> <max_ms|auto>"));
   return true;
 }
 
@@ -3923,7 +3924,7 @@ bool MyMesh::handleTrafficRoutingCommand(const char* command, char* reply, size_
   if (!parsed.matched) return false;
   const char* kind = parsed.kind == mesh::companion::TrafficKind::Media ? "media" : "ssh";
   if (!parsed.valid) {
-    snprintf(reply, reply_size, "Error: use get tx.%s or set tx.%s auto|radio|radio2|both|off", kind, kind);
+    snprintf(reply, reply_size, MESH_CLI_REPLY_TEXT("Error: use get tx.%s or set tx.%s auto|radio|radio2|both|off", "Error: get tx.%s; set tx.%s auto|radio|radio2|both|off"), kind, kind);
     return true;
   }
   uint8_t& policy = parsed.kind == mesh::companion::TrafficKind::Media ? _prefs.tx_media : _prefs.tx_ssh;
@@ -3933,7 +3934,7 @@ bool MyMesh::handleTrafficRoutingCommand(const char* command, char* reply, size_
     // Even an unchanged value must have durable storage before we say saved.
     if (!savePrefs()) {
       policy = previous;
-      snprintf(reply, reply_size, "Error: tx.%s was not saved", kind);
+      snprintf(reply, reply_size, MESH_CLI_REPLY_TEXT("Error: tx.%s was not saved", "Error: tx.%s not saved"), kind);
       return true;
     }
   }
@@ -3976,13 +3977,13 @@ bool MyMesh::handleTxRoutingCommand(const char* command, char* reply, size_t rep
   if (!parsed.matched) return false;
   const char* kind = parsed.channel ? "channel" : "user";
   if (!parsed.valid) {
-    snprintf(reply, reply_size, "Error: use get/set tx.%s <name|%s> [auto|radio|radio2|both|off]",
+    snprintf(reply, reply_size, MESH_CLI_REPLY_TEXT("Error: use get/set tx.%s <name|%s> [auto|radio|radio2|both|off]", "Error: get/set tx.%s <name|%s> [auto|radio|radio2|both|off]"),
         kind, parsed.channel ? "index" : "key:hex");
     return true;
   }
   if (parsed.set && (!canMutateContacts()
       || (parsed.channel && _store->hasIncompleteChannelLoad()))) {
-    mesh::cli::formatError(reply, reply_size, "storage unavailable; TX routing not saved");
+    mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("storage unavailable; TX routing not saved", "storage unavailable; TX route not saved"));
     return true;
   }
 
@@ -4005,7 +4006,7 @@ bool MyMesh::handleTxRoutingCommand(const char* command, char* reply, size_t rep
     uint8_t key[32]; size_t key_bytes = 0;
     const bool by_key = !parsed.quoted && !strncmp(parsed.target, "key:", 4);
     if (by_key && !mesh::companion::parseTxRouteKey(parsed.target + 4, key, key_bytes)) {
-      mesh::cli::formatError(reply, reply_size, "key: needs 12-64 hexadecimal digits (whole bytes)");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("key: needs 12-64 hexadecimal digits (whole bytes)", "key: 12-64 hex digits (whole bytes)"));
       return true;
     }
     for (int i = MAX_ANON_CONTACTS; i < getTotalContactSlots(); ++i) {
@@ -4038,7 +4039,7 @@ bool MyMesh::handleTxRoutingCommand(const char* command, char* reply, size_t rep
       const auto alias = parseCompanionChannelAlias(channel.name);
       if (isAliasRadio2Defined()
           && (alias.kind == CompanionChannelKind::Radio2 || alias.kind == CompanionChannelKind::Meshtext)) {
-        mesh::cli::formatError(reply, reply_size, "prefix controls routing; rename channel");
+        mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("prefix controls routing; rename channel", "prefix sets routing; rename channel"));
         return true;
       }
       // Persist the app PSK, not the resolved wire-key copy used for reporting.
@@ -4056,7 +4057,7 @@ bool MyMesh::handleTxRoutingCommand(const char* command, char* reply, size_t rep
       }
     }
     if (!saved) {
-      mesh::cli::formatError(reply, reply_size, "storage unavailable; TX routing not saved");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("storage unavailable; TX routing not saved", "storage unavailable; TX route not saved"));
       return true;
     }
     policy = parsed.policy;
@@ -4233,11 +4234,11 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
   if (gps_sync_value) {
     uint16_t hours = 0;
     if (!mesh::gps::parseSyncIntervalHours(gps_sync_value, hours)) {
-      mesh::cli::formatError(reply, reply_size, "GPS sync interval must be 1..336 hours");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("GPS sync interval must be 1..336 hours", "GPS sync interval 1..336 hours"));
     } else if (sensors.getLocationProvider() == nullptr) {
       mesh::cli::formatError(reply, reply_size, "GPS unavailable");
     } else if (!savePreference(_prefs.gps_sync_interval_hours, hours)) {
-      mesh::cli::formatError(reply, reply_size, "GPS sync interval could not be saved");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("GPS sync interval could not be saved", "GPS sync interval not saved"));
     } else {
       sensors.applyGpsTimeSyncInterval(hours);
       snprintf(reply, reply_size, "OK - GPS sync interval %u hours (saved)", (unsigned)hours);
@@ -4254,7 +4255,7 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
   if (strncmp(command, "set gps ", 8) == 0) gps_value = command + 8;
   if (gps_value) {
     if (strcmp(gps_value, "on") != 0 && strcmp(gps_value, "off") != 0) {
-      mesh::cli::formatError(reply, reply_size, "use set gps on|off");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("use set gps on|off", "set gps on|off"));
       return true;
     }
     const bool enabled = strcmp(gps_value, "on") == 0;
@@ -4264,7 +4265,7 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
       if (setGpsEnabled(enabled)) {
         snprintf(reply, reply_size, "OK - GPS %s (saved)", enabled ? "on" : "off");
       } else {
-        mesh::cli::formatError(reply, reply_size, "GPS could not be saved");
+        mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("GPS could not be saved", "GPS not saved"));
       }
     }
     return true;
@@ -4362,11 +4363,11 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
     const char* value = command + 13;
     while (*value == ' ' || *value == '\t') value++;
     if (strcmp(value, "on") != 0 && strcmp(value, "off") != 0) {
-      mesh::cli::formatError(reply, reply_size, "use set usb.debug <on|off>");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("use set usb.debug <on|off>", "set usb.debug <on|off>"));
     } else {
       const uint8_t enabled = strcmp(value, "on") == 0 ? 1 : 0;
       if (!savePreference(_prefs.usb_debug_enabled, enabled)) {
-        mesh::cli::formatError(reply, reply_size, "USB debug setting could not be saved");
+        mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("USB debug setting could not be saved", "USB debug setting not saved"));
       } else {
         snprintf(reply, reply_size, "OK - USB debug %s (saved)%s",
                  enabled ? "on" : "off",
@@ -4406,12 +4407,12 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
     }
     if (!packet_stream
         && !mesh::cli::parseLoggingToggle(value, enabled, reboot_if_needed)) {
-      mesh::cli::formatError(reply, reply_size, "use set usb.logging <on|off|stream> [reboot]");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("use set usb.logging <on|off|stream> [reboot]", "set usb.logging <on|off|stream> [reboot]"));
     } else {
       _prefs.usb_logging_enabled = enabled ? (packet_stream ? 2 : 1) : 0;
       applyUsbLoggingState(enabled);
       if (!savePrefs()) {
-        mesh::cli::formatError(reply, reply_size, "USB logging changed for this boot but save failed");
+        mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("USB logging changed for this boot but save failed", "USB logging changed for this boot; save failed"));
       } else if (!mesh::saveUsbLoggingBootPreference(enabled)) {
         mesh::cli::formatError(reply, reply_size, "setting saved, but next-boot USB interface state could not be saved");
       } else {
@@ -4554,7 +4555,7 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
   if (strncmp(command, "set radio.rxgain ", 17) == 0) {
     const char* value = command + 17;
     if (strcmp(value, "on") != 0 && strcmp(value, "off") != 0) {
-      mesh::cli::formatError(reply, reply_size, "use set radio.rxgain on|off");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("use set radio.rxgain on|off", "set radio.rxgain on|off"));
     } else if (!radio_driver.supportsRxBoostedGainMode()) {
       mesh::cli::formatError(reply, reply_size, "unsupported");
     } else if (!applyAndSaveRxBoostedGain(strcmp(value, "on") == 0)) {
@@ -4578,7 +4579,7 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
   if (strncmp(command, "set radio.fem.rxgain ", 21) == 0) {
     const char* value = command + 21;
     if (strcmp(value, "on") != 0 && strcmp(value, "off") != 0) {
-      mesh::cli::formatError(reply, reply_size, "use set radio.fem.rxgain on|off");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("use set radio.fem.rxgain on|off", "set radio.fem.rxgain on|off"));
     } else if (_radio && (_radio->isMorseTxActive() || _radio->isMorseRxActive())) {
       mesh::cli::formatError(reply, reply_size, "stop Morse before changing LoRa FEM gain");
     } else if (!board.canControlLoRaFemLna()) {
@@ -4608,7 +4609,7 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
   if (strncmp(command, "set radio.fem.txgain ", 21) == 0) {
     const char* value = command + 21;
     if (strcmp(value, "on") != 0 && strcmp(value, "off") != 0) {
-      mesh::cli::formatError(reply, reply_size, "use set radio.fem.txgain on|off");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("use set radio.fem.txgain on|off", "set radio.fem.txgain on|off"));
     } else if (_radio && (_radio->isMorseTxActive() || _radio->isMorseRxActive())) {
       mesh::cli::formatError(reply, reply_size, "stop Morse before changing LoRa FEM gain");
     } else if (!board.canControlLoRaFemPaGain()) {
@@ -4641,7 +4642,7 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
 
   if (strcmp(command, "get display.touch") == 0) {
     if (_ui == NULL || !_ui->supportsTouchDebug()) {
-      mesh::cli::formatError(reply, reply_size, "touchscreen diagnostics unsupported");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("touchscreen diagnostics unsupported", "touch diagnostics unsupported"));
     } else {
       snprintf(reply, reply_size, "display.touch %s (off after reboot)",
                _ui->isTouchDebugEnabled() ? "on" : "off");
@@ -4653,11 +4654,11 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
     const char* value = command + 17;
     while (*value == ' ' || *value == '\t') value++;
     if (strcmp(value, "on") != 0 && strcmp(value, "off") != 0) {
-      mesh::cli::formatError(reply, reply_size, "use set display.touch on|off");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("use set display.touch on|off", "set display.touch on|off"));
     } else if (_ui == NULL || !_ui->supportsTouchDebug()) {
-      mesh::cli::formatError(reply, reply_size, "touchscreen diagnostics unsupported");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("touchscreen diagnostics unsupported", "touch diagnostics unsupported"));
     } else if (!_ui->setTouchDebugEnabled(strcmp(value, "on") == 0)) {
-      mesh::cli::formatError(reply, reply_size, "touchscreen diagnostics unavailable");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("touchscreen diagnostics unavailable", "touch diagnostics unavailable"));
     } else {
       snprintf(reply, reply_size, "OK - display.touch %s (off after reboot)", value);
     }
@@ -4672,7 +4673,7 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
 
   if (strcmp(command, "get display.rotation") == 0) {
     if (_ui == NULL || !_ui->supportsDisplayRotation()) {
-      mesh::cli::formatError(reply, reply_size, "display rotation is unsupported");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("display rotation is unsupported", "display rotation unsupported"));
     } else if (_prefs.display_rotation_degrees == 0) {
       snprintf(reply, reply_size, "display.rotation default");
     } else {
@@ -4694,9 +4695,9 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
         && (degrees == 0 || degrees == 90 || degrees == 180
             || degrees == 270);
     if (!valid) {
-      mesh::cli::formatError(reply, reply_size, "use set display.rotation <0|90|180|270>");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("use set display.rotation <0|90|180|270>", "set display.rotation <0|90|180|270>"));
     } else if (_ui == NULL || !_ui->supportsDisplayRotation()) {
-      mesh::cli::formatError(reply, reply_size, "display rotation is unsupported");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("display rotation is unsupported", "display rotation unsupported"));
     } else {
       const uint16_t previous = _prefs.display_rotation_degrees;
       if (!_ui->setDisplayRotationDegrees((uint16_t)degrees)) {
@@ -4706,7 +4707,7 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
         if (!savePrefs()) {
           _prefs.display_rotation_degrees = previous;
           _ui->setDisplayRotationDegrees(previous);
-          mesh::cli::formatError(reply, reply_size, "display rotation changed but save failed");
+          mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("display rotation changed but save failed", "display rotation changed; save failed"));
         } else if (degrees == 0) {
           snprintf(reply, reply_size,
                    "OK - display rotation reset to board default");
@@ -4740,7 +4741,7 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
       bluetooth_name_value++;
     }
     if (bluetooth_name_value[0] == 0) {
-      mesh::cli::formatError(reply, reply_size, "use set bluetooth.name <name|default>");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("use set bluetooth.name <name|default>", "set bluetooth.name <name|default>"));
     } else {
       const bool clear_override = strcmp(bluetooth_name_value, "default") == 0
           || strcmp(bluetooth_name_value, "clear") == 0;
@@ -4796,7 +4797,7 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
       bluetooth_mac_value++;
     }
     if (bluetooth_mac_value[0] == 0) {
-      mesh::cli::formatError(reply, reply_size, "use set bluetooth.mac <address|random|random-every-boot|random-after-connect|default>");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("use set bluetooth.mac <address|random|random-every-boot|random-after-connect|default>", "set bluetooth.mac <address|random|random-every-boot|random-after-connect|default>"));
     } else {
       applyAndSaveBluetoothMac(bluetooth_mac_value, reply, reply_size);
     }
@@ -5189,7 +5190,7 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
     char legacy[120];
     uint16_t preamble = 0;
     if (!mesh::RadioProfileCLI::parseSuffix(command + 10, 5, legacy, sizeof(legacy), preamble)) {
-      mesh::cli::formatError(reply, reply_size, "invalid preamble"); return true;
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("invalid preamble", "bad preamble")); return true;
     }
     float freq = 0.0f, bw = 0.0f;
     uint8_t sf = 0, cr = 0;
@@ -5795,7 +5796,7 @@ void MyMesh::execCommand(char* cmd, char* reply) {
     if (!value[0] || !wcCopyValue(name, sizeof(name), value)) {
       mesh::cli::formatError(reply, 160, "name must be 1-31 characters");
     } else {
-      strcpy(reply, saveAdvertName(name) ? "OK" : "Error: name could not be saved");
+      strcpy(reply, saveAdvertName(name) ? "OK" : MESH_CLI_REPLY_TEXT("Error: name could not be saved", "Error: name not saved"));
     }
     return;
   }
@@ -5871,7 +5872,7 @@ void MyMesh::execCommand(char* cmd, char* reply) {
     } else {
       strcpy(reply, savePreference(is_af ? _prefs.airtime_factor : _prefs.rx_delay_base,
                                    static_cast<float>(parsed))
-          ? "OK" : "Error: setting could not be saved");
+          ? "OK" : MESH_CLI_REPLY_TEXT("Error: setting could not be saved", "Error: setting not saved"));
     }
     return;
   }
@@ -8908,7 +8909,7 @@ bool MyMesh::applyAndSaveBluetoothName(const char* value, char* reply,
   const bool use_default = value == NULL || value[0] == 0;
   if (!use_default && !mesh::companion::isValidBluetoothName(value)) {
     snprintf(reply, reply_size,
-             "Error: Bluetooth name must be 1-%u valid UTF-8 bytes without control characters",
+             MESH_CLI_REPLY_TEXT("Error: Bluetooth name must be 1-%u valid UTF-8 bytes without control characters", "Error: Bluetooth name: 1-%u valid UTF-8 bytes, no control chars"),
              (unsigned)mesh::companion::BLUETOOTH_NAME_MAX_BYTES);
     return false;
   }
@@ -9102,7 +9103,7 @@ bool MyMesh::applyAndSaveBluetoothMac(const char* value, char* reply,
                                       size_t reply_size) {
   if (reply == NULL || reply_size == 0) return false;
   if (value == NULL) {
-    mesh::cli::formatError(reply, reply_size, "use set bluetooth.mac <address|random|random-every-boot|random-after-connect|default>");
+    mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("use set bluetooth.mac <address|random|random-every-boot|random-after-connect|default>", "set bluetooth.mac <address|random|random-every-boot|random-after-connect|default>"));
     return false;
   }
 
@@ -9138,7 +9139,7 @@ bool MyMesh::applyAndSaveBluetoothMac(const char* value, char* reply,
       while (*custom_value == ' ' || *custom_value == '\t') custom_value++;
     }
     if (!mesh::companion::parseBluetoothMac(custom_value, address)) {
-      mesh::cli::formatError(reply, reply_size, "use a random-static address (first byte C0-FF), random, random-every-boot, random-after-connect, or default");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("use a random-static address (first byte C0-FF), random, random-every-boot, random-after-connect, or default", "random-static address (first byte C0-FF)|random|random-every-boot|random-after-connect|default"));
       return false;
     }
     mode = mesh::companion::BLUETOOTH_MAC_CUSTOM;
@@ -9218,7 +9219,7 @@ bool MyMesh::applyAndSaveBluetoothStealth(const char* value, char* reply,
   if (reply == NULL || reply_size == 0) return false;
   if (value == NULL
       || (strcmp(value, "on") != 0 && strcmp(value, "off") != 0)) {
-    mesh::cli::formatError(reply, reply_size, "use set bluetooth.stealth on|off");
+    mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("use set bluetooth.stealth on|off", "set bluetooth.stealth on|off"));
     return false;
   }
 
@@ -9312,12 +9313,12 @@ bool MyMesh::applyAndSavePowerSaving(const char* value, char* reply) {
   } else if (strcmp(value, "off") == 0) {
     enabled = false;
   } else {
-    mesh::cli::formatError(reply, 160, "use set powersaving on|off");
+    mesh::cli::formatError(reply, 160, MESH_CLI_REPLY_TEXT("use set powersaving on|off", "set powersaving on|off"));
     return false;
   }
 
   if (!savePreference(_prefs.powersaving_enabled, static_cast<uint8_t>(enabled))) {
-    mesh::cli::formatError(reply, 160, "power saving could not be saved");
+    mesh::cli::formatError(reply, 160, MESH_CLI_REPLY_TEXT("power saving could not be saved", "power saving not saved"));
     return false;
   }
   sensors.setPowerSavingEnabled(enabled);
@@ -9457,7 +9458,7 @@ bool MyMesh::applyAndSaveRxPowerSaving(const char* value, char* reply) {
 
   mesh::cli::RxPowerSavingArguments parsed = {};
   if (!mesh::cli::parseRxPowerSavingArgumentsStrict(value, parsed)) {
-    mesh::cli::formatError(reply, 160, "use off, level 1-10, or RX_US SLEEP_US");
+    mesh::cli::formatError(reply, 160, MESH_CLI_REPLY_TEXT("use off, level 1-10, or RX_US SLEEP_US", "off | level 1-10 | RX_US SLEEP_US"));
     return false;
   }
 
@@ -9477,7 +9478,7 @@ bool MyMesh::applyAndSaveRxPowerSaving(const char* value, char* reply) {
   } else if (parsed.mode == mesh::cli::RxPowerSavingArgumentMode::Level) {
     if (parsed.level < 1 || parsed.level > 10) {
       strcpy(reply, parsed.preamble == 0
-          ? "Error: level must be 1-10"
+          ? MESH_CLI_REPLY_TEXT("Error: level must be 1-10", "Error: level 1-10")
           : "Error: level 1-10; preamble 16 or 32");
       return false;
     }
@@ -10997,7 +10998,7 @@ bool MyMesh::handleDirectCommand(const char* command, char* reply, size_t reply_
     _prefs.one_key_dm_enabled = strcmp(value, "on") == 0 ? 1 : 0;
     if (!savePrefs()) {
       _prefs.one_key_dm_enabled = old_value;
-      mesh::cli::formatError(reply, reply_size, "could not save DM setting");
+      mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("could not save DM setting", "DM setting not saved"));
     } else {
       snprintf(reply, reply_size, "> dm.one_key %s", value);
     }
@@ -11193,7 +11194,7 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
     while (*text == ' ' || *text == '\t') ++text;
     if (strncmp(text, "send", 4)
         || (text[4] != ' ' && text[4] != '\t')) {
-      mesh::cli::formatError(reply, reply_capacity, "use fleet send <channel> [all|key|region:name|home:name|gps:lat,lon:km[;target...]] <command>");
+      mesh::cli::formatError(reply, reply_capacity, MESH_CLI_REPLY_TEXT("use fleet send <channel> [all|key|region:name|home:name|gps:lat,lon:km[;target...]] <command>", "fleet send <channel> [all|key|region:name|home:name|gps:lat,lon:km[;target...]] <command>"));
       return true;
     }
     text += 4;
@@ -11204,14 +11205,14 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
       have_index = true;
       const uint8_t digit = *text++ - '0';
       if (channel_index > (0xFFFFFFFFUL - digit) / 10UL) {
-        mesh::cli::formatError(reply, reply_capacity, "invalid fleet channel index");
+        mesh::cli::formatError(reply, reply_capacity, MESH_CLI_REPLY_TEXT("invalid fleet channel index", "bad fleet channel index"));
         return true;
       }
       channel_index = channel_index * 10UL + digit;
     }
     if (!have_index || channel_index >= MAX_GROUP_CHANNELS
         || (*text != ' ' && *text != '\t')) {
-      mesh::cli::formatError(reply, reply_capacity, "invalid fleet channel index");
+      mesh::cli::formatError(reply, reply_capacity, MESH_CLI_REPLY_TEXT("invalid fleet channel index", "bad fleet channel index"));
       return true;
     }
     while (*text == ' ' || *text == '\t') ++text;
@@ -11223,7 +11224,7 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
       // A target list is one signed request; never admit a partial list.
       if (text[target_length] == 0
           || !mesh::FleetCommand::parseTargets(text, target_length, targets)) {
-        mesh::cli::formatError(reply, reply_capacity, "targets: all, 8/12/64-hex keys, region names, home:name or gps:lat,lon:km; semicolon-separated");
+        mesh::cli::formatError(reply, reply_capacity, MESH_CLI_REPLY_TEXT("targets: all, 8/12/64-hex keys, region names, home:name or gps:lat,lon:km; semicolon-separated", "targets: all|8/12/64-hex keys|region names|home:name|gps:lat,lon:km; semicolon-separated"));
         return true;
       }
       text += target_length;
@@ -11235,7 +11236,7 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
     }
     ChannelDetails channel;
     if (!getChannel((int)channel_index, channel) || !channel.name[0]) {
-      mesh::cli::formatError(reply, reply_capacity, "fleet channel is not configured");
+      mesh::cli::formatError(reply, reply_capacity, MESH_CLI_REPLY_TEXT("fleet channel is not configured", "fleet channel not configured"));
       return true;
     }
     bool padded_key = true;
@@ -11250,11 +11251,11 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
     static uint32_t last_fleet_sequence = 0;
     if (sequence < mesh::FleetCommand::MinEpoch
         || sequence > 0xFFFFFFFFUL - mesh::FleetCommand::MaxLifetime) {
-      mesh::cli::formatError(reply, reply_capacity, "set the Companion clock before fleet send");
+      mesh::cli::formatError(reply, reply_capacity, MESH_CLI_REPLY_TEXT("set the Companion clock before fleet send", "set Companion clock before fleet send"));
       return true;
     }
     if (sequence <= last_fleet_sequence) {
-      mesh::cli::formatError(reply, reply_capacity, "wait for the next clock second before fleet send");
+      mesh::cli::formatError(reply, reply_capacity, MESH_CLI_REPLY_TEXT("wait for the next clock second before fleet send", "wait for next clock second before fleet send"));
       return true;
     }
     uint8_t payload[mesh::FleetCommand::MaxEnvelopeLength];
@@ -11263,9 +11264,9 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
         sequence + mesh::FleetCommand::MaxLifetime, targets, text,
         payload, sizeof(payload));
     if (!length) {
-      mesh::cli::formatError(reply, reply_capacity, "fleet targets and command exceed two packets; use fewer targets");
+      mesh::cli::formatError(reply, reply_capacity, MESH_CLI_REPLY_TEXT("fleet targets and command exceed two packets; use fewer targets", "fleet targets+command exceed two packets; use fewer targets"));
     } else if (!sendFleetCommandData(channel.channel, payload, length)) {
-      mesh::cli::formatError(reply, reply_capacity, "could not queue fleet command");
+      mesh::cli::formatError(reply, reply_capacity, MESH_CLI_REPLY_TEXT("could not queue fleet command", "fleet command not queued"));
     } else {
       last_fleet_sequence = sequence;
       snprintf(reply, reply_capacity, "OK - fleet command queued; seq=%lu",
@@ -11288,7 +11289,7 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
     float f, bw; uint8_t sf, cr;
     if (!mesh::RadioProfileCLI::parseSuffix(command + 10, 4, legacy, sizeof(legacy), preamble)
         || !mesh::cli::parseRadioTupleStrict(legacy, f, bw, sf, cr)) {
-      mesh::cli::formatError(reply, reply_capacity, "invalid radio params"); return true;
+      mesh::cli::formatError(reply, reply_capacity, MESH_CLI_REPLY_TEXT("invalid radio params", "bad radio params")); return true;
     }
     if (!_radio_profiles.acceptsPrimary(f, bw, sf, cr, preamble)) {
       mesh::cli::formatError(reply, reply_capacity, "radio params unsupported"); return true;
@@ -11330,7 +11331,7 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
     float frequency;
     if (!mesh::cli::parseDecimalStrict(command + 9, frequency)
         || frequency < 150.0f || frequency > 2500.0f) {
-      mesh::cli::formatError(reply, reply_capacity, "frequency must be 150-2500 MHz");
+      mesh::cli::formatError(reply, reply_capacity, MESH_CLI_REPLY_TEXT("frequency must be 150-2500 MHz", "frequency 150-2500 MHz"));
     } else {
       const auto result = applyAndSaveRadioParams(frequency, _prefs.bw, _prefs.sf, _prefs.cr,
           _prefs.client_repeat, _radio_profiles.primaryPreamble(), sender_timestamp != 0);
@@ -11435,7 +11436,7 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
     if (!AdvertDataParser::isValidName(name)) {
       strcpy(reply, "Error, bad chars");
     } else {
-      strcpy(reply, saveAdvertName(name) ? "OK" : "Error: name could not be saved");
+      strcpy(reply, saveAdvertName(name) ? "OK" : MESH_CLI_REPLY_TEXT("Error: name could not be saved", "Error: name not saved"));
     }
     return true;
   }
@@ -11510,10 +11511,10 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
     float tz;
     if (!mesh::cli::parseDecimalStrict(command + 14, tz)
         || !mesh::companion::timezone::valid(tz)) {
-      strcpy(reply, "Error, must be from -12 to +14");
+      strcpy(reply, MESH_CLI_REPLY_TEXT("Error, must be from -12 to +14", "Error, -12 to +14"));
     } else {
       strcpy(reply, savePreference<float>(_prefs.tz_offset, tz)
-          ? "OK" : "Error: setting could not be saved");
+          ? "OK" : MESH_CLI_REPLY_TEXT("Error: setting could not be saved", "Error: setting not saved"));
     }
     return true;
   }

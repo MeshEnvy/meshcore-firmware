@@ -42,9 +42,12 @@ class CliReplyTextTests(unittest.TestCase):
             self.assertEqual(re.findall(r'\d+(?:\.\d+)?', old),
                              re.findall(r'\d+(?:\.\d+)?', new))
             self.assertFalse(old.startswith(('> ', '{', 'KEYBACKUP ', 'ACK')))
-            self.assertNotRegex(old.lower(),
+            self.assertNotRegex(old.lower().replace('[reboot]', ''),
                 r'host|replay|password|login|save unconfirmed|reboot|'
-                r'retained|default|warning|applying in|restore scheduled')
+                r'retained|warning|applying in|restore scheduled')
+            for protected in ('[reboot]', 'default'):
+                if protected in old:
+                    self.assertIn(protected, new)
             if 'unchanged' in old:
                 self.assertIn('sleep policy unchanged', old)
                 self.assertIn('sleep policy unchanged', new)
@@ -65,14 +68,14 @@ class CliReplyTextTests(unittest.TestCase):
             config = configparser.ConfigParser(interpolation=None, strict=False)
             config.read(path)
             for section in config.sections():
-                if re.search(r'-D\s*MESH_CLI_COMPACT_REPLIES=1\b',
+                if re.search(r'-D\s*MESH_CLI_COMPACT_REPLIES_DEFAULT=1\b',
                              config[section].get('build_flags', '')):
                     self.assertTrue(section.startswith('env:'), str(path))
                     enabled.append(section[4:])
         self.assertEqual(sorted(enabled), sorted(fixture['profiles']))
         header = (ROOT / 'src/helpers/CLIReplyText.h').read_text()
-        self.assertIn('#ifndef MESH_CLI_COMPACT_REPLIES\n'
-                      '#define MESH_CLI_COMPACT_REPLIES 0', header)
+        self.assertIn('#ifndef MESH_CLI_COMPACT_REPLIES\n', header)
+        self.assertIn('#define MESH_CLI_COMPACT_REPLIES 0', header)
 
     def test_actual_header_selects_exact_text_without_a_runtime_lookup(self):
         compiler = os.environ.get('CXX') or shutil.which('g++') or shutil.which('clang++')
@@ -88,8 +91,14 @@ class CliReplyTextTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='cli-reply-text-') as folder:
             work = Path(folder)
             (work / 'test.cpp').write_text(source)
-            for flag, key in ((None, 'verbose'), (0, 'verbose'), (1, 'concise')):
-                flags = [] if flag is None else ['-DMESH_CLI_COMPACT_REPLIES='+str(flag)]
+            for flags, key in (([], 'verbose'),
+                    (['-DMESH_CLI_COMPACT_REPLIES=0'], 'verbose'),
+                    (['-DMESH_CLI_COMPACT_REPLIES=1'], 'concise'),
+                    (['-DMESH_CLI_COMPACT_REPLIES_DEFAULT=1'], 'concise'),
+                    (['-DMESH_CLI_COMPACT_REPLIES_DEFAULT=1',
+                      '-DMESH_CLI_COMPACT_REPLIES=0'], 'verbose'),
+                    (['-DMESH_CLI_COMPACT_REPLIES_DEFAULT=0',
+                      '-DMESH_CLI_COMPACT_REPLIES=1'], 'concise')):
                 built = subprocess.run([compiler, '-std=c++11', '-Os', '-Wall', '-Wextra',
                     '-Werror', *flags, '-I'+str(ROOT / 'src/helpers'),
                     str(work / 'test.cpp'), '-o', str(work / 'test')], capture_output=True)
@@ -98,7 +107,7 @@ class CliReplyTextTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
                 self.assertEqual(result.stdout.decode().splitlines(),
                                  [row[key] for row in messages])
-                if flag == 1:
+                if key == 'concise':
                     image = (work / 'test').read_bytes()
                     selected = {row['concise'] for row in messages}
                     for row in messages:
