@@ -94,6 +94,16 @@ static void grammar() {
     assert(!companionChannelRadio2Preset(name));
   }
   assert(!companionChannelRadio2Preset(nullptr));
+  for (const char* prefix : {"", "#", "r2-", "#r2-", "mt-", "#mt-", "r2-r2-", "#r2-mt-"}) {
+    for (const char* tail : {"", "r", "r2", "#", "mediamesh", "mediamesh-range",
+                             "MediaMesh", "mediamesh-extra", "mediamesh,32"}) {
+      char name[64]; snprintf(name, sizeof(name), "%s%s", prefix, tail);
+      const auto alias = parseCompanionChannelAlias(name);
+      const char* expected = alias.kind == CompanionChannelKind::Radio2
+          && mesh::cli::radio2PresetTuple(alias.tail) ? alias.tail : nullptr;
+      assert(companionChannelRadio2Preset(name) == expected);
+    }
+  }
   puts("PASS grammar");
 }
 static void canonical() {

@@ -1785,7 +1785,7 @@ bool MyMesh::resolveChannelAlias(ChannelDetails& channel) const {
       })) return false;
   const auto kind = parseCompanionChannelAlias(channel.name).kind;
 #if MESH_ENABLE_MESHTEXT_CHAT
-  if (isMeshtextChannel(channel)) channel.channel.tx_radio = mesh::RADIO_TX_OFF;
+  if (kind == CompanionChannelKind::Meshtext) channel.channel.tx_radio = mesh::RADIO_TX_OFF;
 #endif
   if (isAliasRadio2Defined()
       && (kind == CompanionChannelKind::Radio2 || kind == CompanionChannelKind::Meshtext)) {

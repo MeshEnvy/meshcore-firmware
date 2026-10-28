@@ -259,7 +259,7 @@ def compile_packed_help(build_env, node):
     return build_env.Object(node, **flags)
 
 
-def _compile_shared_reply_copies(build_env, node, relative_path):
+def _compile_shared_reply_copies(build_env, node, relative_path, extra_flags=()):
     source = Path(node.srcnode().get_abspath()).resolve()
     expected = Path(build_env.subst("$PROJECT_DIR/" + relative_path)).resolve()
     if source != expected:
@@ -267,8 +267,9 @@ def _compile_shared_reply_copies(build_env, node, relative_path):
     # GCC otherwise expands many constant strcpy replies into repeated stores.
     # Use the same libc function and strings, with no parser or output changes.
     flags = list(build_env.get("CCFLAGS", ()))
-    if "-fno-builtin-strcpy" not in flags:
-        flags.append("-fno-builtin-strcpy")
+    for flag in ("-fno-builtin-strcpy", *extra_flags):
+        if flag not in flags:
+            flags.append(flag)
     return build_env.Object(node, CCFLAGS=flags)
 
 
@@ -278,7 +279,8 @@ def compile_shared_cli_replies(build_env, node):
 
 
 def compile_shared_companion_replies(build_env, node):
-    return _compile_shared_reply_copies(build_env, node, "examples/companion_radio/MyMesh.cpp")
+    return _compile_shared_reply_copies(build_env, node, "examples/companion_radio/MyMesh.cpp",
+                                       ("-fno-builtin-strncpy",))
 
 
 def companion_shared_replies_policy(platform, mcu, env_name, src_filter,
