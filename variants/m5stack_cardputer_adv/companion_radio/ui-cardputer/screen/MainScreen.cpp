@@ -92,6 +92,7 @@ void MainScreen::renderStatusIcons(CardputerDisplay &lcd) {
 }
 
 int MainScreen::render(CardputerDisplay &lcd) {
+  if (_task->isChatVisible()) static_cast<ChatPage *>(chat_page)->markRead(unread);
   lcd.setTextSize(1);
 
   renderStatusIcons(lcd);
@@ -139,12 +140,20 @@ void MainScreen::messageRepeatsRecv(uint16_t count) {
   }
 }
 
-void MainScreen::onChannelMessageRecv(const mesh::GroupChannel &channel, const char *text) {
-  bool to_selected = static_cast<ChatPage *>(chat_page)->onChannelMessageRecv(channel, text);
+void MainScreen::onChannelMessageRecv(uint8_t channel_idx, const uint8_t history_id[32], const char *text) {
+  bool to_selected = static_cast<ChatPage *>(chat_page)->onChannelMessageRecv(channel_idx, history_id, text);
 
   if (!to_selected) {
-    unread.addChannel(channel.secret, 1);
+    unread.addChannel(history_id, 1);
   }
+}
+
+void MainScreen::onChannelMessageSent(uint8_t channel_idx, const uint8_t history_id[32], const char *text) {
+  static_cast<ChatPage *>(chat_page)->onChannelMessageSent(channel_idx, history_id, text);
+}
+
+void MainScreen::onContactMessageSent(const ContactInfo &contact, const char *text) {
+  static_cast<ChatPage *>(chat_page)->onContactMessageSent(contact, text);
 }
 
 void MainScreen::onContactMessageRecv(const ContactInfo &contact, const char *text) {
@@ -244,9 +253,11 @@ void MainScreen::selectContact(ContactInfo &contact, int idx) {
 }
 
 void MainScreen::selectChannel(const ChannelDetails &channel, int idx) {
+  uint8_t history_id[PUB_KEY_SIZE];
+  if (!CardputerMesh::channelHistoryId(channel, history_id)) return;
   setCurrentPage(MainScreenPage::CHAT);
   page_to_return = MainScreenPage::CHANNELS;
-  unread.resetChannel(channel.channel.secret);
+  unread.resetChannel(history_id);
 
   static_cast<ChatPage *>(chat_page)->selectChannel(channel, idx);
 }

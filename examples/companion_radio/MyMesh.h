@@ -393,7 +393,10 @@ protected:
   // Run after the shared duplicate/retention checks, including room posts and
   // Meshtext. Variant history must not bypass the Companion delivery policy.
   virtual void onUiContactMessage(const ContactInfo&, const char*) {}
-  virtual void onUiChannelMessage(const uint8_t[32], const char*) {}
+  virtual void onUiChannelMessage(uint8_t, const char*) {}
+  virtual void onUiContactMessageSent(const ContactInfo&, const char*) {}
+  virtual void onUiChannelMessageSent(uint8_t, const char*, size_t) {}
+  void syncUiNotificationSettings();
 #endif
 #if COMPANION_FEATURE_TEMP_RADIO
   bool isTempRadioActive() const override {
@@ -618,6 +621,10 @@ public:
 #if CARDPUTER_ADV_UI
   uint16_t getPrimaryRadioPreamble() const { return _radio_profiles.primaryPreamble(); }
   bool queueUiContactWrite(const ContactInfo& contact) { return scheduleContactWrite(contact); }
+  int sendMessage(const ContactInfo& recipient, uint32_t timestamp, uint8_t attempt,
+                  const char* text, uint32_t& expected_ack, uint32_t& est_timeout,
+                  uint8_t* packet_hash = nullptr, const uint8_t* replace_retry_key = nullptr,
+                  const uint8_t* message_retry_key = nullptr, uint32_t delay_millis = 0);
   bool sendUiChannelMessage(int channel_idx, uint32_t timestamp,
                             const char* text, size_t length);
 #endif
@@ -769,7 +776,11 @@ private:
   void handleTerminalPath(ContactInfo& recipient, const char* path_spec);
   void importTerminalCard(char* command);
   void listTerminalChannels();
-  void sendTerminalChannelMessage(ChannelDetails& channel, const char* text);
+  void sendTerminalChannelMessage(ChannelDetails& channel, const char* text
+#if CARDPUTER_ADV_UI
+                                  , uint8_t channel_idx
+#endif
+                                  );
   void handleTerminalDisplayCommand(const char* arguments);
   void printTerminalSendStatus(const char* operation,
                                const ContactInfo& recipient, int result,

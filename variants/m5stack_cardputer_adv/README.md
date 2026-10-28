@@ -37,6 +37,17 @@ history and keyboard layouts.
 Companion builds retain all 350 contacts and use the existing bounded contact
 path cache to leave RAM available for Bluetooth, the display and keyboard layouts.
 
+Accepted incoming messages and successful sends from the keyboard, phone app
+or USB terminal share the same local history. Retries do not add another copy.
+Only the conversation actually visible on the screen is marked read.
+
+Channel history identifies each channel by its full name (including protocol
+prefix) and full key, so channels sharing a key keep separate conversations.
+New channel logs use `/meshcore_custom/history/chan2` on the SD card. Older
+`/meshcore_custom/history/chan` logs remain on the card for manual retrieval;
+they are not imported because their channel identity can be ambiguous. Direct
+message logs keep their existing paths.
+
 When the device is managed by bmorcelli's Launcher, install updates by writing
 the app image to the MeshCore app slot over USB rather than reinstalling from
 the SD card: Launcher can repartition the flash to fit the image and drop the
@@ -72,7 +83,8 @@ Extra large (19 px). The larger fonts are generated from DejaVu Sans with
 Radio settings use the same live apply and save path as the USB terminal;
 a reboot is not required. A busy radio applies the saved setting once idle.
 Rejected settings or storage failures show an error
-and retain the previous saved value. Display brightness, text size and battery
+and retain the previous saved value. TX power supports the radio's signed range,
+including negative values. Display brightness, text size and battery
 correction are saved separately from the standard node preferences.
 
 Screen wake and timeout follow the shared `display.mode` and `display.timeout`
@@ -91,8 +103,14 @@ Bluetooth pairing requests show the PIN for up to two minutes when the selected
 screen mode permits it. Esc dismisses the prompt; the current chat and draft
 remain selected. An explicit screen-off setting keeps the screen dark.
 
-The speaker plays fixed UI tones and honors notification sound output and mute
-settings. Custom RTTTL notification melodies are unsupported on this board.
+The speaker plays fixed UI tones without blocking the mesh loop and honors
+the saved notification outputs and mute settings. A key or top-button press
+dismisses notifications configured to stop on button input. Custom RTTTL
+notification melodies are unsupported on this board.
+
+Tools -> Restart and Power off flush pending contact writes before shutdown.
+Power off waits for Enter release without blocking radio processing; holding
+the key for two seconds or pressing Esc cancels it.
 
 ## Third-party notices
 
@@ -112,6 +130,9 @@ neither dependency is bundled here.
   or at the end of its 10-minute acquisition window, then wakes after 30 minutes.
   Location telemetry can temporarily hold it awake under the common GPS policy.
   Turning GPS off cancels current acquisitions; saved GPS intervals apply.
+- Repeater and room-server builds also put the Cap's fixed GNSS receiver into
+  standby when unused, while retaining external sensor support. GPS-free builds
+  send the standby command without adding a GPS parser or GPS settings.
 - Below 3.4 V the UI shows "Battery low" and powers off (no LoRa wake).
 
 ## Building on Windows

@@ -7,6 +7,8 @@
 
 #include "globals.h"
 
+static const char CHANNEL_HISTORY_ID_DIR[] = HISTORY_DIR "/chan2";
+
 static void buf_to_hex_fast(const unsigned char *src, size_t src_len, char *dst) {
   static const char hex_digits[] = "0123456789abcdef";
 
@@ -24,7 +26,8 @@ void CardputerDataStore::beginCustom(FILESYSTEM *history_fs) {
   }
   _history_fs->mkdir(CUSTOM_DATA_DIR);
   _history_fs->mkdir(HISTORY_DIR);
-  _history_fs->mkdir(HISTORY_DIR_CHANNEL);
+  // Leave ambiguous legacy PSK-only /chan histories intact for recovery.
+  _history_fs->mkdir(CHANNEL_HISTORY_ID_DIR);
   _history_fs->mkdir(HISTORY_DIR_DIRECT);
 }
 
@@ -129,9 +132,7 @@ void CardputerDataStore::storeMessage(const uint8_t pkey[PUB_KEY_SIZE], const ch
   char path[128];
   char msg_copy[MAX_MESSAGE_LENGTH + 1] = { 0 };
   char pkey_hex[PUB_KEY_SIZE * 2 + 1];
-  uint8_t key_len = is_channel ? (PUB_KEY_SIZE / 2) : PUB_KEY_SIZE;
-
-  buf_to_hex_fast(pkey, key_len, pkey_hex);
+  buf_to_hex_fast(pkey, PUB_KEY_SIZE, pkey_hex);
 
   int msg_len;
   for (msg_len = 0; msg_len < MAX_MESSAGE_LENGTH && text[msg_len] != '\0'; msg_len++) {
@@ -144,7 +145,7 @@ void CardputerDataStore::storeMessage(const uint8_t pkey[PUB_KEY_SIZE], const ch
 
   msg_copy[msg_len] = '\0';
 
-  snprintf(path, sizeof(path), "%s/%s", is_channel ? HISTORY_DIR_CHANNEL : HISTORY_DIR_DIRECT, pkey_hex);
+  snprintf(path, sizeof(path), "%s/%s", is_channel ? CHANNEL_HISTORY_ID_DIR : HISTORY_DIR_DIRECT, pkey_hex);
 
   File file = _history_fs->open(path, FILE_APPEND, true);
 
@@ -183,11 +184,9 @@ void CardputerDataStore::loadMessages(const uint8_t pkey[PUB_KEY_SIZE], bool is_
   char line_buf[256] = { 0 };
   uint8_t file_read_buf[1024];
 
-  uint8_t key_len = is_channel ? (PUB_KEY_SIZE / 2) : PUB_KEY_SIZE;
+  buf_to_hex_fast(pkey, PUB_KEY_SIZE, pkey_hex);
 
-  buf_to_hex_fast(pkey, key_len, pkey_hex);
-
-  snprintf(path, sizeof(path), "%s/%s", is_channel ? HISTORY_DIR_CHANNEL : HISTORY_DIR_DIRECT, pkey_hex);
+  snprintf(path, sizeof(path), "%s/%s", is_channel ? CHANNEL_HISTORY_ID_DIR : HISTORY_DIR_DIRECT, pkey_hex);
 
   if (!_history_fs->exists(path)) {
     return;

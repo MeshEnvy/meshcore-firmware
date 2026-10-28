@@ -42,15 +42,17 @@ struct Store {
 };
 struct UI {
   std::vector<MessageSendState> events;
-  unsigned contacts = 0, channels = 0;
+  unsigned contacts = 0, channels = 0, sent_contacts = 0, sent_channels = 0;
   uint8_t key[32] = {};
   void onMessageSendAttempt(uint8_t, uint8_t, MessageSendState state) { events.push_back(state); }
   void onContactMessageRecv(const ContactInfo& contact, const char*) {
     ++contacts; memcpy(key, contact.id.pub_key, 32);
   }
-  void onChannelMessageRecv(const mesh::GroupChannel& channel, const char*) {
-    ++channels; memcpy(key, channel.secret, 32);
+  void onChannelMessageRecv(uint8_t, const uint8_t* id, const char*) {
+    ++channels; memcpy(key, id, 32);
   }
+  void onContactMessageSent(const ContactInfo&, const char*) { ++sent_contacts; }
+  void onChannelMessageSent(uint8_t, const uint8_t*, const char*) { ++sent_channels; }
 };
 struct MyMesh {
   bool admit = true, present = true, persist = true, standard_save = true;
@@ -58,12 +60,15 @@ struct MyMesh {
   unsigned sends = 0, standard_saves = 0, path_saves = 0;
   ContactInfo current;
   uint8_t sent_path = 0, sent_attempt = 0;
-  int sendMessage(const ContactInfo& contact, uint32_t, uint8_t attempt, const char*,
+  virtual void onUiContactMessageSent(const ContactInfo&, const char*) {}
+  int sendMessage(const ContactInfo& contact, uint32_t, uint8_t attempt, const char* text,
                   uint32_t& ack, uint32_t& estimate) {
     ++sends;
     if (!admit) { ack = 0; estimate = 0; return MSG_SEND_FAILED; }
     sent_path = contact.out_path_len; sent_attempt = attempt;
-    ack = 1000 + attempt; estimate = timeout; return 1;
+    ack = 1000 + attempt; estimate = timeout;
+    if (attempt == 0) onUiContactMessageSent(contact, text);
+    return 1;
   }
   ContactInfo* lookupContactByPubKey(const uint8_t* key, size_t count) {
     assert(count == 32);
@@ -86,7 +91,11 @@ struct CardputerMesh : MyMesh {
   void checkResend();
   void cancelResending();
   void onUiContactMessage(const ContactInfo&, const char*);
-  void onUiChannelMessage(const uint8_t[32], const char*);
+  void onUiChannelMessage(uint8_t, const char*);
+  void onUiContactMessageSent(const ContactInfo&, const char*) override;
+  bool getChannelHistoryId(int index, uint8_t* id) {
+    assert(index == 7); memset(id, 0, 32); id[31] = 88; return true;
+  }
   bool savePrefs();
   bool saveCustomPrefs();
   void beginCustom();
@@ -104,6 +113,7 @@ int main() {
   node.current.out_path_len = 2;
   assert(node.sendDirectMessage(node.current, 5, "message") != MSG_SEND_FAILED);
   assert(node.resend_timeout == node.now + node.timeout && node.store.writes == 1);
+  assert(node.ui.sent_contacts == 1);
   assert(node.last_msg.expected_ack == 1000 && node.last_msg.attempt == 1);
   assert(node.sendDirectMessage(node.current, 6, "other") == MSG_SEND_FAILED && node.sends == 1);
   node.current.out_path_len = 3;
@@ -111,6 +121,7 @@ int main() {
   node.checkResend();
   assert(node.sent_path == 3 && node.sent_attempt == 1 && node.last_msg.attempt == 2);
   assert(node.resend_timeout == node.now + 32000 && node.store.writes == 1);
+  assert(node.ui.sent_contacts == 1);
   node.admit = false;
   node.checkResend();
   assert(!node.isMessageSending() && node.resend_timeout == 0 && node.last_msg.expected_ack == 0);
@@ -149,8 +160,7 @@ int main() {
   accepted.current.id.pub_key[31] = 77;
   accepted.onUiContactMessage(accepted.current, "direct");
   assert(accepted.ui.contacts == 1 && accepted.store.writes == 1 && accepted.store.key[31] == 77);
-  uint8_t channel_key[32] = {}; channel_key[31] = 88;
-  accepted.onUiChannelMessage(channel_key, "group");
+  accepted.onUiChannelMessage(7, "group");
   assert(accepted.ui.channels == 1 && accepted.store.writes == 2 && accepted.store.key[31] == 88);
   assert(accepted.ui.key[31] == 88);
 }
@@ -165,6 +175,14 @@ SELECTION = r'''
 #define PUB_KEY_SIZE 32
 struct ContactInfo { struct { uint8_t pub_key[32] = {}; } id; int marker = 0; };
 struct ChannelDetails { struct { uint8_t secret[32] = {}; } channel; char name[32] = "channel"; };
+struct CardputerMesh {
+  static bool channelHistoryId(const ChannelDetails& channel, uint8_t* id) {
+    memset(id, 0, 32);
+    for (size_t i=0; i<strlen(channel.name); ++i) id[i%32] ^= channel.name[i];
+    for (size_t i=0; i<32; ++i) id[i] ^= channel.channel.secret[i];
+    return channel.name[0] != 0;
+  }
+};
 struct Mesh {
   std::vector<ContactInfo> contacts;
   ChannelDetails channel;
@@ -185,6 +203,7 @@ struct ChatPage {
   int current_contact_idx = 2, current_channel_idx = -1;
   ContactInfo current_contact;
   ChannelDetails current_channel;
+  uint8_t current_channel_history_id[32] = {};
   History chat_history;
   int chat_history_offset = 2;
   std::string last_sent_message = "previous";
@@ -205,8 +224,11 @@ int main() {
   page.refreshSelectedContact();
   assert(page.current_contact_idx == -1 && page.chat_history.count == 0 && page.last_sent_message.empty());
   page.current_channel_idx = 4; page.current_channel = the_mesh_cp.channel;
+  CardputerMesh::channelHistoryId(page.current_channel, page.current_channel_history_id);
   strcpy(the_mesh_cp.channel.name, "renamed");
-  assert(page.refreshSelectedChannel() && !strcmp(page.current_channel.name, "renamed"));
+  assert(!page.refreshSelectedChannel() && page.current_channel_idx == -1);
+  page.current_channel_idx = 4; page.current_channel = the_mesh_cp.channel;
+  CardputerMesh::channelHistoryId(page.current_channel, page.current_channel_history_id);
   the_mesh_cp.channel.channel.secret[31] = 1;
   assert(!page.refreshSelectedChannel() && page.current_channel_idx == -1);
   page.current_channel_idx = 4; page.current_channel = the_mesh_cp.channel;
@@ -225,6 +247,7 @@ class CardputerMessagingTests(unittest.TestCase):
         methods = "\n".join(body(source, signature) for signature in (
             "int CardputerMesh::sendDirectMessage(", "void CardputerMesh::checkResend()",
             "void CardputerMesh::cancelResending()", "void CardputerMesh::onUiContactMessage(",
+            "void CardputerMesh::onUiContactMessageSent(",
             "void CardputerMesh::onUiChannelMessage(", "bool CardputerMesh::saveCustomPrefs()",
             "bool CardputerMesh::savePrefs()", "void CardputerMesh::beginCustom()"))
         last_message = body((VARIANT / "types.h").read_text(), "struct LastSentMessage {") + ";"

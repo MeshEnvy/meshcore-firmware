@@ -111,10 +111,6 @@ void ChatPage::sendChatMessage() {
     int result = the_mesh_cp.sendDirectMessage(current_contact, ts, chat_text_box.c_str());
 
     if (result != MSG_SEND_FAILED) {
-      HistoryMessage *msg = chat_history.push_ref();
-      msg->out = true;
-      snprintf(msg->text, MAX_MESSAGE_LENGTH, "%s", chat_text_box.c_str());
-
       last_sent_message = chat_text_box;
       chat_text_box.clear();
       chat_history_offset = 0;
@@ -129,11 +125,6 @@ void ChatPage::sendChatMessage() {
     bool ok = the_mesh_cp.sendChannelMessage(current_channel_idx, ts,
                                              chat_text_box.c_str(), chat_text_box.length());
     if (ok) {
-      HistoryMessage *msg = chat_history.push_ref();
-      msg->out = true;
-
-      snprintf(msg->text, MAX_MESSAGE_LENGTH, "%s", chat_text_box.c_str());
-
       last_sent_message = chat_text_box;
       chat_text_box.clear();
       chat_history_offset = 0;
@@ -232,10 +223,11 @@ void ChatPage::selectContact(const ContactInfo &contact, int idx) {
 }
 
 void ChatPage::selectChannel(const ChannelDetails &channel, int idx) {
+  if (!CardputerMesh::channelHistoryId(channel, current_channel_history_id)) return;
   current_channel = channel;
   current_channel_idx = idx;
   current_contact_idx = -1;
-  the_mesh_cp.loadMessageHistory(channel.channel.secret, true, chat_history);
+  the_mesh_cp.loadMessageHistory(current_channel_history_id, true, chat_history);
   chat_history_offset = 0;
   last_sent_message = "";
 
@@ -248,15 +240,15 @@ void ChatPage::selectChannel(const ChannelDetails &channel, int idx) {
   }
 }
 
-bool ChatPage::onChannelMessageRecv(const mesh::GroupChannel &channel, const char *text) {
-
+bool ChatPage::onChannelMessageRecv(uint8_t channel_idx, const uint8_t history_id[32], const char *text) {
+  (void)channel_idx; // Identical logical channels can occupy more than one slot.
   if (current_channel_idx != -1 &&
-      memcmp(channel.secret, current_channel.channel.secret, PUB_KEY_SIZE) == 0) {
+      memcmp(history_id, current_channel_history_id, PUB_KEY_SIZE) == 0) {
     HistoryMessage *msg = chat_history.push_ref();
     msg->out = false;
     snprintf(msg->text, MAX_MESSAGE_LENGTH, "%s", text);
     chat_history_offset = 0;
-    return true;
+    return _p->getUiTask()->isChatVisible();
   }
   return false;
 }
@@ -268,9 +260,33 @@ bool ChatPage::onContactMessageRecv(const ContactInfo &contact, const char *text
     msg->out = false;
     snprintf(msg->text, MAX_MESSAGE_LENGTH, "%s", text);
     chat_history_offset = 0;
-    return true;
+    return _p->getUiTask()->isChatVisible();
   }
   return false;
+}
+
+void ChatPage::onChannelMessageSent(uint8_t channel_idx, const uint8_t history_id[32], const char *text) {
+  (void)channel_idx;
+  if (current_channel_idx == -1 || memcmp(history_id, current_channel_history_id, PUB_KEY_SIZE) != 0) return;
+  HistoryMessage *msg = chat_history.push_ref();
+  msg->out = true;
+  snprintf(msg->text, sizeof(msg->text), "%s", text);
+  last_sent_message = text;
+  chat_history_offset = 0;
+}
+
+void ChatPage::onContactMessageSent(const ContactInfo &contact, const char *text) {
+  if (current_contact_idx == -1 || memcmp(contact.id.pub_key, current_contact.id.pub_key, PUB_KEY_SIZE) != 0) return;
+  HistoryMessage *msg = chat_history.push_ref();
+  msg->out = true;
+  snprintf(msg->text, sizeof(msg->text), "%s", text);
+  last_sent_message = text;
+  chat_history_offset = 0;
+}
+
+void ChatPage::markRead(UnreadCounter &unread) const {
+  if (current_contact_idx != -1) unread.resetContact(current_contact.id.pub_key);
+  if (current_channel_idx != -1) unread.resetChannel(current_channel_history_id);
 }
 
 void ChatPage::refreshSelectedContact() {
@@ -291,8 +307,10 @@ void ChatPage::refreshSelectedContact() {
 bool ChatPage::refreshSelectedChannel() {
   if (current_channel_idx == -1) return false;
   ChannelDetails channel;
+  uint8_t history_id[PUB_KEY_SIZE];
   if (!the_mesh_cp.getChannel(current_channel_idx, channel) || !channel.name[0]
-      || memcmp(channel.channel.secret, current_channel.channel.secret, PUB_KEY_SIZE) != 0) {
+      || !CardputerMesh::channelHistoryId(channel, history_id)
+      || memcmp(history_id, current_channel_history_id, PUB_KEY_SIZE) != 0) {
     current_channel_idx = -1;
     current_channel = ChannelDetails{};
     chat_history.clear();

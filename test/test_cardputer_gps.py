@@ -200,7 +200,7 @@ class CardputerGpsTests(unittest.TestCase):
             sanitizer = [] if os.name == "nt" else ["-fsanitize=address,undefined",
                 "-fno-sanitize-recover=all", "-fno-pie", "-no-pie"]
             built = subprocess.run([compiler, "-std=c++17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
-                "-Wno-unused-parameter", *sanitizer, "-DENV_INCLUDE_GPS=1",
+                "-Wno-unused-parameter", *sanitizer, "-DENV_INCLUDE_GPS=1", "-DCARDPUTER_ADV_UI=1",
                 "-DPIN_GPS_TX=15", "-DPIN_GPS_RX=13", "-DGPS_BAUD_RATE=115200",
                 "-I", str(work), "-I", str(ROOT / "src"), "-I", str(VARIANT),
                 "-I", str(nmea.parent), str(work / "main.cpp"), str(nmea),

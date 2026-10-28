@@ -47,8 +47,14 @@ void CardputerUITask::dismissAlert() {
   scheduleRefresh();
 }
 
-bool CardputerUITask::isAlertActive() {
+bool CardputerUITask::isAlertActive() const {
   return millis() < alert_expiry;
+}
+
+bool CardputerUITask::isChatVisible() const {
+  return _display && _display->isOn() && current_screen == main_screen
+      && static_cast<MainScreen *>(main_screen)->getCurrentPage() == MainScreen::CHAT
+      && !isPairingPromptActive() && !isAlertActive();
 }
 
 void CardputerUITask::notify(UIEventType t) {
@@ -120,7 +126,7 @@ void CardputerUITask::serviceDisplayPower() {
   if (_display->servicePower(_board->isExternalPowered() || _board->isUsbHostConnected(),
                              hasConnection(), isPairingPromptActive())) {
     scheduleRefresh();
-    if (!_display->isOn()) _board->getSpeaker()->sleep();
+    if (!_display->isOn() && !_board->getSpeaker()->isBusy()) _board->getSpeaker()->sleep();
   }
 }
 
@@ -157,6 +163,13 @@ bool CardputerUITask::handlePairingInput(const Keyboard::Event &event) {
   return true;
 }
 
+bool CardputerUITask::handleNotificationInput() {
+  if (!the_mesh_cp.notificationButton()) return false;
+  serviceDisplayPower();
+  scheduleRefresh();
+  return true;
+}
+
 void CardputerUITask::renderPairingPrompt() {
   if (!_display || !_display->isOn() || !isPairingPromptActive()) return;
   char pin[16];
@@ -172,8 +185,18 @@ void CardputerUITask::renderPairingPrompt() {
   _display->drawTextCentered(_display->width() / 2, 94, "Enter PIN on phone");
 }
 
-void CardputerUITask::onChannelMessageRecv(const mesh::GroupChannel &channel, const char *text) {
-  ((MainScreen *)main_screen)->onChannelMessageRecv(channel, text);
+void CardputerUITask::onChannelMessageRecv(uint8_t channel_idx, const uint8_t history_id[32], const char *text) {
+  static_cast<MainScreen *>(main_screen)->onChannelMessageRecv(channel_idx, history_id, text);
+}
+
+void CardputerUITask::onChannelMessageSent(uint8_t channel_idx, const uint8_t history_id[32], const char *text) {
+  static_cast<MainScreen *>(main_screen)->onChannelMessageSent(channel_idx, history_id, text);
+  scheduleRefresh();
+}
+
+void CardputerUITask::onContactMessageSent(const ContactInfo &contact, const char *text) {
+  static_cast<MainScreen *>(main_screen)->onContactMessageSent(contact, text);
+  scheduleRefresh();
 }
 
 void CardputerUITask::onContactMessageRecv(const ContactInfo &contact, const char *text) {
@@ -214,7 +237,7 @@ void CardputerUITask::setCurrScreen(CardputerScreen *c) {
 */
 void CardputerUITask::shutdown(bool restart) {
   if (!prepareForShutdown()) {
-    showAlert("Shutdown blocked: update in progress", 2000);
+    showAlert("Shutdown blocked: storage not ready", 2000);
     return;
   }
   if (restart) {
@@ -229,26 +252,40 @@ void CardputerUITask::shutdown(bool restart) {
 void CardputerUITask::loop() {
   servicePairingState();
   _board->getSpeaker()->processQueue();
+  if ((!_display || !_display->isOn()) && !_board->getSpeaker()->isBusy()) {
+    _board->getSpeaker()->sleep();
+  }
 
   CardputerKeyboard *kb = _board->getKeyboard();
   const Keyboard::Modifiers latched = kb->getModifiers();
   auto event = kb->poll();
 
-  if (event.changed && event.down && !handlePairingInput(event)) {
-    if (turnDisplayOn()) {
-      kb->setModifiers(latched);  // a wake-up press must not flip Shift/Fn
-    } else {
-      playSound(SoundType::Keyboard);
-      if (!handleShortcut(event) && current_screen) {
-        current_screen->handleInput(event);
+  ToolsScreen *tools = static_cast<ToolsScreen *>(tools_screen);
+  const bool power_off_input = tools && tools->handlePowerOffInput(event);
+  if (event.changed && event.down) {
+    if (handleNotificationInput()) {
+      kb->setModifiers(latched);  // dismissal must not also arm a shortcut
+    } else if (!power_off_input && !handlePairingInput(event)) {
+      if (turnDisplayOn()) {
+        kb->setModifiers(latched);  // a wake-up press must not flip Shift/Fn
+      } else {
+        playSound(SoundType::Keyboard);
+        if (!handleShortcut(event) && current_screen) {
+          current_screen->handleInput(event);
+        }
       }
     }
   }
 
-  if (_top_btn.check() == BUTTON_EVENT_CLICK && !isPairingPromptActive()) {
-    turnDisplayOn();
-    sendFloodAdvert();
+  if (_top_btn.check() == BUTTON_EVENT_CLICK) {
+    if (!handleNotificationInput() && !isPairingPromptActive()
+        && !(tools && tools->isPowerOffPending())) {
+      turnDisplayOn();
+      sendFloodAdvert();
+    }
   }
+  // A received-message preview must not suspend an armed release/timeout.
+  if (tools && current_screen != tools_screen) tools->poll();
 
   if (current_screen) {
     current_screen->poll();

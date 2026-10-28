@@ -11,6 +11,7 @@ private:
   String last_sent_message;
 
   ChannelDetails current_channel;
+  uint8_t current_channel_history_id[PUB_KEY_SIZE] = {};
   int current_channel_idx = -1;
 
   ContactInfo current_contact;
@@ -29,8 +30,11 @@ public:
   void selectContact(const ContactInfo &contact, int idx);
   void selectChannel(const ChannelDetails &channel, int idx);
 
-  bool onChannelMessageRecv(const mesh::GroupChannel &channel, const char *text);
+  bool onChannelMessageRecv(uint8_t channel_idx, const uint8_t history_id[32], const char *text);
   bool onContactMessageRecv(const ContactInfo &contact, const char *text);
+  void onChannelMessageSent(uint8_t channel_idx, const uint8_t history_id[32], const char *text);
+  void onContactMessageSent(const ContactInfo &contact, const char *text);
+  void markRead(UnreadCounter &unread) const;
 
   void refreshSelectedContact();
 };

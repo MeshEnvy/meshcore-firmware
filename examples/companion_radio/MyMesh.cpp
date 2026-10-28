@@ -2344,7 +2344,7 @@ bool MyMesh::queueChannelText(uint8_t channel_idx, const uint8_t secret[32], flo
   if (!queued) return false;
 
 #if CARDPUTER_ADV_UI
-  onUiChannelMessage(secret, text);
+  onUiChannelMessage(channel_idx, text);
 #endif
 #if COMPANION_FEATURE_NOTIFICATIONS
   const bool notification_managed = notify && _notifications.message(nullptr, secret, _serial && _serial->isConnected(), millis());
@@ -6703,6 +6703,9 @@ void MyMesh::handleCmdFrame(size_t len) {
 #if MESH_ENABLE_MESHTEXT_CHAT
       if (success && isMeshtextChannel(channel)) {
         if (sendMeshtextText(channel, text, len - i)) {
+#if CARDPUTER_ADV_UI
+          onUiChannelMessageSent(channel_idx, text, len - i);
+#endif
 #if UI_POCKET_GUI
           if (_ui) _ui->channelMessageSent(channel_idx, channel.name, _prefs.node_name, text, len - i);
 #endif
@@ -6715,6 +6718,13 @@ void MyMesh::handleCmdFrame(size_t len) {
           && parseCompanionChannelAlias(channel.name).kind == CompanionChannelKind::Meshtext) {
         writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
       } else if (success && sendGroupMessage(msg_timestamp, channel.channel, _prefs.node_name, text, len - i)) {
+#if CARDPUTER_ADV_UI
+        // Native group packets include "<node name>: "; BaseChatMesh limits
+        // the text to the remaining payload. History must match that packet.
+        const size_t available = MAX_TEXT_LEN - (strlen(_prefs.node_name) + 2);
+        const size_t sent_length = len - i < available ? len - i : available;
+        onUiChannelMessageSent(channel_idx, text, sent_length);
+#endif
 #if UI_POCKET_GUI
         if (_ui) _ui->channelMessageSent(channel_idx, channel.name, _prefs.node_name, text, len - i);
 #endif
@@ -9551,19 +9561,45 @@ void MyMesh::appendRxPowerSavingAdjustmentNote(char* reply, size_t reply_size,
 }
 
 #if CARDPUTER_ADV_UI
+int MyMesh::sendMessage(const ContactInfo& recipient, uint32_t timestamp, uint8_t attempt,
+                         const char* text, uint32_t& expected_ack, uint32_t& est_timeout,
+                         uint8_t* packet_hash, const uint8_t* replace_retry_key,
+                         const uint8_t* message_retry_key, uint32_t delay_millis) {
+  const int result = BaseChatMesh::sendMessage(recipient, timestamp, attempt, text,
+      expected_ack, est_timeout, packet_hash, replace_retry_key, message_retry_key, delay_millis);
+  if (result != MSG_SEND_FAILED && attempt == 0) onUiContactMessageSent(recipient, text);
+  return result;
+}
+
+void MyMesh::syncUiNotificationSettings() {
+  if (!_ui) return;
+  _ui->setHasConnection(_serial && _serial->isConnected());
+#if COMPANION_FEATURE_NOTIFICATIONS
+  const auto& notifications = _notifications.settings();
+  _ui->setNotificationOutputs(notifications.enabled ? notifications.outputs : 31);
+  _ui->setNotificationLedOwnership(_notifications.ownsLed());
+#endif
+}
+
 bool MyMesh::sendUiChannelMessage(int channel_idx, uint32_t timestamp,
                                  const char* text, size_t length) {
   ChannelDetails channel;
   if (!text || !length || length != strlen(text)
       || !getChannel(channel_idx, channel) || !channel.name[0]) return false;
 #if MESH_ENABLE_MESHTEXT_CHAT
-  if (isMeshtextChannel(channel)) return sendMeshtextText(channel, text, length);
+  if (isMeshtextChannel(channel)) {
+    if (!sendMeshtextText(channel, text, length)) return false;
+    onUiChannelMessageSent(channel_idx, text, length);
+    return true;
+  }
 #endif
   if (isAliasRadio2Defined()
       && parseCompanionChannelAlias(channel.name).kind == CompanionChannelKind::Meshtext) return false;
   const size_t prefix_length = strlen(_prefs.node_name) + 2;
   if (prefix_length >= MAX_TEXT_LEN || length > MAX_TEXT_LEN - prefix_length) return false;
-  return sendGroupMessage(timestamp, channel.channel, _prefs.node_name, text, length);
+  if (!sendGroupMessage(timestamp, channel.channel, _prefs.node_name, text, length)) return false;
+  onUiChannelMessageSent(channel_idx, text, length);
+  return true;
 }
 #endif
 
@@ -9940,10 +9976,17 @@ void MyMesh::handleTerminalDisplayCommand(const char* arguments) {
 }
 
 void MyMesh::sendTerminalChannelMessage(ChannelDetails& channel,
-                                        const char* text) {
+                                        const char* text
+#if CARDPUTER_ADV_UI
+                                        , uint8_t channel_idx
+#endif
+                                        ) {
 #if MESH_ENABLE_MESHTEXT_CHAT
   if (isMeshtextChannel(channel)) {
     if (text && sendMeshtextText(channel, text, strlen(text))) {
+#if CARDPUTER_ADV_UI
+      onUiChannelMessageSent(channel_idx, text, strlen(text));
+#endif
       terminalOutput().printf("  Queued to %s (Meshtext).\r\n", channel.name);
     } else {
       terminalOutput().printf("  ERROR: %s; use get mt.status\r\n", _mt_status);
@@ -9968,6 +10011,9 @@ void MyMesh::sendTerminalChannelMessage(ChannelDetails& channel,
   } else if (sendGroupMessage(getRTCClock()->getCurrentTimeUnique(),
                               channel.channel, _prefs.node_name, text,
                               text_len)) {
+#if CARDPUTER_ADV_UI
+    onUiChannelMessageSent(channel_idx, text, text_len);
+#endif
     terminalOutput().printf("  Sent to %s.\r\n", channel.name);
   } else {
     terminalOutput().print("  ERROR: unable to send\r\n");
@@ -10432,16 +10478,25 @@ void MyMesh::handleTerminalCommand(char* command, bool reader_prompt,
     ChannelDetails channel;
     bool found = false;
     size_t requested_index = 0;
+#if CARDPUTER_ADV_UI
+    uint8_t selected_channel_idx = 0;
+#endif
     if (mesh::cli::parseTerminalChannelIndex(
             channel_message, MAX_GROUP_CHANNELS, requested_index)) {
       found = getChannel((int)requested_index, channel)
           && channel.name[0] != 0;
+#if CARDPUTER_ADV_UI
+      selected_channel_idx = static_cast<uint8_t>(requested_index);
+#endif
     } else {
       for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
         if (getChannel(i, channel) && channel.name[0] != 0
             && mesh::cli::terminalChannelNameMatches(channel_message,
                                                      channel.name)) {
           found = true;
+#if CARDPUTER_ADV_UI
+          selected_channel_idx = static_cast<uint8_t>(i);
+#endif
           break;
         }
       }
@@ -10450,7 +10505,11 @@ void MyMesh::handleTerminalCommand(char* command, bool reader_prompt,
     if (!found) {
       terminalOutput().print("  ERROR: channel not found (use 'channels')\r\n");
     } else {
-      sendTerminalChannelMessage(channel, channel_message.text);
+      sendTerminalChannelMessage(channel, channel_message.text
+#if CARDPUTER_ADV_UI
+                                  , selected_channel_idx
+#endif
+                                  );
     }
   } else if (strncmp(command, "send ", 5) == 0) {
     ContactInfo* recipient = getTerminalRecipient();
@@ -10488,7 +10547,11 @@ void MyMesh::handleTerminalCommand(char* command, bool reader_prompt,
     if (!getChannel(0, channel) || channel.name[0] == 0) {
       terminalOutput().print("  ERROR: Public channel is unavailable\r\n");
     } else {
-      sendTerminalChannelMessage(channel, text);
+      sendTerminalChannelMessage(channel, text
+#if CARDPUTER_ADV_UI
+                                  , 0
+#endif
+                                  );
     }
   } else if (strcmp(command, "list") == 0 || strncmp(command, "list ", 5) == 0) {
     int count = command[4] == ' ' ? atoi(command + 5) : 0;
@@ -11752,6 +11815,11 @@ void MyMesh::checkSerialInterface() {
 }
 
 void MyMesh::loop() {
+#if CARDPUTER_ADV_UI
+  // Apply saved output masks before the first received packet, not only at
+  // the end of the loop or after a later settings change.
+  syncUiNotificationSettings();
+#endif
 #if COMPANION_FEATURE_DIRECT_OTA_ADMIN
   if (_ota_direct_contact.type && !_ota_direct_admin.active(_ms->getMillis())) closeDirectOtaAdmin();
 #endif
@@ -11890,7 +11958,7 @@ void MyMesh::loop() {
   }
 #endif
 
-#ifdef DISPLAY_CLASS
+#if defined(DISPLAY_CLASS) || CARDPUTER_ADV_UI
   if (_ui) {
     _ui->setHasConnection(_serial->isConnected());
   #if COMPANION_FEATURE_NOTIFICATIONS

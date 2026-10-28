@@ -31,12 +31,16 @@ public:
                    const uint8_t *path_snrs, const uint8_t *path_hashes, uint8_t path_len) override;
   void onControlDataRecv(mesh::Packet *packet) override;
   mesh::DispatcherAction onRecvPacket(mesh::Packet *pkt) override;
-  void onUiChannelMessage(const uint8_t secret[32], const char *text) override;
+  void onUiChannelMessage(uint8_t channel_idx, const char *text) override;
   void onUiContactMessage(const ContactInfo &from, const char *text) override;
+  void onUiContactMessageSent(const ContactInfo &recipient, const char *text) override;
+  void onUiChannelMessageSent(uint8_t channel_idx, const char *text, size_t length) override;
   bool sendFloodScoped(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint32_t delay_millis = 0) override;
   using MyMesh::sendFloodScoped;
 
   bool sendChannelMessage(int channel_idx, uint32_t timestamp, const char *text, size_t length);
+  static bool channelHistoryId(const ChannelDetails &channel, uint8_t id[PUB_KEY_SIZE]);
+  bool getChannelHistoryId(int channel_idx, uint8_t id[PUB_KEY_SIZE]);
 
   int sendDirectMessage(const ContactInfo &recipient, uint32_t timestamp, const char *text);
 

@@ -108,6 +108,7 @@ struct CardputerDisplay: DisplayDriver {
 struct Speaker {
   unsigned tones=0,sleeps=0;
   void queueTone(int,int,float=0.5f) { ++tones; }
+  bool isBusy() const { return false; }
   void sleep() { ++sleeps; }
 };
 struct Board {
@@ -127,7 +128,22 @@ struct Event { Key key; };
 }
 struct Prefs { uint8_t gps_enabled=1,buzzer_quiet=0,powersaving_enabled=0; };
 struct CustomPrefs { uint8_t text_level=1,brightness=96; };
+struct NotificationSink: mesh::notify::Sink {
+  CardputerDisplay* display;
+  explicit NotificationSink(CardputerDisplay* d):display(d) {}
+  uint8_t capabilities() const override { return mesh::notify::Screen; }
+  bool gpioAvailable(uint8_t) const override { return false; }
+  void pulse(mesh::notify::Output,bool,int8_t) override {}
+  void melody(const char*) override {}
+  void screen(int8_t mode) override { display->notificationPower(mode); }
+};
+struct NotificationStore: mesh::notify::Store {
+  bool save(const mesh::notify::Settings&) override { return true; }
+};
 struct Mesh {
+  mesh::notify::Controller* notifications=nullptr;
+  unsigned button_calls=0;
+  bool notificationButton() { ++button_calls; return notifications && notifications->button(); }
   Prefs* prefs=nullptr;
   CustomPrefs* custom=nullptr;
   CustomPrefs committed;
@@ -181,6 +197,9 @@ struct CardputerUITask {
   void scheduleRefresh(unsigned ms=0) { next_refresh=millis()+ms; }
   void setCurrScreen(CardputerScreen* screen) { current_screen=screen; scheduleRefresh(); }
   bool shouldWakeDisplayForMessage() const;
+  bool isAlertActive() const;
+  bool isChatVisible() const;
+  bool handleNotificationInput();
   void showAlert(const char*,int);
   void serviceDisplayPower();
   void servicePairingState();
@@ -204,6 +223,8 @@ struct CardputerUITask {
         code += "bool CardputerUITask::" + function(abstract, "bool shouldWakeDisplayForMessage() const").removeprefix("bool ") + "\n"
         for signature in (
             "void CardputerUITask::showAlert(", "void CardputerUITask::serviceDisplayPower(",
+            "bool CardputerUITask::isAlertActive(", "bool CardputerUITask::isChatVisible(",
+            "bool CardputerUITask::handleNotificationInput(",
             "void CardputerUITask::servicePairingState(", "bool CardputerUITask::isPairingPromptActive(",
             "void CardputerUITask::renderPairingPrompt(", "bool CardputerUITask::handlePairingInput(",
             "bool CardputerUITask::turnDisplayOn(", "bool CardputerUITask::getGPSState(",
@@ -327,6 +348,34 @@ int main() {
   assert(ui.isPairingPromptActive());
   fake_now+=119999U; ui.servicePairingState(); assert(ui.isPairingPromptActive());
   ++fake_now; ui.servicePairingState(); assert(!ui.isPairingPromptActive());
+  // Visibility means the matching conversation is actually readable, including overlays.
+  ui.current_screen=&main; main.page=MainScreen::CHAT; ui.alert_expiry=0;
+  board.usb=false; power.battery.mode=mesh::ui::DisplayMode::On; ui.serviceDisplayPower();
+  assert(ui.isChatVisible());
+  ui.showAlert("overlay",1000); assert(!ui.isChatVisible());
+  ui.alert_expiry=0; ui.current_screen=&messages; assert(!ui.isChatVisible());
+  ui.current_screen=&main; display.turnOff(); assert(!ui.isChatVisible());
+  display.turnOn(); main.page=MainScreen::FIRST; assert(!ui.isChatVisible());
+  main.page=MainScreen::CHAT;
+  interfaces.pending=true; ui.servicePairingState(); assert(!ui.isChatVisible());
+  ui.handlePairingInput(escape); assert(ui.isChatVisible());
+  // Actual shared controller stops infinite screen overrides on a physical-input action.
+  NotificationSink sink(&display); NotificationStore store;
+  mesh::notify::Controller notifications(sink,store); the_mesh_cp.notifications=&notifications;
+  auto& rules=notifications.settings(); rules.enabled=1;
+  auto& rule=rules.rules[0]; rule.used=1; rule.fields=mesh::notify::FScreen;
+  rule.screen=1; rule.repeat=0; rule.stop=mesh::notify::Button;
+  assert(notifications.message(nullptr,nullptr,false,fake_now));
+  assert(notifications.active());
+  unsigned button_calls=the_mesh_cp.button_calls;
+  assert(ui.handleNotificationInput());
+  assert(!notifications.active() && the_mesh_cp.button_calls==button_calls+1);
+  assert(!ui.handleNotificationInput());
+  // Dismissing a notification during a pairing prompt leaves that modal prompt intact.
+  assert(notifications.message(nullptr,nullptr,false,fake_now));
+  interfaces.pending=true; ui.servicePairingState();
+  assert(ui.handleNotificationInput() && ui.isPairingPromptActive());
+  ui.handlePairingInput(escape);
   // Failed display initialization leaves every display control and notification safe.
   ui._display=nullptr;
   auto saved=the_mesh_cp.saves;
@@ -338,8 +387,11 @@ int main() {
   std::puts("PASS: Cardputer live controls, notifications, shared power and night drawing");
 }
 '''
-        self.assertIn("event.changed && event.down && !handlePairingInput(event)", task)
-        self.assertIn("BUTTON_EVENT_CLICK && !isPairingPromptActive()", task)
+        self.assertIn("if (handleNotificationInput())", task)
+        self.assertIn("else if (!power_off_input && !handlePairingInput(event))", task)
+        self.assertIn("if (!handleNotificationInput() && !isPairingPromptActive()", task)
+        self.assertIn("tools->handlePowerOffInput(event)", task)
+        self.assertIn("current_screen != tools_screen) tools->poll()", task)
         self.assertIn("renderPairingPrompt();\n      _display->endFrame();", task)
         with tempfile.TemporaryDirectory(prefix="cardputer-lifecycle-") as tmp:
             work = Path(tmp)
@@ -352,6 +404,103 @@ int main() {
                 "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-no-pie",
                 "-DCARDPUTER_ADV_UI=1", "-I", str(work), "-I", str(ROOT / "src"),
                 str(source), str(ROOT / "src/helpers/ui/DisplayDriver.cpp"), "-o", str(binary),
+            ], capture_output=True, text=True)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            executed = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(executed.returncode, 0, executed.stdout + executed.stderr)
+
+    def test_actual_audio_loop_cleanup_waits_for_drain_and_keeps_visible_codec_warm(self):
+        task = (VARIANT / "companion_radio/ui-cardputer/CardputerUITask.cpp").read_text(encoding="ascii")
+        speaker = (VARIANT / "hw/CardputerSpeaker.h").read_text(encoding="ascii")
+        audio_prefix = function(task, "void CardputerUITask::loop(").split("  CardputerKeyboard *kb", 1)[0]
+        code = r'''
+#include <cassert>
+#include <cstdio>
+struct Speaker {
+  bool tone_pending=false,draining=false,finish_drain=false,initialized=true;
+  unsigned polls=0,sleeps=0,shutdowns=0;
+  void processQueue() {
+    ++polls;
+    if(finish_drain) { draining=false; finish_drain=false; }
+  }
+  void sleep() {
+    ++sleeps;
+    if(initialized) { initialized=false; ++shutdowns; }
+    tone_pending=draining=false;
+  }
+'''
+        code += function(speaker, "bool isBusy() const") + r'''
+};
+struct Board {
+  Speaker speaker;
+  Speaker* getSpeaker() { return &speaker; }
+  bool isExternalPowered() const { return false; }
+  bool isUsbHostConnected() const { return false; }
+};
+struct Display {
+  bool on=false,desired=false;
+  bool isOn() const { return on; }
+  bool servicePower(bool,bool,bool) { bool changed=on!=desired; on=desired; return changed; }
+};
+struct CardputerUITask {
+  Board* _board;
+  Display* _display;
+  unsigned refreshes=0;
+  bool hasConnection() const { return false; }
+  bool isPairingPromptActive() const { return false; }
+  void scheduleRefresh() { ++refreshes; }
+  void serviceDisplayPower();
+  void servicePairingState() { serviceDisplayPower(); }
+  void loop();
+};
+'''
+        code += function(task, "void CardputerUITask::serviceDisplayPower(") + "\n"
+        code += audio_prefix + "}\n"
+        code += r'''
+int main() {
+  Board board; Display display;
+  CardputerUITask ui{&board,&display};
+  auto& audio=board.speaker;
+  // A sound-only notification plays while the screen is already dark.
+  audio.tone_pending=true;
+  ui.loop(); assert(audio.polls==1 && audio.sleeps==0 && audio.initialized); // warmup
+  ui.loop(); assert(audio.polls==2 && audio.sleeps==0 && audio.initialized); // transmitting
+  audio.tone_pending=false; audio.draining=true;
+  ui.loop(); assert(audio.polls==3 && audio.sleeps==0 && audio.initialized); // DMA still draining
+  audio.finish_drain=true;
+  ui.loop(); assert(audio.polls==4 && audio.sleeps==1 && !audio.initialized && audio.shutdowns==1);
+  ui.loop(); assert(audio.shutdowns==1); // repeated idle cleanup performs no further hardware shutdown
+
+  // A display timeout must not cancel audio before the post-processQueue idle check.
+  display.on=true; display.desired=false;
+  audio.initialized=true; audio.tone_pending=true;
+  unsigned sleeps=audio.sleeps;
+  ui.loop(); assert(!display.on && audio.tone_pending && audio.sleeps==sleeps && audio.initialized);
+  audio.tone_pending=false; audio.draining=true;
+  ui.loop(); assert(audio.draining && audio.sleeps==sleeps);
+  audio.finish_drain=true;
+  ui.loop(); assert(!audio.initialized && audio.sleeps==sleeps+1);
+
+  // Headless sound uses the same complete-playback-then-cleanup lifecycle.
+  ui._display=nullptr; audio.initialized=true; audio.tone_pending=true;
+  sleeps=audio.sleeps; ui.loop(); assert(audio.sleeps==sleeps && audio.tone_pending);
+  audio.tone_pending=false; audio.draining=true;
+  ui.loop(); assert(audio.sleeps==sleeps && audio.draining);
+  audio.finish_drain=true; ui.loop(); assert(audio.sleeps==sleeps+1 && !audio.initialized);
+
+  // Visible idle operation retains the warmed codec for keyboard tones.
+  ui._display=&display; display.on=display.desired=true; audio.initialized=true;
+  sleeps=audio.sleeps; ui.loop(); assert(audio.sleeps==sleeps && audio.initialized);
+  std::puts("PASS: actual UI audio loop waits for DMA drain, powers down dark/headless idle, and stays warm while visible");
+}
+'''
+        with tempfile.TemporaryDirectory(prefix="cardputer-audio-lifecycle-") as tmp:
+            source, binary = Path(tmp) / "test.cpp", Path(tmp) / "test"
+            source.write_text(code, encoding="ascii")
+            compiled = subprocess.run([
+                "g++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
+                "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-no-pie",
+                str(source), "-o", str(binary),
             ], capture_output=True, text=True)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
             executed = subprocess.run([str(binary)], capture_output=True, text=True)

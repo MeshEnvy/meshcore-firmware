@@ -139,7 +139,7 @@ bool SettingsScreen::enterItemEdit(SettingsItem item) {
       return true;
 
     case SettingsItem::RadioPwr:
-      edit_u8 = _node_prefs->tx_power_dbm;
+      edit_tx_power = _node_prefs->tx_power_dbm;
       is_editing = true;
       return true;
 
@@ -236,9 +236,10 @@ bool SettingsScreen::commitItemEdit(SettingsItem item) {
     case SettingsItem::RadioCr:
       return commitRadio(_node_prefs->freq, _node_prefs->bw, _node_prefs->sf, edit_u8);
     case SettingsItem::RadioPwr: {
-      if (!radio_driver.isTxPowerValid(static_cast<int8_t>(edit_u8))) return false;
+      if (edit_tx_power < INT8_MIN || edit_tx_power > INT8_MAX
+          || !radio_driver.isTxPowerValid(static_cast<int8_t>(edit_tx_power))) return false;
       char command[24];
-      snprintf(command, sizeof(command), "set tx %d", static_cast<int8_t>(edit_u8));
+      snprintf(command, sizeof(command), "set tx %d", static_cast<int>(edit_tx_power));
       return commitCommand(command);
     }
     case SettingsItem::MeshPathSize: {
@@ -295,10 +296,12 @@ void SettingsScreen::handleEditInput(SettingsItem item, Keyboard::Event &e) {
       break;
 
     case SettingsItem::RadioPwr:
-      if (e.key == Keyboard::ARROW_LEFT && edit_u8 > 1) {
-        edit_u8--;
-      } else if (e.key == Keyboard::ARROW_RIGHT && edit_u8 < LORA_TX_POWER) {
-        edit_u8++;
+      if (e.key == Keyboard::ARROW_LEFT && edit_tx_power > INT8_MIN
+          && radio_driver.isTxPowerValid(static_cast<int8_t>(edit_tx_power - 1))) {
+        --edit_tx_power;
+      } else if (e.key == Keyboard::ARROW_RIGHT && edit_tx_power < INT8_MAX
+          && radio_driver.isTxPowerValid(static_cast<int8_t>(edit_tx_power + 1))) {
+        ++edit_tx_power;
       }
       break;
     case SettingsItem::MeshPathSize:
@@ -436,10 +439,14 @@ int SettingsScreen::render(CardputerDisplay &display) {
     switch (menu_index) {
       case SettingsItem::RadioSf:
       case SettingsItem::RadioCr:
-      case SettingsItem::RadioPwr:
       case SettingsItem::MeshPathSize:
         display.setTextSize(2);
         snprintf(buf, sizeof(buf), "- %d +", edit_u8);
+        display.drawTextCentered(display.width() / 2, value_y, buf);
+        break;
+      case SettingsItem::RadioPwr:
+        display.setTextSize(2);
+        snprintf(buf, sizeof(buf), "- %d +", static_cast<int>(edit_tx_power));
         display.drawTextCentered(display.width() / 2, value_y, buf);
         break;
       case SettingsItem::PublicInfoName:

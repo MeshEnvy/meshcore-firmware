@@ -75,7 +75,7 @@ int ContactsPage::render(CardputerDisplay &lcd) {
 
     for (int j = 0; j < _p->getUnread()->countChats(); j++) {
       const UnreadCounterItem *item = _p->getUnread()->get(j);
-      if (item && !item->is_channel && memcmp(item->pkey, contact.id.pub_key, CONTACT_LOOKUP_BYTES) == 0) {
+      if (item && !item->is_channel && memcmp(item->pkey, contact.id.pub_key, PUB_KEY_SIZE) == 0) {
         unread_count = item->count;
         break;
       }

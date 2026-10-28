@@ -35,6 +35,7 @@ class SettingsScreen : public CardputerScreen {
   char edit_error[80] = "Invalid value";
   String edit_buffer;
   uint8_t edit_u8;
+  int32_t edit_tx_power = 0;
   static constexpr size_t MAX_NUMERIC_EDIT_BYTES = 31;
 
   void renderItem(CardputerDisplay &display, SettingsItem item, int x, int y);

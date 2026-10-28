@@ -59,16 +59,52 @@ mesh::DispatcherAction CardputerMesh::onRecvPacket(mesh::Packet *pkt) {
   return action;
 }
 
-void CardputerMesh::onUiChannelMessage(const uint8_t secret[32], const char *text) {
-  mesh::GroupChannel channel{};
-  memcpy(channel.secret, secret, sizeof(channel.secret));
-  _store->storeMessage(secret, text, false, true);
-  _ui->onChannelMessageRecv(channel, text);
+bool CardputerMesh::channelHistoryId(const ChannelDetails &channel, uint8_t id[PUB_KEY_SIZE]) {
+  static const uint8_t domain[] = "Cardputer channel history v2";
+  const size_t name_length = strnlen(channel.name, sizeof(channel.name));
+  if (!name_length || name_length == sizeof(channel.name)) return false;
+  uint8_t identity[sizeof(domain) + 1 + sizeof(channel.name) + sizeof(channel.channel.secret)];
+  size_t used = 0;
+  memcpy(identity, domain, sizeof(domain)); used += sizeof(domain);
+  identity[used++] = static_cast<uint8_t>(name_length);
+  memcpy(identity + used, channel.name, name_length); used += name_length;
+  memcpy(identity + used, channel.channel.secret, sizeof(channel.channel.secret));
+  used += sizeof(channel.channel.secret);
+  mesh::Utils::sha256(id, PUB_KEY_SIZE, identity, used);
+  return true;
+}
+
+bool CardputerMesh::getChannelHistoryId(int channel_idx, uint8_t id[PUB_KEY_SIZE]) {
+  ChannelDetails channel;
+  return getChannel(channel_idx, channel) && channelHistoryId(channel, id);
+}
+
+void CardputerMesh::onUiChannelMessage(uint8_t channel_idx, const char *text) {
+  uint8_t id[PUB_KEY_SIZE];
+  if (!getChannelHistoryId(channel_idx, id)) return;
+  _store->storeMessage(id, text, false, true);
+  _ui->onChannelMessageRecv(channel_idx, id, text);
 }
 
 void CardputerMesh::onUiContactMessage(const ContactInfo &from, const char *text) {
   _store->storeMessage(from.id.pub_key, text, false, false);
   _ui->onContactMessageRecv(from, text);
+}
+
+void CardputerMesh::onUiContactMessageSent(const ContactInfo &recipient, const char *text) {
+  _store->storeMessage(recipient.id.pub_key, text, true, false);
+  _ui->onContactMessageSent(recipient, text);
+}
+
+void CardputerMesh::onUiChannelMessageSent(uint8_t channel_idx, const char *text, size_t length) {
+  uint8_t id[PUB_KEY_SIZE];
+  if (!getChannelHistoryId(channel_idx, id)) return;
+  char stored_text[MAX_MESSAGE_LENGTH + 1];
+  const size_t stored_length = length < MAX_MESSAGE_LENGTH ? length : MAX_MESSAGE_LENGTH;
+  memcpy(stored_text, text, stored_length);
+  stored_text[stored_length] = 0;
+  _store->storeMessage(id, stored_text, true, true);
+  _ui->onChannelMessageSent(channel_idx, id, stored_text);
 }
 
 bool CardputerMesh::sendFloodScoped(const mesh::GroupChannel &channel, mesh::Packet *pkt,
@@ -90,15 +126,7 @@ bool CardputerMesh::sendFloodScoped(const mesh::GroupChannel &channel, mesh::Pac
 }
 
 bool CardputerMesh::sendChannelMessage(int channel_idx, uint32_t timestamp, const char *text, size_t length) {
-  ChannelDetails channel;
-  if (!getChannel(channel_idx, channel) || !channel.name[0]
-      || !sendUiChannelMessage(channel_idx, timestamp, text, length)) return false;
-  char stored_text[MAX_MESSAGE_LENGTH + 1];
-  const size_t stored_length = length < MAX_MESSAGE_LENGTH ? length : MAX_MESSAGE_LENGTH;
-  memcpy(stored_text, text, stored_length);
-  stored_text[stored_length] = 0;
-  _store->storeMessage(channel.channel.secret, stored_text, true, true);
-  return true;
+  return sendUiChannelMessage(channel_idx, timestamp, text, length);
 }
 
 int CardputerMesh::sendDirectMessage(const ContactInfo &recipient, uint32_t timestamp, const char *text) {
@@ -121,7 +149,6 @@ int CardputerMesh::sendDirectMessage(const ContactInfo &recipient, uint32_t time
   const uint32_t minimum_timeout = flood ? DIRECT_SEND_FLOOD_RESEND_RELAY : DIRECT_SEND_ROUTE_RESEND_RELAY;
   resend_timeout = futureMillis(est_timeout > minimum_timeout ? est_timeout : minimum_timeout);
   _ui->onMessageSendAttempt(last_msg.attempt, last_msg.total_attempts, last_msg.state);
-  _store->storeMessage(recipient.id.pub_key, text, true, false);
   return rc;
 }
 

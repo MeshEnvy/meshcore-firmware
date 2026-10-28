@@ -130,7 +130,7 @@ int main() {
   memset(bounded, 'x', MAX_MESSAGE_LENGTH);
   store.storeMessage(key, bounded, false, true);
   delete[] bounded;
-  const std::string channel_path = std::string(HISTORY_DIR_CHANNEL) + "/" + std::string(32, '0');
+  const std::string channel_path = std::string(CHANNEL_HISTORY_ID_DIR) + "/" + std::string(64, '0');
   assert(sd.files.at(channel_path)->bytes == "<< " + std::string(MAX_MESSAGE_LENGTH, 'x') + "\n");
   store.storeMessage(key, "line1\r\nline2", true, true);
   assert(sd.files.at(channel_path)->bytes.find(">> line1  line2\n") != std::string::npos);
@@ -235,7 +235,7 @@ int main() {
   assert(node.sendFloodScoped(channel, other, 0));
   assert(node.last_message_hash[0] == 77 && node.last_message_heard_repeats == 3);
   delete other;
-  assert(node.sendChannelMessage(7, 0, "text", 4) && node.store.writes == 1);
+  assert(node.sendChannelMessage(7, 0, "text", 4) && node.store.writes == 0);
   node.resend_timeout = 10;
   node.now = 9;
   node.loop();
@@ -421,6 +421,41 @@ int main() {
   assert(!store.loadCustomPrefs(restored));
   assert(!memcmp(&restored, &candidate, sizeof(candidate)));
   assert(!store.saveCustomPrefs(previous));
+}
+'''
+        self.run_cpp((VARIANT / "CardputerDataStore.cpp").read_text() + checks,
+                     headers=self.storage_headers())
+
+    def test_channel_identity_storage_preserves_ambiguous_legacy_logs(self):
+        checks = r'''
+#include <cassert>
+int main() {
+  mesh::RTCClock clock;
+  FILESYSTEM primary, sd; stat_fs = &primary;
+  CardputerDataStore store(primary, clock); store.beginCustom(&sd);
+  const std::string legacy_path = std::string(HISTORY_DIR_CHANNEL) + "/" + std::string(32,'0');
+  auto legacy = sd.open(legacy_path.c_str(), FILE_WRITE);
+  legacy.println("<< ambiguous old conversation"); legacy.close();
+  const std::string previous = sd.files.at(legacy_path)->bytes;
+  uint8_t first[32] = {}, second[32] = {}; first[31] = 1; second[31] = 2;
+  ChatHistory history;
+  store.loadMessages(first, true, history);
+  assert(history.count() == 0);
+  store.storeMessage(first, "first identity", false, true);
+  store.storeMessage(second, "second identity", true, true);
+  store.loadMessages(first, true, history);
+  const HistoryMessage* message = nullptr;
+  assert(history.count() == 1 && history.get(0,message));
+  assert(!strcmp(message->text,"first identity") && !message->out);
+  store.loadMessages(second, true, history);
+  assert(history.count() == 1 && history.get(0,message));
+  assert(!strcmp(message->text,"second identity") && message->out);
+  assert(sd.files.size() == 3 && sd.files.at(legacy_path)->bytes == previous);
+  for (const auto& entry : sd.files) {
+    if (entry.first == legacy_path) continue;
+    assert(entry.first.find(std::string(HISTORY_DIR) + "/chan2/") == 0);
+    assert(entry.first.substr(entry.first.find_last_of('/')+1).size() == 64);
+  }
 }
 '''
         self.run_cpp((VARIANT / "CardputerDataStore.cpp").read_text() + checks,

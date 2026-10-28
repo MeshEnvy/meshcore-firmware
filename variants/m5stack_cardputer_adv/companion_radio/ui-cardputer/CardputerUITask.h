@@ -48,6 +48,7 @@ class CardputerUITask : public AbstractUITask {
   void serviceDisplayPower();
   void renderPairingPrompt();
   bool handlePairingInput(const Keyboard::Event &event);
+  bool handleNotificationInput();
 
   // Returns false if display is already on
   bool turnDisplayOn();
@@ -68,7 +69,8 @@ public:
   int drawModifierBadges(CardputerDisplay &lcd, int x, int y);
   void showAlert(const char *text, int duration_millis);
   void dismissAlert();
-  bool isAlertActive();
+  bool isAlertActive() const;
+  bool isChatVisible() const;
   inline int getMsgCount() const { return unsynced_msg_count; }
   inline bool hasDisplay() const { return _display != NULL; }
   inline bool isBuzzerQuiet() { return _node_prefs->buzzer_quiet; }
@@ -88,7 +90,9 @@ public:
   void newMsg(uint8_t path_len, const char *from_name, const char *text, int msgcount, int channel_idx = -1,
               const char *channel_name = nullptr, int queue_index = -1) override;
 
-  void onChannelMessageRecv(const mesh::GroupChannel &channel, const char *text);
+  void onChannelMessageRecv(uint8_t channel_idx, const uint8_t history_id[32], const char *text);
+  void onChannelMessageSent(uint8_t channel_idx, const uint8_t history_id[32], const char *text);
+  void onContactMessageSent(const ContactInfo &contact, const char *text);
   void onContactMessageRecv(const ContactInfo &contact, const char *text);
   void onMessageSendAttempt(uint8_t attempt, uint8_t total, MessageSendState state);
 

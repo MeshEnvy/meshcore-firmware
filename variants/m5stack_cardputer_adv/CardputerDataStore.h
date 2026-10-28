@@ -22,6 +22,9 @@ using ChatHistory = RingBuffer<HistoryMessage, CHAT_HISTORY_RINGBUF_SIZE>;
 // Contacts, channels and node prefs stay on the primary (internal) FS managed
 // by DataStore. Cardputer UI prefs live there too; per-chat history is kept
 // only when a microSD card is mounted.
+// Channel identities include the complete name/protocol alias and 32-byte key.
+// Legacy /history/chan PSK-only logs remain on SD for manual recovery; they
+// cannot be assigned safely to one channel and are never silently imported.
 class CardputerDataStore : public DataStore {
 private:
   FILESYSTEM *_fs;
@@ -36,6 +39,7 @@ public:
   bool hasHistory() const { return _history_fs != nullptr; }
   bool loadCustomPrefs(CustomNodePrefs &prefs);
   bool saveCustomPrefs(const CustomNodePrefs &prefs);
+  // For channels, pkey is the 32-byte channelHistoryId, not the wire PSK.
   void storeMessage(const uint8_t pkey[PUB_KEY_SIZE], const char *text, bool is_sent, bool is_channel);
   void loadMessages(const uint8_t pkey[PUB_KEY_SIZE], bool is_channel, ChatHistory &history);
 };
