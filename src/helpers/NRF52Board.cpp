@@ -936,6 +936,10 @@ bool NRF52Board::emergencySleepMilliseconds(uint32_t millisecs) {
       || __get_FAULTMASK() != 0 || nrf_nvic_state.__cr_flag != 0
       || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return false;
   if (millisecs > 10000UL) millisecs = 10000UL;
+  // An enumerated host needs several sketch passes for cooperative CDC
+  // session cleanup and reply draining. Keep those passes prompt while RF
+  // stays asleep; detached operation retains the longer maintenance slice.
+  if (isUsbHostConnected() && millisecs > 100UL) millisecs = 100UL;
   if (NRF_WDT->RUNSTATUS != 0) {
     // A bootloader may have left a shorter watchdog than this build's default.
     // Half its actual timeout leaves room for scheduling and wake processing.

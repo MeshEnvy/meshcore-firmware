@@ -23,6 +23,8 @@ HARNESS = r'''
 static std::vector<std::string> events;
 static bool radio_test = false, interrupt_context = false, wireless_ready = true;
 static bool usb_held = false;
+static unsigned usb_mount_checks = 0;
+[[maybe_unused]] static bool tud_mounted() { ++usb_mount_checks; return usb_held; }
 static bool attach_on_delay = false;
 static unsigned primask = 0, basepri = 0, faultmask = 0;
 static unsigned __get_IPSR() { return interrupt_context; }
@@ -100,6 +102,7 @@ struct Base {
 struct NRF52Board : Base {
   bool watchdog_disable_reset_pending = false;
   bool isRadioTestActive() const { return radio_test; }
+  bool isUsbHostConnected();
   @NRF_SUPPORT@
   bool emergencySleepMilliseconds(uint32_t millisecs) override;
 };
@@ -109,11 +112,13 @@ struct ESP32Board : Base {
   @ESP_SUPPORT@
   bool emergencySleepMilliseconds(uint32_t millisecs) override;
 };
+@NRF_USB@
 @NRF_SLEEP@
 @ESP_SLEEP@
 static void reset() {
   events.clear(); radio_test = interrupt_context = false; wireless_ready = true;
   usb_held = false;
+  usb_mount_checks = 0;
   attach_on_delay = false;
   primask = basepri = faultmask = 0; nrf_nvic_state.__cr_flag = 0;
   scheduler = taskSCHEDULER_RUNNING;
@@ -239,6 +244,7 @@ class EmergencySleepBackendTests(unittest.TestCase):
             ("DEFAULT_SLEEP", "core", "virtual bool emergencySleepMilliseconds("),
             ("NRF_RELOAD", "nrf", "static void reloadWatchdogChannels("),
             ("NRF_SUPPORT", "nrf_header", "bool supportsEmergencySleep() const override"),
+            ("NRF_USB", "nrf", "bool NRF52Board::isUsbHostConnected("),
             ("ESP_SUPPORT", "esp_header", "bool supportsEmergencySleep() const override"),
             ("NRF_SLEEP", "nrf", "bool NRF52Board::emergencySleepMilliseconds("),
             ("ESP_SLEEP", "esp", "bool ESP32Board::emergencySleepMilliseconds(")):
@@ -261,6 +267,98 @@ class EmergencySleepBackendTests(unittest.TestCase):
 
     def test_actual_platform_waits_and_cleanup(self):
         self.run_code(self.platform_code())
+
+    def test_nrf_native_usb_keeps_cooperative_maintenance_prompt_without_waking_rf(self):
+        runtime = extract_braced(
+            (ROOT / "src/helpers/EmergencyPowerRuntime.h").read_text(),
+            "class EmergencyPowerRuntime")
+        code = self.platform_code().split("int main() {", 1)[0] + r'''
+static void delay(uint32_t budget) { events.push_back("backoff:" + std::to_string(budget)); }
+namespace mesh { namespace wireless {
+struct Control {
+  unsigned suspends = 0, resumes = 0;
+  bool suspendForEmergency() { ++suspends; return true; }
+  void resumeAfterEmergency() { ++resumes; }
+};
+static Control transport;
+static Control& control() { return transport; }
+} namespace power {
+@RUNTIME@;
+} }
+struct RuntimeBoard : NRF52Board {
+  bool fem_sleeping = false;
+  bool isOTAUpdateRunning() const { return false; }
+  void setEmergencyRadioSleeping(bool sleeping) { fem_sleeping = sleeping; }
+};
+struct RuntimeMesh {
+  bool available = true;
+  bool hasOutbound() const { return false; }
+  bool isRadioAvailable() const { return available; }
+  void setRadioAvailable(bool value) { available = value; }
+};
+struct RuntimeRadio {
+  unsigned sleeps = 0, wakes = 0;
+  bool isMorseTxActive() const { return false; }
+  bool isMorseRxActive() const { return false; }
+  bool setTrackerSleep(bool sleeping) { sleeping ? ++sleeps : ++wakes; return true; }
+  bool recoverRadio(bool) { assert(false); return false; }
+};
+struct RuntimeCLI {
+  uint32_t budget = 2700000;
+  bool sleeping = false;
+  uint32_t emergencySleepMilliseconds() const { return budget; }
+  void setEmergencyRadioSleeping(bool value) { sleeping = value; }
+};
+int main() {
+  reset(); usb_held = true;
+  RuntimeBoard board; RuntimeMesh mesh; RuntimeRadio radio; RuntimeCLI cli;
+  mesh::power::EmergencyPowerRuntime runtime;
+  // Session reset, input, reply construction and queued-output service can
+  // require separate sketch passes. Bound the combined CPU absence across
+  // those passes with the actual backend and actual RF ownership policy.
+  uint32_t elapsed = 0;
+  for (unsigned pass = 0; pass < 4; ++pass) {
+    assert(runtime.service(mesh, radio, board, cli, false));
+    elapsed += delayed_ticks * tick_ms;
+    assert(delayed_ticks == 100 && elapsed <= (pass + 1) * 100);
+    assert(!mesh.available && cli.sleeping && board.fem_sleeping);
+    assert(radio.sleeps == 1 && radio.wakes == 0);
+    assert(cli.budget == 2700000); // No awake lease or policy-window change.
+    assert(mesh::wireless::transport.resumes == 0);
+  }
+  assert(usb_mount_checks == 4 && elapsed == 400);
+  usb_held = false;
+  assert(runtime.service(mesh, radio, board, cli, false));
+  assert(delayed_ticks == 10000); // Recheck detach every call.
+  assert(!mesh.available && radio.sleeps == 1 && radio.wakes == 0);
+  usb_held = true;
+  assert(runtime.service(mesh, radio, board, cli, false));
+  assert(delayed_ticks == 100 && radio.wakes == 0);
+  assert(mesh::wireless::transport.suspends == 1);
+
+  reset(); usb_held = true;
+  assert(board.emergencySleepMilliseconds(37) && delayed_ticks == 37);
+  reset(); usb_held = true; nrf_watchdog.RUNSTATUS = 1; nrf_watchdog.RREN = 0x82;
+  assert(board.emergencySleepMilliseconds(UINT32_MAX));
+  assert(delayed_ticks == 100 && nrf_feeds == 4);
+  reset(); usb_held = true; nrf_watchdog.RUNSTATUS = 1; nrf_watchdog.CRV = 32767;
+  assert(!board.emergencySleepMilliseconds(10000) && events.empty());
+  reset(); usb_held = true; tick_ms = 1000;
+  assert(!board.emergencySleepMilliseconds(10000) && events.empty());
+}
+'''.replace("@RUNTIME@", runtime)
+        self.run_code(code, ("-DUSE_TINYUSB=1",))
+
+    def test_nrf_without_native_usb_retains_long_sleep_slice(self):
+        code = self.platform_code().split("int main() {", 1)[0] + r'''
+int main() {
+  reset(); usb_held = true;
+  NRF52Board board;
+  assert(board.emergencySleepMilliseconds(10000));
+  assert(delayed_ticks == 10000 && usb_mount_checks == 0);
+}
+'''
+        self.run_code(code)
 
     def test_native_usb_timer_wake_reserves_enumeration_service_without_extending_budget(self):
         code = self.platform_code().split("int main() {", 1)[0] + r'''
