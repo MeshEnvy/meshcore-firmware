@@ -94,6 +94,9 @@ static std::atomic<bool> usb_logging_enabled{true};
 #endif
 static std::atomic<bool> usb_logging_preference_known{false};
 static std::atomic<bool> usb_debug_enabled{false};
+#if MESH_USB_LOGGING_AVAILABLE
+static std::atomic<uint32_t> usb_packet_logging_quiet_until{0};
+#endif
 #if MESH_ENABLE_HOST_KISS
 static std::atomic<bool> usb_binary_stream_owned{false};
 static std::atomic<uint32_t> usb_text_writers{0};
@@ -1293,6 +1296,36 @@ bool isUsbBinaryStreamReady() {
 bool isUsbLoggingEnabled() {
   return usb_logging_enabled.load(std::memory_order_relaxed);
 }
+
+#if MESH_USB_LOGGING_AVAILABLE
+void noteUsbConsoleCommand(const char* command) {
+  if (command == nullptr || hasDedicatedUsbLoggingPort() || isUsbLoggingPacketStream()) return;
+  while (*command == ' ' || *command == '\t' || *command == '\r' || *command == '\n') ++command;
+  if (*command == 0 || isUsbLoggingStatsCommand(command)) return;
+  for (const unsigned char* p = reinterpret_cast<const unsigned char*>(command); *p; ++p) {
+    if ((*p < 32 && *p != '\t') || *p >= 127) return;
+  }
+  uint32_t deadline = uint32_t(millis()) + 300000UL;
+  if (deadline == 0) deadline = 1;
+  usb_packet_logging_quiet_until.store(deadline, std::memory_order_relaxed);
+}
+
+void resumeUsbPacketLogging() {
+  usb_packet_logging_quiet_until.store(0, std::memory_order_relaxed);
+}
+
+bool isUsbPacketLoggingAllowed() {
+  uint32_t deadline = usb_packet_logging_quiet_until.load(std::memory_order_relaxed);
+  bool quiet = deadline != 0;
+  if (quiet && int32_t(uint32_t(millis()) - deadline) >= 0) {
+    // Do not clear a newer command's pause if it raced this expiry sample.
+    quiet = !usb_packet_logging_quiet_until.compare_exchange_strong(
+        deadline, 0, std::memory_order_relaxed) && deadline != 0;
+  }
+  return isUsbLoggingEnabled()
+      && (hasDedicatedUsbLoggingPort() || isUsbLoggingPacketStream() || !quiet);
+}
+#endif
 
 bool isUsbDebugEnabled() {
   return usb_debug_enabled.load(std::memory_order_relaxed);

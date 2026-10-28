@@ -413,8 +413,10 @@ void loop() {
     char reply[160];
     reply[0] = 0;
     if (len < static_cast<int>(sizeof(command) - 1)
-        && strlen(command) == static_cast<size_t>(len - 1))
+        && strlen(command) == static_cast<size_t>(len - 1)) {
+      mesh::noteUsbConsoleCommand(command);
       mesh::noteUsbLoggingStatsCommand(command);
+    }
 #ifdef ETHERNET_ENABLED
     if (!ethernet_handle_command(command, reply)) {
       the_mesh.handleUsbCommand(command, reply);

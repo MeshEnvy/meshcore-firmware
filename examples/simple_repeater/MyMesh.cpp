@@ -1261,7 +1261,7 @@ bool MyMesh::allowTransportPacket(const mesh::Packet* packet, uint8_t context) {
 
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 #if MESH_PACKET_LOGGING
-  if (mesh::isUsbLoggingEnabled()) {
+  if (mesh::isUsbPacketLoggingAllowed()) {
 #if MESH_PACKET_LOGGING_COMPACT
     mesh::serialLogCompactPacket(mesh::usbLoggingPort(), 'R', raw, len);
 #else

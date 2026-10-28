@@ -234,7 +234,7 @@ bool Dispatcher::startOutboundTransmit() {
   outbound_expiry = futureMillis(max_airtime);
 
 #if MESH_PACKET_LOGGING
-  if (isUsbLoggingEnabled()) {
+  if (isUsbPacketLoggingAllowed()) {
 #if MESH_PACKET_LOGGING_COMPACT
     serialLogCompactPacket(usbLoggingPort(), 'T', raw, len);
 #else
@@ -1164,7 +1164,7 @@ void Dispatcher::checkRecv() {
   }
   if (pkt) {
     #if MESH_PACKET_LOGGING && !MESH_PACKET_LOGGING_COMPACT
-    if (isUsbLoggingEnabled()) {
+    if (isUsbPacketLoggingAllowed()) {
       logPacketLine("RX", pkt, pkt->getRawLength(), true, score, air_time);
     }
     #endif

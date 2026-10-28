@@ -66,7 +66,7 @@ struct Port : Stream {
 
 namespace mesh {
 bool logging_enabled = true;
-bool isUsbLoggingEnabled() { return logging_enabled; }
+bool isUsbPacketLoggingAllowed() { return logging_enabled; }
 Stream& usbLoggingPort() { return log_port; }
 void Utils::toHex(char* destination, const uint8_t* source, size_t size) {
   const char* digits = "0123456789ABCDEF";

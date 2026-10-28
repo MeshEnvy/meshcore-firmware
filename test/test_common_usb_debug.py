@@ -68,6 +68,7 @@ void setUsbLoggingEnabled(bool enabled) {
 }
 void setUsbDebugEnabled(bool enabled) { usb_debug = enabled; ++debug_updates; }
 bool isUsbLoggingEnabled() { return usb_logging; }
+void resumeUsbPacketLogging() {}
 bool isUsbDebugEnabled() { return usb_debug; }
 bool isUsbDebugLoggingEnabled() { return usb_logging && usb_debug; }
 }

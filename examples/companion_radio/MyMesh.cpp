@@ -820,7 +820,7 @@ const char* MyMesh::getLogDateTime() {
 
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 #if MESH_PACKET_LOGGING
-  if (mesh::isUsbLoggingEnabled()) {
+  if (mesh::isUsbPacketLoggingAllowed()) {
     mesh::SerialLogLine<> line;
 #if MESH_PACKET_LOGGING_COMPACT
     line.printf("R");
@@ -4380,22 +4380,25 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
         mesh::cli::formatError(reply, reply_size, "USB logging changed for this boot but save failed");
       } else if (!mesh::saveUsbLoggingBootPreference(enabled)) {
         mesh::cli::formatError(reply, reply_size, "setting saved, but next-boot USB interface state could not be saved");
-      } else if (mesh::usbLoggingInterfaceRestartRequired()
-          || (enabled && packet_stream != mesh::isUsbLoggingPacketStream())) {
-        if (reboot_if_needed) {
-          snprintf(reply, reply_size,
-              "OK - USB logging %s (saved); rebooting to change USB interfaces",
-              enabled ? (packet_stream ? "stream" : "on") : "off");
-          _scheduled_reboot_at = futureMillis(1000);
-          if (_scheduled_reboot_at == 0) _scheduled_reboot_at = 1;
-        } else {
-          snprintf(reply, reply_size,
-              "OK - USB logging %s (saved); reboot required to change USB interfaces",
-              enabled ? (packet_stream ? "stream" : "on") : "off");
-        }
       } else {
-        snprintf(reply, reply_size, "OK - USB logging %s (saved)",
-                 enabled ? (packet_stream ? "stream" : "on") : "off");
+        if (enabled) mesh::resumeUsbPacketLogging();
+        if (mesh::usbLoggingInterfaceRestartRequired()
+            || (enabled && packet_stream != mesh::isUsbLoggingPacketStream())) {
+          if (reboot_if_needed) {
+            snprintf(reply, reply_size,
+                "OK - USB logging %s (saved); rebooting to change USB interfaces",
+                enabled ? (packet_stream ? "stream" : "on") : "off");
+            _scheduled_reboot_at = futureMillis(1000);
+            if (_scheduled_reboot_at == 0) _scheduled_reboot_at = 1;
+          } else {
+            snprintf(reply, reply_size,
+                "OK - USB logging %s (saved); reboot required to change USB interfaces",
+                enabled ? (packet_stream ? "stream" : "on") : "off");
+          }
+        } else {
+          snprintf(reply, reply_size, "OK - USB logging %s (saved)",
+                   enabled ? (packet_stream ? "stream" : "on") : "off");
+        }
       }
     }
     return true;
@@ -4931,6 +4934,7 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
       if (!savePrefs() || !mesh::saveUsbLoggingBootPreference(usb)) {
         mesh::cli::formatError(reply, reply_size, "logging output changed but USB setting could not be saved");
       } else {
+        if (usb) mesh::resumeUsbPacketLogging();
         // USB ownership changes can clear the terminal's input buffer while
         // this command is executing. Use parsed values, not that borrowed text.
         snprintf(reply, reply_size, "OK - logging.output %s (saved)",
@@ -11403,6 +11407,7 @@ void MyMesh::checkCLIRescueCmd() {
 
 complete_line:
   {
+    if (strlen(cli_command) == len) mesh::noteUsbConsoleCommand(cli_command);
     reply_buf[0] = 0;
 #if COMPANION_FEATURE_READER
     if (mesh::morseTimingActive(_radio) && isCompanionReaderRequest(cli_command)) {

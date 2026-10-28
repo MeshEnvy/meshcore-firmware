@@ -396,8 +396,10 @@ void loop() {
     char reply[160];
     reply[0] = 0;
     if (len < static_cast<int>(sizeof(command) - 1)
-        && strlen(command) == static_cast<size_t>(len - 1))
+        && strlen(command) == static_cast<size_t>(len - 1)) {
+      mesh::noteUsbConsoleCommand(command);
       mesh::noteUsbLoggingStatsCommand(command);
+    }
     the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
     if (reply[0]) {
       console.print("  -> ");

@@ -44,6 +44,8 @@ void setPlatformDebugOutputEnabled(bool){}
 void setUsbDebugEnabled(bool){}
 void setUsbLoggingEnabled(bool enabled){logging=enabled;usb_logging_preference_known=true;}
 bool saveUsbLoggingBootPreference(bool){return true;}
+unsigned packet_logging_resumes=0;
+void resumeUsbPacketLogging(){++packet_logging_resumes;}
 @USB_FUNCTIONS@
 void freshBoot(){
  dedicated_usb_logging_port_started=false;dedicated_usb_logging_port_configured=false;
@@ -121,11 +123,15 @@ int main(){
  for(const char* invalid : {"set usb.logging stream extra","set usb.logging STREAM",
       "set usb.logging stream ","set usb.logging stream reboot ","set usb.loggingstream"}){
    const auto before=node.store.fs.files["/new_prefs"];
+   const unsigned resumes=mesh::packet_logging_resumes;
    const bool handled=node.command(invalid,reply,sizeof(reply));
+   assert(mesh::packet_logging_resumes==resumes);
    if(handled)assert(strstr(reply,"Error:"));
    assert(node.store.fs.files["/new_prefs"]==before&&node._prefs.usb_logging_enabled==1);
  }
+ const unsigned resumes=mesh::packet_logging_resumes;
  assert(node.command("set usb.logging stream",reply,sizeof(reply)));
+ assert(mesh::packet_logging_resumes==resumes+1);
  assert(node._prefs.usb_logging_enabled==2&&node.store.fs.files["/new_prefs"][158]==2);
  assert(strstr(reply,"reboot required"));assert(node._scheduled_reboot_at==0);
  assert(!mesh::isUsbLoggingPacketStream()); // Saved choice cannot flip a live descriptor/route.
@@ -149,7 +155,12 @@ int main(){
  bootMode(node,1);node._scheduled_reboot_at=0;
  assert(node.command("set usb.logging stream",reply,sizeof(reply)));
  node.store.fs.fail_write=true;
+ const unsigned before_failed_save=mesh::packet_logging_resumes;
  assert(node.command("set usb.logging off",reply,sizeof(reply)));
+ for(const char* failed : {"set usb.logging on","set usb.logging stream"}) {
+   assert(node.command(failed,reply,sizeof(reply)) && strstr(reply,"save failed"));
+   assert(mesh::packet_logging_resumes==before_failed_save);
+ }
  assert(strstr(reply,"save failed")&&node.store.fs.files["/new_prefs"][158]==2);
  assert(!mesh::isUsbLoggingPacketStream());
  char guarded[17];memset(guarded,'X',sizeof(guarded));

@@ -30,6 +30,7 @@ struct Stream {
 namespace mesh {
 bool morseTimingActive(const void*) { return morse_active; }
 bool saveUsbLoggingBootPreference(bool) { return boot_save_ok; }
+void resumeUsbPacketLogging() {}
 bool usbLoggingInterfaceRestartRequired() { return true; }
 bool isUsbLoggingPacketStream() { return false; }
 }

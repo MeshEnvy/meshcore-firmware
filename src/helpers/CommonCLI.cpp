@@ -4453,6 +4453,7 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       }
       // Commit before changing the stream's live protocol ownership.
       mesh::setUsbLoggingEnabled(enabled);
+      if (enabled) mesh::resumeUsbPacketLogging();
       snprintf(reply, 160, "OK - USB logging %s (saved)", enabled ? "on" : "off");
     } else {
       mesh::cli::formatError(reply, 160, "usage set usb.logging on|off");
@@ -4503,6 +4504,7 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       return;
     }
     mesh::setUsbLoggingEnabled(usb_enabled);
+    if (usb_enabled) mesh::resumeUsbPacketLogging();
     const bool applied = wifi_enabled ? _callbacks->setMqttBridgeState(true)
                                       : _callbacks->requestMqttBridgeStop();
     if (!applied) {

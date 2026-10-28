@@ -46,6 +46,14 @@ LoRa, management reports, and ordinary framed Companion traffic do not.
 No new heartbeat command is required. A cable, open TTY, DTR, or kernel USB
 ACK alone cannot qualify Auto.
 
+Interactive text commands on a shared USB console pause packet logs for five
+minutes after the last command. The three routine stats polls above keep
+their replies and renew the lease without starting or extending this pause.
+Dedicated logging ports and explicit Companion stream mode keep logging.
+The pause does not disable measurements, LoRa telemetry, direct WiFi MQTT,
+or the saved logging master. USB packet collectors miss log copies during
+the pause. See [live USB logging](cli_commands.md#control-live-usb-logging).
+
 `logger=1` requires the USB logging master, an observed host and reader, a fresh
 stats lease, and no physical TX stall. Any program polling those commands can
 qualify: this is not application identification or proof that packets were

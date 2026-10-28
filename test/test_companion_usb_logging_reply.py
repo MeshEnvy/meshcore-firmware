@@ -84,6 +84,7 @@ void setUsbLoggingEnabled(bool value) { logging=value; }
 void discardUsbTerminalOutput() {}
 Stream& usbCompanionPort() { return stream; }
 bool saveUsbLoggingBootPreference(bool) { return true; }
+void resumeUsbPacketLogging() {}
 bool usbLoggingInterfaceRestartRequired() { return false; }
 bool isUsbLoggingPacketStream() { return false; }
 }

@@ -1694,6 +1694,26 @@ loading older preferences without a debug field. Updates retain an existing
 saved `usb.logging` choice. Older binaries without the new `usb.debug`
 command retain their previous behavior until upgraded.
 
+On a shared USB console, an interactive text command pauses `RAW`, `RX`, and
+`TX` packet log lines for five minutes. Each command restarts the timer;
+logging then resumes automatically if its saved master is on. `get usb.logging`
+still reports that saved setting. `set usb.logging on` or
+`set logging.output usb|both` resumes packet logs immediately after a successful
+save. No reboot is needed.
+
+The routine `stats-core`, `stats-radio`, and `stats-packets` polls do not start
+or extend this pause. A separate logging USB port and explicit Companion
+`usb.logging stream` mode also keep logging. The pause leaves command replies,
+noise-floor sampling, saved history, LoRa telemetry, and direct WiFi MQTT
+running. A collector reading USB packet logs misses those log copies during
+the pause, including telemetry packets; this is not buffered capture.
+
+`meshcoretomqtt` polls these three stats commands every 300 seconds and
+publishes `noise_floor` from the `stats-radio` reply in its MQTT status. These
+polls keep working during the pause. Its startup identity queries do trigger
+a five-minute packet-capture gap on a shared console, as do ordinary commands
+sent through its remote serial feature.
+
 For packet-only capture, use these separate text commands:
 
 ```text

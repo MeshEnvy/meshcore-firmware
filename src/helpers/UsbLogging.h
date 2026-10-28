@@ -92,6 +92,19 @@ inline size_t nextUsbLoggingIdentityOffset(size_t current_offset,
 // protect framed traffic and restores its saved choice after preferences load.
 bool isUsbLoggingEnabled();
 void setUsbLoggingEnabled(bool enabled);
+#if MESH_USB_LOGGING_AVAILABLE
+// Human console commands pause packet records for five minutes without
+// changing the saved logging setting, functional replies, or debug output.
+// Dedicated logging endpoints, explicit packet streams, and stats polls keep
+// their continuous capture contract. Explicit logging-on commands may resume.
+void noteUsbConsoleCommand(const char* command);
+void resumeUsbPacketLogging();
+bool isUsbPacketLoggingAllowed();
+#else
+inline void noteUsbConsoleCommand(const char*) {}
+inline void resumeUsbPacketLogging() {}
+inline bool isUsbPacketLoggingAllowed() { return false; }
+#endif
 // Verbose diagnostics are opt-in and persisted by the role preferences.
 // The requested setting survives switching the master USB output gate off.
 bool isUsbDebugEnabled();

@@ -1408,6 +1408,7 @@ static void serviceUsbTerminal() {
 #endif
       // NUL-containing lines were discarded before reaching this point. On
       // dual CDC hardware only CDC1 is the logging-reader endpoint.
+      mesh::noteUsbConsoleCommand(usb_terminal_line);
       if (!mesh::hasDedicatedUsbLoggingPort())
         mesh::noteUsbLoggingStatsCommand(usb_terminal_line);
       the_mesh.handleTerminalCommand(usb_terminal_line);

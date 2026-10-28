@@ -199,7 +199,7 @@ struct Port : Stream {
 } log_port;
 namespace mesh {
 bool enabled=true,debug_enabled=false;
-bool isUsbLoggingEnabled(){return enabled;}
+bool isUsbPacketLoggingAllowed(){return enabled;}
 Port& usbLoggingPort(){return log_port;}
 }
 struct Transport {

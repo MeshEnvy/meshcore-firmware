@@ -626,8 +626,10 @@ static void __attribute__((noinline)) serviceCommandInterfaces() {
     console.print('\n');
     char reply[160];
     reply[0] = 0;
-    if (strlen(command) == static_cast<size_t>(len))
+    if (strlen(command) == static_cast<size_t>(len)) {
+      mesh::noteUsbConsoleCommand(command);
       mesh::noteUsbLoggingStatsCommand(command);
+    }
 #if defined(MESH_SOAK_DIAGNOSTICS)
     if (mesh::hil::handleSoakCommand(command, reply, sizeof(reply))) {
       console.print("  -> ");

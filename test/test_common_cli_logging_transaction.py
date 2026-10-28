@@ -18,8 +18,10 @@ HARNESS = r'''
 struct Prefs { uint8_t usb_logging_enabled = 0, bridge_enabled = 0; };
 static bool live_usb = false;
 static unsigned usb_calls = 0;
+static unsigned resume_calls = 0;
 namespace mesh {
 void setUsbLoggingEnabled(bool value) { live_usb = value; ++usb_calls; }
+void resumeUsbPacketLogging() { ++resume_calls; }
 }
 struct Callbacks {
   bool live_wifi = false, apply_ok = true, stopping = false, pending = false;
@@ -50,6 +52,7 @@ static void check(const char* command, bool usb, bool wifi, bool failed) {
   live_usb = !usb;
   cli.callbacks.live_wifi = !wifi;
   usb_calls = 0;
+  resume_calls = 0;
   cli.save_ok = !failed;
   char reply[160]{};
   cli.set(command, reply);
@@ -58,6 +61,7 @@ static void check(const char* command, bool usb, bool wifi, bool failed) {
   assert(cli.persisted.usb_logging_enabled == (failed ? !usb : usb));
   assert(live_usb == (failed ? !usb : usb));
   assert(usb_calls == (failed ? 0u : 1u));
+  assert(resume_calls == (!failed && usb ? 1u : 0u));
   assert(strstr(reply, failed ? "unconfirmed" : "(saved)"));
   if (failed) assert(strstr(reply, "reboot may differ"));
   if (strncmp(command, "logging.output", 14) == 0) {
@@ -88,9 +92,11 @@ int main() {
   cli.set("logging.output invalid", reply);
   assert(cli.saves == 0 && strstr(reply, "Error:"));
   cli.callbacks.apply_ok = false;
+  resume_calls = 0;
   cli.set("logging.output both", reply);
   assert(cli.persisted.usb_logging_enabled && cli.persisted.bridge_enabled);
   assert(live_usb && !cli.callbacks.live_wifi);
+  assert(resume_calls == 1);
   assert(strstr(reply, "saved, but MQTT runtime change failed"));
   // A restart during cleanup saves intent without interrupting the old worker.
   cli.callbacks.stopping = true;
@@ -120,7 +126,10 @@ class LoggingTransactionTest(unittest.TestCase):
 #include "helpers/CLICommandUtils.h"
 static char input[64];
 namespace CompanionMqttSetupPortal { static bool saveEnabled(bool) { return true; } }
-namespace mesh { static bool saveUsbLoggingBootPreference(bool) { return true; } }
+namespace mesh {
+static bool saveUsbLoggingBootPreference(bool) { return true; }
+inline void resumeUsbPacketLogging() {}
+}
 struct Mesh {
   bool _mqtt_enabled = true;
   struct { unsigned usb_logging_enabled = 1; } _prefs;

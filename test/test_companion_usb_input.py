@@ -90,8 +90,9 @@ struct OtaContext {
 ArduinoSerialInterface usb_serial_interface;
 static Stream& usbTerminalOutput() { return input; }
 static bool connected=true, logging=false, dedicated=false;
-static std::vector<std::string> stats_commands;
+static std::vector<std::string> stats_commands, console_commands;
 namespace mesh {
+void noteUsbConsoleCommand(const char* command) { console_commands.emplace_back(command); }
 bool isUsbLoggingEnabled() { return logging; }
 bool hasDedicatedUsbLoggingPort() { return dedicated; }
 void noteUsbLoggingStatsCommand(const char* command) {
@@ -154,7 +155,7 @@ static void drainUsbTerminalOutputBeforeProtocolSwitch() {}
 @FUNCTIONS@
 static void reset() {
   input=Input(); the_mesh=Mesh(); connected=true; logging=dedicated=false;
-  stats_commands.clear();
+  stats_commands.clear(); console_commands.clear();
   mesh::ota::OtaContext::serialFolderSource().resetSessionState();
   usb_serial_interface=ArduinoSerialInterface();
   usb_serial_interface.begin(input,USB_TERMINAL_START_TOKEN,USB_MOTA_START_TOKEN);
@@ -192,18 +193,20 @@ int main() {
     assert(input.available()==5 && input.peek()=='<');
     assert(input.output.empty() && the_mesh.banners==0);
     finishProbe();
+    assert(console_commands.empty());
   }
   // Empty Enter reveals the silent terminal without fabricating a command.
   for(const char* leading : {"\r","\n","\r\n"}) {
     reset(); input.push(leading); serviceUsbTerminal();
     assert(the_mesh.terminal && !the_mesh.waiting && the_mesh.banners==1);
     assert(!usb_binary_startup_probe.isActive() && input.available()==0);
-    assert(the_mesh.commands.empty());
+    assert(the_mesh.commands.empty() && console_commands.empty());
     serviceUsbTerminal(); assert(the_mesh.banners==1);
   }
   reset(); input.push("\r\nget name\r\n"); serviceUsbTerminal();
   assert(the_mesh.banners==1 && the_mesh.commands.size()==1);
   assert(the_mesh.commands[0]=="get name" && the_mesh.terminal);
+  assert(console_commands==the_mesh.commands);
   // Reaching an empty prompt through an edit also leaves the frame untouched.
   reset(); input.push("x\b"); input.frame(); serviceUsbTerminal();
   assert(usb_binary_startup_probe.isActive() && input.available()==5);
@@ -311,7 +314,7 @@ int main() {
       serviceUsbTerminal();
       assert(!usb_mota_mode && the_mesh.attaches==0 && the_mesh.detaches==0);
       assert(the_mesh.commands.size()==1 && the_mesh.commands[0]=="get name");
-      assert(stats_commands==the_mesh.commands);
+      assert(stats_commands==the_mesh.commands && console_commands==the_mesh.commands);
       const auto error=input.output.find("ERROR: invalid command");
       assert(error!=std::string::npos);
       assert(input.output.find("ERROR: invalid command",error+1)==std::string::npos);
@@ -330,7 +333,7 @@ int main() {
   assert(oversized_setter.size()==610);
   reset(); input.hwcdcBurst(oversized_setter,256); serviceUsbTerminal();
   assert(input.rx_dropped==354 && input.output.size()==256+6); // Silent banner is revealed.
-  assert(the_mesh.commands.empty() && usb_terminal_line_len==256);
+  assert(the_mesh.commands.empty() && usb_terminal_line_len==256 && console_commands.empty());
   assert(!usb_terminal_discard_line && input.output.find("ERROR")==std::string::npos);
   input.push("\r"); serviceUsbTerminal();
   assert(the_mesh.commands==std::vector<std::string>{oversized_setter.substr(0,256)});
