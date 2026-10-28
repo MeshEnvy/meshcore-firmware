@@ -181,6 +181,35 @@ class UsbPacketLoggingQuietTests(unittest.TestCase):
             ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20)
             self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
 
+    def test_dual_cdc_inline_apis_preserve_both_continuous_capture_modes(self):
+        source = (ROOT / "src/helpers/UsbLogging.cpp").read_text()
+        harness = '''
+#include <helpers/UsbLogging.h>
+#include <cassert>
+#include <initializer_list>
+namespace mesh {
+bool enabled=false,packet_stream=false;
+bool isUsbLoggingEnabled(){return enabled;}
+bool isUsbLoggingPacketStream(){return packet_stream;}
+@DEDICATED@
+}
+int main(){
+ for(bool stream:{false,true})for(bool enabled:{false,true}){
+   mesh::packet_stream=stream;mesh::enabled=enabled;
+   assert(mesh::hasDedicatedUsbLoggingPort()==!stream);
+   mesh::noteUsbConsoleCommand(nullptr);mesh::noteUsbConsoleCommand("get name");
+   assert(mesh::isUsbPacketLoggingAllowed()==enabled);
+   mesh::resumeUsbPacketLogging();
+   assert(mesh::isUsbPacketLoggingAllowed()==enabled);
+ }
+}
+'''.replace("@DEDICATED@", method(source, "bool hasDedicatedUsbLoggingPort("))
+        with tempfile.TemporaryDirectory(prefix="meshcore-packet-dual-") as directory:
+            binary = self.compile(Path(directory), "dual", harness,
+                ["-DMESH_DEBUG=1", "-DMESH_DUAL_CDC_LOGGING=1"])
+            ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20)
+            self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+
     def test_disabled_logging_build_has_noop_pause_apis(self):
         with tempfile.TemporaryDirectory(prefix="meshcore-packet-disabled-") as directory:
             for flags in ([], ["-DMESH_DEBUG=1", "-DMESH_USB_LOGGING_DISABLED=1"]):

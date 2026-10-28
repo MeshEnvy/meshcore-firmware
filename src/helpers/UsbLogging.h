@@ -92,7 +92,13 @@ inline size_t nextUsbLoggingIdentityOffset(size_t current_offset,
 // protect framed traffic and restores its saved choice after preferences load.
 bool isUsbLoggingEnabled();
 void setUsbLoggingEnabled(bool enabled);
-#if MESH_USB_LOGGING_AVAILABLE
+#if MESH_USB_LOGGING_AVAILABLE && defined(MESH_DUAL_CDC_LOGGING)
+// Either the dedicated CDC or explicit packet stream owns capture in these
+// builds. Both bypass quieting, so no timer or command parser is needed.
+inline void noteUsbConsoleCommand(const char*) {}
+inline void resumeUsbPacketLogging() {}
+inline bool isUsbPacketLoggingAllowed() { return isUsbLoggingEnabled(); }
+#elif MESH_USB_LOGGING_AVAILABLE
 // Human console commands pause packet records for five minutes without
 // changing the saved logging setting, functional replies, or debug output.
 // Dedicated logging endpoints, explicit packet streams, and stats polls keep

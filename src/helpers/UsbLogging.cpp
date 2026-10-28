@@ -94,7 +94,7 @@ static std::atomic<bool> usb_logging_enabled{true};
 #endif
 static std::atomic<bool> usb_logging_preference_known{false};
 static std::atomic<bool> usb_debug_enabled{false};
-#if MESH_USB_LOGGING_AVAILABLE
+#if MESH_USB_LOGGING_AVAILABLE && !defined(MESH_DUAL_CDC_LOGGING)
 static std::atomic<uint32_t> usb_packet_logging_quiet_until{0};
 #endif
 #if MESH_ENABLE_HOST_KISS
@@ -1297,7 +1297,7 @@ bool isUsbLoggingEnabled() {
   return usb_logging_enabled.load(std::memory_order_relaxed);
 }
 
-#if MESH_USB_LOGGING_AVAILABLE
+#if MESH_USB_LOGGING_AVAILABLE && !defined(MESH_DUAL_CDC_LOGGING)
 void noteUsbConsoleCommand(const char* command) {
   if (command == nullptr || hasDedicatedUsbLoggingPort() || isUsbLoggingPacketStream()) return;
   while (*command == ' ' || *command == '\t' || *command == '\r' || *command == '\n') ++command;

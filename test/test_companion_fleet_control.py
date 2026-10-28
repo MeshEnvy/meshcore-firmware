@@ -46,6 +46,7 @@ static RescueStream rescue_input, rescue_output;
 namespace mesh {
 static bool usb_binary_owned = false;
 bool isUsbBinaryStreamOwned() { return usb_binary_owned; }
+void noteUsbConsoleCommand(const char*) {}
 Stream& usbTerminalPort() { return rescue_output; }
 Stream& usbCompanionPort() { return rescue_input; }
 namespace hostkiss {
