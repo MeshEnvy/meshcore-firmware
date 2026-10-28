@@ -69,6 +69,7 @@
 #include <helpers/SmallTableSort.h>
 #include <helpers/UsbAsciiBinarySwitch.h>
 #include <helpers/UsbLogging.h>
+#include <helpers/UsbMode.h>
 #if defined(ESP32_PLATFORM) && defined(WIFI_SSID)
 #include <helpers/esp32/CompanionAdminPassword.h>
 #include <helpers/esp32/ManagementPassword.h>
@@ -11131,6 +11132,8 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
     command += 3;
     while (*command == ' ' || *command == '\t') command++;
   }
+
+  if (mesh::handleUsbModeCommand(command, reply, reply_capacity, Serial)) return true;
 
 #if defined(ESP32_PLATFORM)
   // Catch remote requests before the direct-transport router below. That

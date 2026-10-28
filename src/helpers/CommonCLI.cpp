@@ -5,6 +5,7 @@
 #include <helpers/sensors/SolarXiaoPower.h>
 #include <helpers/LedSettings.h>
 #include <Arduino.h>
+#include "UsbMode.h"
 #include "CarrierTools.h"
 #include "PacketFileLoggingConfig.h"
 #include "CommonCLI.h"
@@ -3553,6 +3554,7 @@ bool CommonCLI::handleUDPBridgeCommand(uint32_t sender_timestamp,
 void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* reply) {
     PrefsSaveReplyGuard save_reply(_prefs_save_failures, reply);
     mesh::cli::normalizeCommandVerb(command);
+    if (mesh::handleUsbModeCommand(command, reply, 160, Serial)) return;
 #if MESH_ENABLE_HOST_KISS
     if (mesh::hostkiss::handleCommand(command, reply, 157, sender_timestamp == 0)) return;
 #endif
