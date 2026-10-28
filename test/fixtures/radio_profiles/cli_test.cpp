@@ -548,6 +548,7 @@ static void mediaMeshPresets() {
   assert(!invalid.radio.p.enabled() && invalid.fs.files.empty());
 }
 
+#if !MESH_CLIENT_REPEATER_ONLY
 static void channelPresetTransaction() {
   for (bool range : {false, true}) {
     Fixture f;
@@ -709,6 +710,8 @@ static void channelPresetTransaction() {
     assert(!f.cli.hasReplyMutation() && f.radio.p.secondary.params.bw == 125);
   }
 }
+
+#endif
 
 struct MediaScope {
   bool available = true, fail_save = false, enabled = false, durable = false;
@@ -893,7 +896,9 @@ int main(int argc, char** argv) {
     else if (!strcmp(argv[1], "relative_schedule")) relativeSchedules();
     else if (!strcmp(argv[1], "spectrum_overlap")) spectrumOverlap();
     else if (!strcmp(argv[1], "mediamesh")) mediaMeshPresets();
+#if !MESH_CLIENT_REPEATER_ONLY
     else if (!strcmp(argv[1], "channel_preset")) channelPresetTransaction();
+#endif
     else if (!strcmp(argv[1], "media_scope")) mediaMeshScopeLifecycle();
     else return 2;
     return 0;

@@ -746,6 +746,8 @@ bool RadioProfileCLI::finishReplyMutation(bool delivered) {
       || !fs_ || !fs_->exists(ReplyPath) || fs_->remove(ReplyPath);
 }
 
+#if !MESH_CLIENT_REPEATER_ONLY
+// Companion channel joins use this transaction; repeaters use the CLI below.
 bool RadioProfileCLI::stageChannelPreset(const char* name) {
   if (!name || !cli::radio2PresetTuple(name) || remote_command_
       || !secondaryRuntimeAvailable()) return false;
@@ -768,6 +770,7 @@ bool RadioProfileCLI::finishChannelPreset(bool commit) {
   publish_after_ms_ = millis() + 2000;
   return true;
 }
+#endif
 
 #if MESH_ENABLE_FLEET_CONTROL
 bool RadioProfileCLI::stageRemoteSchedule(unsigned slot, const Schedule& schedule) {

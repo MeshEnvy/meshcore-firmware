@@ -9,6 +9,32 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 class RadioProfileCLITest(unittest.TestCase):
+    def test_repeater_retains_radio2_presets_schedules_and_transactions(self):
+        compiler = shutil.which('g++') or shutil.which('clang++')
+        self.assertIsNotNone(compiler)
+        with tempfile.TemporaryDirectory(prefix='profile-repeater-') as work:
+            binary = Path(work) / 'repeater'
+            compiled = subprocess.run([
+                compiler, '-std=c++17', '-Os', '-Wall', '-Wextra',
+                '-DMESH_CLIENT_REPEATER_ONLY=1', '-DMESH_ENABLE_FLEET_CONTROL=0',
+                '-DMESH_ENABLE_CARRIER_TOOLS=0',
+                '-I', str(ROOT/'test/fixtures/radio_profiles/mocks'),
+                '-I', str(ROOT/'test/mocks'), '-I', str(ROOT/'src'),
+                str(ROOT/'src/helpers/RadioProfileCLI.cpp'),
+                str(ROOT/'test/fixtures/radio_profiles/cli_test.cpp'),
+                '-o', str(binary)], capture_output=True, text=True, timeout=60)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            for scenario in (None, 'permanent_order', 'temporary_boundary', 'lease_creation',
+                             'save_failure', 'schedule_permutations', 'storage_isolation',
+                             'relative_schedule', 'spectrum_overlap', 'mediamesh', 'media_scope'):
+                with self.subTest(scenario=scenario):
+                    ran = subprocess.run([str(binary)] + ([scenario] if scenario else []),
+                                         capture_output=True, text=True, timeout=10)
+                    self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+            symbols = subprocess.check_output(['nm', '-C', str(binary)], text=True)
+            self.assertNotIn('RadioProfileCLI::stageChannelPreset(', symbols)
+            self.assertNotIn('RadioProfileCLI::finishChannelPreset(', symbols)
+
     def test_channel_preset_preserves_secondary_owners(self):
         compiler = shutil.which('g++') or shutil.which('clang++')
         self.assertIsNotNone(compiler)
