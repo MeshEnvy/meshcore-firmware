@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include "helpers/radiolib/RXPowerSaving.h"
+#include "usb_mode_console.h"
 
 struct Radio {
   bool supported = true;

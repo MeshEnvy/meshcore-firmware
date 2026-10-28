@@ -127,18 +127,26 @@ class UsbModeTests(unittest.TestCase):
                     self.compile_and_run(directory, "alias" + str(index), flags, expected, primary=primary)
 
     def test_actual_common_and_companion_dispatch_including_v14_request_prefix(self):
-        common = method((ROOT / "src/helpers/CommonCLI.cpp").read_text(),
-                        "void CommonCLI::handleCommand(")
-        companion = method((ROOT / "examples/companion_radio/MyMesh.cpp").read_text(),
-                           "bool MyMesh::handleCommand(")
-        call = "if (mesh::handleUsbModeCommand(command, reply, reply_capacity, Serial)) return true;"
-        self.assertIn(call, companion)
-        # Execute the real early dispatch bodies, before unrelated board/radio
-        # services. The framed V14 command path invokes this same handleCommand.
-        common = common.split("#if MESH_ENABLE_HOST_KISS", 1)[0] + "\n}"
-        companion = companion[:companion.index(call) + len(call)] + "\nreturn false;\n}"
-        # The omitted unrelated dispatch branches normally use this argument.
+        common_source = (ROOT / "src/helpers/CommonCLI.cpp").read_text()
+        companion_source = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text()
+        common = method(common_source, "void CommonCLI::handleCommand(")
+        getter = method(common_source, "void CommonCLI::handleGetCmd(")
+        companion = method(companion_source, "bool MyMesh::handleCommand(")
+        control = method(companion_source, "bool MyMesh::handleLocalControlCommand(")
+        self.assertNotIn("handleUsbModeCommand", common)
+        self.assertNotIn("handleUsbModeCommand", companion)
+        self.assertIn("handleUsbModeCommand", getter)
+        self.assertIn("handleUsbModeCommand", control)
+        # Execute each actual entry and getter registration, retaining the V14
+        # prefix/capacity handling while omitting unrelated hardware branches.
+        common = common.split("#if MESH_ENABLE_HOST_KISS", 1)[0] + method(
+            common, 'if (memcmp(command, "get ", 4) == 0)') + "\n}"
+        getter = getter[:getter.index("  const char* config")] + "\n}"
+        control = control[:control.index("#if defined(ESP32_PLATFORM)")] + "return false;\n}"
+        companion = companion[:companion.index("#if defined(ESP32_PLATFORM)")]
+        companion += "  return handleLocalControlCommand(command, reply, reply_capacity);\n}"
         common = common.replace("{", "{ (void)sender_timestamp;", 1)
+        getter = getter.replace("{", "{ (void)sender_timestamp;", 1)
         companion = companion.replace("{", "{ (void)sender_timestamp;", 1)
         dispatch = r'''
 struct PrefsSaveReplyGuard {
@@ -148,8 +156,12 @@ namespace mesh { namespace cli { void normalizeCommandVerb(char*) {} } }
 struct CommonCLI {
   unsigned _prefs_save_failures = 0;
   void handleCommand(uint32_t, char*, char*);
+  void handleGetCmd(uint32_t, char*, char*);
 };
-struct MyMesh { bool handleCommand(const char*, uint32_t, char*); };
+struct MyMesh {
+  bool handleCommand(const char*, uint32_t, char*);
+  bool handleLocalControlCommand(const char*, char*, size_t);
+};
 '''
         cases = r'''
   CommonCLI common;
@@ -164,8 +176,13 @@ struct MyMesh { bool handleCommand(const char*, uint32_t, char*); };
   assert(!companion.handleCommand("set usb.mode tinyusb", 0, reply));
 '''
         with tempfile.TemporaryDirectory(prefix="meshcore-usb-mode-dispatch-") as directory:
-            self.compile_and_run(directory, "dispatch", ["ESP32", "ARDUINO_USB_MODE=1",
-                "ARDUINO_USB_CDC_ON_BOOT=1"], "hardware-cdc-jtag", dispatch + common + companion, cases)
+            for index, (flags, expected) in enumerate((
+                (["ESP32", "ARDUINO_USB_MODE=1", "ARDUINO_USB_CDC_ON_BOOT=1"], "hardware-cdc-jtag"),
+                (["ESP32", "ARDUINO_USB_MODE=0", "ARDUINO_USB_CDC_ON_BOOT=1"], "tinyusb"),
+                (["NRF52_PLATFORM", "USE_TINYUSB", "MESH_DUAL_CDC_LOGGING"], "tinyusb"),
+                (["STM32_PLATFORM"], "unknown"))):
+                self.compile_and_run(directory, "dispatch" + str(index), flags, expected,
+                                     dispatch + getter + control + common + companion, cases)
         full = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text()
         frame = full[full.index("mesh::companion::isRunCliFrame"):]
         self.assertIn("handleCommand(text, 0, reply_buf)", frame)

@@ -3560,7 +3560,6 @@ bool CommonCLI::handleUDPBridgeCommand(uint32_t sender_timestamp,
 void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* reply) {
     PrefsSaveReplyGuard save_reply(_prefs_save_failures, reply);
     mesh::cli::normalizeCommandVerb(command);
-    if (mesh::handleUsbModeCommand(command, reply, 160, Serial)) return;
 #if MESH_ENABLE_HOST_KISS
     if (mesh::hostkiss::handleCommand(command, reply, 157, sender_timestamp == 0)) return;
 #endif
@@ -5992,6 +5991,7 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
 }
 
 void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* reply) {
+  if (mesh::handleUsbModeCommand(command, reply, 160, Serial)) return;
   const char* config = &command[4];
 #if defined(RAK_4631)
   if (mesh::peripherals::handleCommand(_prefs->peripherals_shared, command,

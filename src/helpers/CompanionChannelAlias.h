@@ -34,12 +34,9 @@ inline CompanionChannelAlias parseCompanionChannelAlias(const char* name) {
 // Only exact named radio2 aliases request RF setup. Ordinary channels and
 // arbitrary r2 labels keep the operator's existing profile.
 inline const char* companionChannelRadio2Preset(const char* name) {
-  if (!name) return nullptr;
-  if (*name == '#') ++name;
-  if (strncmp(name, "r2-", 3)) return nullptr;
-  name += 3;
-  // An exact preset tail also excludes every invalid/nested alias form.
-  return mesh::cli::radio2PresetTuple(name) ? name : nullptr;
+  const auto alias = parseCompanionChannelAlias(name);
+  return alias.kind == CompanionChannelKind::Radio2
+      && mesh::cli::radio2PresetTuple(alias.tail) ? alias.tail : nullptr;
 }
 
 inline bool companionChannelCanonicalName(const char* name, char* out, size_t size) {

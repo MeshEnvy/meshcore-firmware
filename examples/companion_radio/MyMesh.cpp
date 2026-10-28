@@ -1785,7 +1785,7 @@ bool MyMesh::resolveChannelAlias(ChannelDetails& channel) const {
       })) return false;
   const auto kind = parseCompanionChannelAlias(channel.name).kind;
 #if MESH_ENABLE_MESHTEXT_CHAT
-  if (kind == CompanionChannelKind::Meshtext) channel.channel.tx_radio = mesh::RADIO_TX_OFF;
+  if (isMeshtextChannel(channel)) channel.channel.tx_radio = mesh::RADIO_TX_OFF;
 #endif
   if (isAliasRadio2Defined()
       && (kind == CompanionChannelKind::Radio2 || kind == CompanionChannelKind::Meshtext)) {
@@ -4078,11 +4078,11 @@ bool MyMesh::handleTxRoutingCommand(const char* command, char* reply, size_t rep
   return true;
 }
 
-__attribute__((noinline, cold))
 bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
                                        size_t reply_size) {
   if (!command || !reply || reply_size == 0) return false;
   while (*command == ' ') command++;
+  if (mesh::handleUsbModeCommand(command, reply, reply_size, Serial)) return true;
 #if defined(ESP32_PLATFORM) && defined(WIFI_SSID)
   if (strncmp(command, "password", 8) == 0
       && (command[8] == 0 || command[8] == ' ' || command[8] == '\t')) {
@@ -11138,8 +11138,6 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
     command += 3;
     while (*command == ' ' || *command == '\t') command++;
   }
-
-  if (mesh::handleUsbModeCommand(command, reply, reply_capacity, Serial)) return true;
 
 #if defined(ESP32_PLATFORM)
   // Catch remote requests before the direct-transport router below. That
