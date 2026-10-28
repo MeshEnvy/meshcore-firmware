@@ -1106,7 +1106,7 @@ bool RadioProfileCLI::handle(const char* command, char* reply, size_t capacity, 
   const bool status = kind == Status;
   const bool scan = kind == Scan;
   const bool timing = kind == Timing || kind == TimingAlias;
-  if (!radio_ || !radio_->profiles()) { cli::formatError(reply, capacity, "radio profiles unsupported"); return true; }
+  if (!radio_ || !radio_->profiles()) { cli::formatError(reply, capacity, MESH_CLI_REPLY_TEXT("radio profiles unsupported", "profiles unsupported")); return true; }
   if (command == text && *args && verb == Get && (temporary || base)) verb = Set;
   if (remote_origin && !remote_command_
       && (((base || temporary) && verb == Set) || (scheduled_temp && verb == Delete))) {
@@ -1138,7 +1138,7 @@ bool RadioProfileCLI::handle(const char* command, char* reply, size_t capacity, 
     if (verb != Set || length >= sizeof(mode) || !parseRadioTxPolicy(mode, policy)
         || (*suffix && !force)
         || (force && policy != RADIO_TX_BOTH && policy != RADIO_TX_SECONDARY)) {
-      cli::formatError(reply, capacity, "use get/set tx.reply auto|radio|radio2|both|off [force for radio2/both]");
+      cli::formatError(reply, capacity, MESH_CLI_REPLY_TEXT("use get/set tx.reply auto|radio|radio2|both|off [force for radio2/both]", "get/set tx.reply auto|radio|radio2|both|off [force for radio2/both]"));
       return true;
     }
     const uint8_t previous = reply_setting_;
@@ -1184,7 +1184,7 @@ bool RadioProfileCLI::handle(const char* command, char* reply, size_t capacity, 
       auto mode = !strcmp(args, "auto") ? RadioCrossMode::Auto : !strcmp(args, "on") ? RadioCrossMode::On : RadioCrossMode::Off;
       if (save(saved_, primary_preamble_, mode)) { cross_ = mode; publish(); snprintf(reply, capacity, "OK"); }
       else cli::formatError(reply, capacity, MESH_CLI_REPLY_TEXT("settings could not be saved", "settings not saved"));
-    } else cli::formatError(reply, capacity, "use get/set radio2.cross [auto|on|off]");
+    } else cli::formatError(reply, capacity, MESH_CLI_REPLY_TEXT("use get/set radio2.cross [auto|on|off]", "get/set radio2.cross [auto|on|off]"));
     return true;
   }
   if (scan) {
@@ -1371,10 +1371,10 @@ bool RadioProfileCLI::handle(const char* command, char* reply, size_t capacity, 
           : 0;
       const uint64_t session_left = pending_left > temp_remaining_ms_ ? pending_left : temp_remaining_ms_;
       if ((temp_active_ || temp_pending_) && (uint64_t)(start-epoch)*1000 < session_left) {
-        cli::formatError(reply, capacity, "temporary schedule overlaps active session"); return true;
+        cli::formatError(reply, capacity, MESH_CLI_REPLY_TEXT("temporary schedule overlaps active session", "temp schedule overlaps active session")); return true;
       }
       for (const auto& s : schedules_) if (s.active && s.temporary && start < s.end && end > s.start) {
-        cli::formatError(reply, capacity, "temporary schedules overlap"); return true;
+        cli::formatError(reply, capacity, MESH_CLI_REPLY_TEXT("temporary schedules overlap", "temp schedules overlap")); return true;
       }
     }
     const unsigned first = scheduled_temp ? 4 : 0;
@@ -1402,7 +1402,7 @@ bool RadioProfileCLI::handle(const char* command, char* reply, size_t capacity, 
   }
   if (temporary) {
     for (const auto& s : schedules_) if (s.active && s.temporary) {
-      cli::formatError(reply, capacity, "clear tempradioat2 schedules first"); return true;
+      cli::formatError(reply, capacity, MESH_CLI_REPLY_TEXT("clear tempradioat2 schedules first", "clear tempradioat2 first")); return true;
     }
     if (remote_command_) stageRemoteMutation(RemoteMutation::Temporary, config, minutes * 60000UL);
     else {

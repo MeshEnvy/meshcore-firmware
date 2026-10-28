@@ -9398,7 +9398,7 @@ bool MyMesh::handleRxPowerSavingGetCommand(const char* command, char* reply,
   const bool config = strcmp(command, "get radio.rxps.config") == 0;
   if (!config && strcmp(command, "get radio.rxps") != 0) return false;
   if (!radio_driver.supportsRxPowerSaving()) {
-    mesh::cli::formatError(reply, reply_size, "RX power saving is unsupported on this radio");
+    mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("RX power saving is unsupported on this radio", "RX power saving unsupported on radio"));
     return true;
   }
 
@@ -11007,7 +11007,7 @@ bool MyMesh::handleDirectCommand(const char* command, char* reply, size_t reply_
 #else
   if (strcmp(command, "get dm.one_key") == 0 || strcmp(command, "get dm.held") == 0 ||
       strncmp(command, "set dm.one_key ", 15) == 0) {
-    mesh::cli::formatError(reply, reply_size, "one-key DMs unsupported on this build");
+    mesh::cli::formatError(reply, reply_size, MESH_CLI_REPLY_TEXT("one-key DMs unsupported on this build", "one-key DMs unsupported in build"));
     return true;
   }
 #endif
@@ -11359,7 +11359,7 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp,
   if (strncmp(command, "set tx ", 7) == 0) {
     int32_t parsed = 0;
     if (!mesh::cli::parseIntegerStrict(command + 7, parsed)) {
-      mesh::cli::formatError(reply, reply_capacity, "invalid TX power");
+      mesh::cli::formatError(reply, reply_capacity, MESH_CLI_REPLY_TEXT("invalid TX power", "bad TX power"));
     } else if (parsed < -9 || parsed > MAX_LORA_TX_POWER) {
       snprintf(reply, reply_capacity, "Error: TX -9..%d dBm",
                MAX_LORA_TX_POWER);

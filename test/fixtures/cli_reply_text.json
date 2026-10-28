@@ -853,6 +853,91 @@
       "file": "examples/companion_radio/MyMesh.cpp",
       "verbose": "Error, must be from -12 to +14",
       "concise": "Error, -12 to +14"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "RX power saving is unsupported on this radio",
+      "concise": "RX power saving unsupported on radio"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "one-key DMs unsupported on this build",
+      "concise": "one-key DMs unsupported in build"
+    },
+    {
+      "file": "examples/companion_radio/MyMesh.cpp",
+      "verbose": "invalid TX power",
+      "concise": "bad TX power"
+    },
+    {
+      "file": "src/helpers/RadioProfileCLI.cpp",
+      "verbose": "radio profiles unsupported",
+      "concise": "profiles unsupported"
+    },
+    {
+      "file": "src/helpers/RadioProfileCLI.cpp",
+      "verbose": "use get/set tx.reply auto|radio|radio2|both|off [force for radio2/both]",
+      "concise": "get/set tx.reply auto|radio|radio2|both|off [force for radio2/both]"
+    },
+    {
+      "file": "src/helpers/RadioProfileCLI.cpp",
+      "verbose": "use get/set radio2.cross [auto|on|off]",
+      "concise": "get/set radio2.cross [auto|on|off]"
+    },
+    {
+      "file": "src/helpers/RadioProfileCLI.cpp",
+      "verbose": "clear tempradioat2 schedules first",
+      "concise": "clear tempradioat2 first"
+    },
+    {
+      "file": "src/helpers/RadioProfileCLI.cpp",
+      "verbose": "temporary schedule overlaps active session",
+      "concise": "temp schedule overlaps active session"
+    },
+    {
+      "file": "src/helpers/RadioProfileCLI.cpp",
+      "verbose": "temporary schedules overlap",
+      "concise": "temp schedules overlap"
+    },
+    {
+      "file": "src/helpers/CommonRadioPrefs.cpp",
+      "verbose": "Error: invalid airtime factor",
+      "concise": "Error: bad airtime factor"
+    },
+    {
+      "file": "src/helpers/CommonRadioPrefs.cpp",
+      "verbose": "Error, must be 0-255",
+      "concise": "Error, 0-255"
+    },
+    {
+      "file": "src/helpers/CommonRadioPrefs.cpp",
+      "verbose": "Error: use set cad on|off",
+      "concise": "Error: set cad on|off"
+    },
+    {
+      "file": "src/helpers/CommonRadioPrefs.cpp",
+      "verbose": "Error: use set radio.rxgain on|off",
+      "concise": "Error: set radio.rxgain on|off"
+    },
+    {
+      "file": "src/helpers/CommonRadioPrefs.cpp",
+      "verbose": "Error: invalid TX power",
+      "concise": "Error: bad TX power"
+    },
+    {
+      "file": "src/helpers/CommonRadioPrefs.cpp",
+      "verbose": "Error, must be 0 or 1",
+      "concise": "Error, 0|1"
+    },
+    {
+      "file": "examples/companion_radio/CompanionRetry.h",
+      "verbose": "Error: retry setting could not be saved",
+      "concise": "Error: retry setting not saved"
+    },
+    {
+      "file": "examples/companion_radio/Notifications.cpp",
+      "verbose": "Error: programmable alerts unavailable on this compact STM32 build",
+      "concise": "Error: programmable alerts unavailable on compact STM32"
     }
   ],
   "noncompact_tokens_sha256": {
@@ -864,6 +949,9 @@
     "src/helpers/FloodAdvertCLI.h": "0f378e4d0f6c3b9b79991068a4b4208139484d2144ee1d7c5094d39043463be4",
     "src/helpers/LedSettings.cpp": "df0681234ca1337148ad59caa935857bc692f98bf18603ca6d099c0382028400",
     "src/helpers/StorageLayout.cpp": "5dd1c8bcbe2902e1f22d14f9ab425465bdc38926fae23989987d850b484cbb18",
-    "examples/companion_radio/MyMesh.cpp": "4ed72908fa1b986edb27c7a74acaccd5fda212c68f2f41537692739c040bb392"
+    "examples/companion_radio/MyMesh.cpp": "4ed72908fa1b986edb27c7a74acaccd5fda212c68f2f41537692739c040bb392",
+    "src/helpers/CommonRadioPrefs.cpp": "16b1fb499426abde83566b6481df89b80302c72e00f0f4aa3843b6c9b9de4218",
+    "examples/companion_radio/CompanionRetry.h": "e0ae10c7b2f778346f4645c4e147d87e1fbc7f8b99484752a8eed914bb21380f",
+    "examples/companion_radio/Notifications.cpp": "173fb0d452fdd383585dd88ab35fbb079a90e068adca2db9bc44d604557d3873"
   }
 }
