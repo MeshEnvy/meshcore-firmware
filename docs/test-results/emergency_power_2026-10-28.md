@@ -81,6 +81,34 @@ The [safe machine-readable report](emergency_power_2026-10-28.safe.json) records
 ELF, package and manifest hashes. Package hashes were independently compared
 with every corresponding memory-manifest entry.
 
+### Integration checks
+
+Eight further normal builds at
+[`8c2ddc9ac`](https://github.com/mikecarper/MeshCore/commit/8c2ddc9ac)
+pass after the concurrent USB-mode and MediaMesh changes. Constrained profiles
+use shorter human validation replies and help descriptions; commands, returned
+values, protocol acknowledgements and destructive-operation warnings remain.
+Runtime timers and flags are grouped to remove alignment padding. Saved-record
+layouts, features and filesystem capacity are preserved.
+
+| Firmware | Linked flash / limit, bytes | Available / required RAM, bytes |
+| --- | ---: | ---: |
+| RAK4631 Repeater Full | 687,512 / 815,104 | 83,156 / 83,136 |
+| RAK4631 Repeater Reduced | 620,020 / 815,104 | 85,696 / 81,088 |
+| Wio E5 Mini Repeater | 245,260 / 245,760 | 43,880 / 32,288 |
+| RAK4631 Full Companion | 712,092 / 712,704 | 81,284 / 74,576 |
+| RAK3x72 USB Companion | 228,924 / 229,376 | 24,448 / 17,408 |
+| Wio E5 Mini USB Companion | 228,816 / 229,376 | 24,424 / 17,408 |
+| Wio E5 USB Companion | 228,892 / 229,376 | 24,456 / 17,408 |
+| TinyRelay USB Companion | 228,992 / 229,376 | 24,448 / 17,408 |
+
+Linked flash counts exclude packaging and alignment overhead; normal linker
+and package checks also pass. The Mini retains its 16 KB filesystem. Native
+checks compare the reviewed reply substitutions and unchanged C++ control
+flow. The final RAK Companion ELF passes both RFC8032 vectors with a 1,904-byte
+signing frame under the 2,048-byte limit, plus four OTA workspace lifetime checks.
+These Companions do not gain the infrastructure emergency-sleep feature.
+
 ## Physical trials
 
 Each board entered manual radio sleep, woke for a real one-minute override,

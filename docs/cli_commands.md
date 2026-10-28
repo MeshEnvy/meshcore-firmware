@@ -69,6 +69,11 @@ See [CLI Availability by Firmware Build](cli_build_matrix.md) for the role and
 profile matrix. Commands depend on compiled features; some portable builds
 omit WebConfig while retaining the complete role CLI and compact WiFi updater.
 
+Small-flash Mini and STM32 Companion profiles, plus RAK4631 Full Companion,
+use shorter human-readable validation replies. Command syntax, returned
+values, protocol acknowledgements and destructive-operation warnings stay
+the same.
+
 See [CLI Command Availability Matrix](cli_command_availability.md) for the
 command-by-command nRF52 and ESP32 build tables.
 
