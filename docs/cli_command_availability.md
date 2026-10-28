@@ -56,6 +56,8 @@ current source. Where `usb.logging` is available, `get/set usb.debug on|off`
 selects debug intent without changing packet capture or adding a build variant.
 Debug defaults off for fresh and older preference images; effective output
 requires `usb.logging` and `usb.debug` on plus compiled diagnostic support.
+Shared USB consoles also provide saved `get/set usb.logging.always on|off`.
+It defaults off; turning it on keeps packet logs running through commands.
 See [live USB logging](cli_commands.md#control-live-usb-logging) for transport
 restrictions and Full Companion RAW output.
 

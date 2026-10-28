@@ -59,9 +59,9 @@ class TestFS : public MemoryFS {
 @CONSTANTS@
 namespace mesh {
 struct RadioProfiles { static constexpr unsigned MaxPreamble = 65535; };
-static bool usb_logging = true, usb_debug = false;
+static bool usb_logging = true, usb_debug = false, usb_always = false;
 static bool prohibit_stale_debug = false;
-static unsigned usb_updates = 0, debug_updates = 0;
+static unsigned usb_updates = 0, debug_updates = 0, always_updates = 0;
 void setUsbLoggingEnabled(bool enabled) {
   if (enabled && prohibit_stale_debug) assert(!usb_debug);
   usb_logging = enabled; ++usb_updates;
@@ -69,6 +69,8 @@ void setUsbLoggingEnabled(bool enabled) {
 void setUsbDebugEnabled(bool enabled) { usb_debug = enabled; ++debug_updates; }
 bool isUsbLoggingEnabled() { return usb_logging; }
 void resumeUsbPacketLogging() {}
+void setUsbPacketLoggingAlways(bool enabled) { usb_always = enabled; ++always_updates; }
+bool isUsbPacketLoggingAlways() { return usb_always; }
 bool isUsbDebugEnabled() { return usb_debug; }
 bool isUsbDebugLoggingEnabled() { return usb_logging && usb_debug; }
 }
@@ -182,6 +184,7 @@ int main() {
   assert(baseline[gps_offset] == 0 && baseline[gps_offset + 1] == 0);
   assert(baseline[trace_offset] == 0);
   assert(baseline[873] == 0); // OTA channel follows the established tail.
+  assert(baseline[123] == 0); // Reserved legacy byte keeps continuous logging OFF.
   Capture capture;
   assert(writeCommonPrefsImage(capture, &cli.prefs));
   assert(capture.bytes == baseline); // Checked and ordinary writers agree.
@@ -295,6 +298,100 @@ int main() {
   cli.prefs.usb_debug_enabled = 1;
   cli.loadPrefsInt(&cli.fs, "/missing");
   assert(cli.prefs.usb_debug_enabled == 0);
+
+  // Continuous capture has its own saved policy; changing it must not alter
+  // the master/debug gates, any established offset, or the optional tail.
+  CommonCLI policy;
+  mesh::setUsbDebugEnabled(false);
+  mesh::setUsbLoggingEnabled(true);
+  mesh::setUsbPacketLoggingAlways(false);
+  assert(policy.prefs.usb_logging_always == 0);
+  policy.savePrefs(&policy.fs, PrefsSaveRouting::Scope::Common);
+  const auto policy_off = policy.fs.files["/com_prefs"];
+  assert(policy_off == baseline);
+  policy.get("usb.logging.always", reply);
+  assert(strcmp(reply, "> off") == 0);
+  policy.set("usb.logging.always on", reply);
+  assert(strcmp(reply, "OK - USB logging always on (saved)") == 0);
+  assert(policy.prefs.usb_logging_always == 1 && mesh::isUsbPacketLoggingAlways());
+  assert(mesh::isUsbLoggingEnabled() && !mesh::isUsbDebugEnabled());
+  auto policy_on = policy.fs.files["/com_prefs"];
+  auto expected_on = policy_off;
+  expected_on[123] = 0xA1;
+  assert(policy_on == expected_on && policy_on.size() == baseline.size());
+  capture.bytes.clear();
+  assert(writeCommonPrefsImage(capture, &policy.prefs) && capture.bytes == policy_on);
+  policy.get("usb.logging.always", reply);
+  assert(strcmp(reply, "> on") == 0);
+  for (const char* command : {"usb.logging.always", "usb.logging.always true",
+      "usb.logging.always 1", "usb.logging.always ON", "usb.logging.always off junk",
+      "usb.logging.always off ", "usb.logging.always on reboot", "usb.logging.always off reboot"}) {
+    const unsigned updates = mesh::always_updates;
+    policy.set(command, reply);
+    assert(strcmp(reply, "Error: usage set usb.logging.always on|off") == 0);
+    assert(policy.prefs.usb_logging_always == 1 && mesh::isUsbPacketLoggingAlways());
+    assert(mesh::always_updates == updates && policy.fs.files["/com_prefs"] == policy_on);
+  }
+  policy.set("usb.logging.alwaysfake off", reply);
+  assert(strcmp(reply, "unknown") == 0);
+  policy.get("usb.logging.alwaysfake", reply);
+  assert(strcmp(reply, "unknown") == 0);
+  policy.set("usb.logging.always\t \toff", reply);
+  assert(strcmp(reply, "OK - USB logging always off (saved)") == 0);
+  assert(!policy.prefs.usb_logging_always && !mesh::isUsbPacketLoggingAlways());
+  assert(policy.fs.files["/com_prefs"] == policy_off);
+  for (int fault : {0, 1, 2, 3}) {
+    if (fault == 0) policy.fs.fail_write = true;
+    if (fault == 1) policy.fs.fail_write_after = 123;
+    if (fault == 2) policy.fs.fail_read_open = true;
+    if (fault == 3) policy.fs.fail_rename = 1;
+    const unsigned updates = mesh::always_updates;
+    policy.set("usb.logging.always on", reply);
+    assert(strcmp(reply, "Error: save unconfirmed; reboot may differ") == 0);
+    assert(policy.prefs.usb_logging_always == 0 && !mesh::isUsbPacketLoggingAlways());
+    assert(mesh::always_updates == updates && policy.fs.files["/com_prefs"] == policy_off);
+    policy.fs.fail_write = false; policy.fs.fail_write_after = -1;
+    policy.fs.fail_read_open = false; policy.fs.fail_rename = 0;
+  }
+  BridgePrefs policy_schema(&policy.prefs);
+  assert(policy_schema.import("usb_always", 1));
+  assert(*policy_schema.bytes.at("usb_always") == 1); // Export ordinary 0/1, not the wire marker.
+  assert(!mesh::isUsbPacketLoggingAlways());
+  const unsigned before_import = mesh::always_updates;
+  policy.savePrefs(&policy.fs, PrefsSaveRouting::Scope::Observer);
+  assert(!mesh::isUsbPacketLoggingAlways() && mesh::always_updates == before_import);
+  assert(policy.fs.files["/com_prefs"] == policy_off);
+  policy.fs.fail_write = true;
+  policy.savePrefs(&policy.fs, PrefsSaveRouting::Scope::Common);
+  assert(!policy._common_save_succeeded && !mesh::isUsbPacketLoggingAlways());
+  policy.fs.fail_write = false;
+  policy.savePrefs(&policy.fs, PrefsSaveRouting::Scope::Common);
+  assert(policy._common_save_succeeded && mesh::isUsbPacketLoggingAlways());
+  assert(policy.fs.files["/com_prefs"] == policy_on);
+  for (uint8_t invalid : {2, 161, 255}) {
+    assert(policy_schema.import("usb_always", invalid));
+    policy.savePrefs(&policy.fs, PrefsSaveRouting::Scope::Common);
+    assert(policy._common_save_succeeded && !mesh::isUsbPacketLoggingAlways());
+    assert(policy.prefs.usb_logging_always == 0 && policy.fs.files["/com_prefs"] == policy_off);
+  }
+  // Old padding (including1/FF) cannot opt in, and neither a missing file nor
+  // a truncated core may retain an ON policy from a previous image.
+  for (uint8_t stored : {0, 1, 0xA0, 0xA1, 0xA2, 255}) {
+    auto image = policy_off; image[123] = stored;
+    policy.fs.files["/com_prefs"] = image;
+    policy.prefs.usb_logging_always = 1;
+    policy.loadPrefsInt(&policy.fs, "/com_prefs");
+    assert(policy.prefs.usb_logging_always == (stored == 0xA1 ? 1 : 0));
+  }
+  for (size_t size : {size_t(0), size_t(123), size_t(124), size_t(289), size_t(290)}) {
+    policy.fs.files["/com_prefs"] = {policy_off.begin(), policy_off.begin() + size};
+    policy.prefs.usb_logging_always = 1;
+    policy.loadPrefsInt(&policy.fs, "/com_prefs");
+    assert(policy.prefs.usb_logging_always == 0);
+  }
+  policy.prefs.usb_logging_always = 1;
+  policy.loadPrefsInt(&policy.fs, "/missing");
+  assert(policy.prefs.usb_logging_always == 0);
 }
 '''
 
@@ -325,7 +422,8 @@ class CommonUsbDebugTest(unittest.TestCase):
             'void CommonCLI::savePrefs(FILESYSTEM*',
             'void CommonCLI::savePrefs(PrefsSaveRouting::Scope scope)',
             'bool CommonCLI::trySavePrefs(', 'void CommonCLI::loadPrefsInt('))
-        code = HARNESS
+        code = HARNESS.replace('@SET_DEBUG@', '@SET_ALWAYS@\n    @SET_DEBUG@').replace(
+            '@GET_DEBUG@', '@GET_ALWAYS@\n    @GET_DEBUG@')
         for key, value in {
             'FIELDS': fields, 'CONSTANTS': constants, 'HELPERS': helpers,
             'LEGACY': extract_braced(header, 'struct LegacyObserverTail') + ';',
@@ -334,6 +432,8 @@ class CommonUsbDebugTest(unittest.TestCase):
             'STORE': extract_braced(source, 'class CommonPrefsFileStore'),
             'METHODS': ("\n#include <stddef.h>\ntemplate<typename Writer>\n" + extract_braced(source, "static void writeCommonRetryPrefs(") + "\n" + methods),
             'DYNAMIC': extract_braced(header, 'class BridgePrefs :'),
+            'SET_ALWAYS': extract_braced(source, 'if (strncmp(config, "usb.logging.always", 18)'),
+            'GET_ALWAYS': extract_braced(source, 'if (strcmp(config, "usb.logging.always") == 0)'),
             'SET_DEBUG': extract_braced(source, 'if (strncmp(config, "usb.debug", 9)'),
             'SET_MASTER': extract_braced(source, 'if (strncmp(config, "usb.logging", 11)'),
             'GET_DEBUG': extract_braced(source, 'if (strcmp(config, "usb.debug") == 0)'),
@@ -371,8 +471,10 @@ class CommonUsbDebugTest(unittest.TestCase):
         source = (ROOT / 'src/helpers/CommonCLI.cpp').read_text(encoding='utf-8')
         load = extract_braced(source, 'void CommonCLI::loadPrefs(FILESYSTEM*')
         self.assertIn('_prefs->usb_debug_enabled = 0;', load)
+        self.assertIn('_prefs->usb_logging_always = 0;', load)
         self.assertIn('mesh::setUsbLoggingEnabled(_prefs->usb_logging_enabled != 0);', load)
         self.assertIn('mesh::setUsbDebugEnabled(_prefs->usb_debug_enabled != 0);', load)
+        self.assertIn('mesh::setUsbPacketLoggingAlways(_prefs->usb_logging_always != 0);', load)
         self.assertLess(load.index('mesh::setUsbDebugEnabled('),
                         load.index('mesh::setUsbLoggingEnabled('))
 

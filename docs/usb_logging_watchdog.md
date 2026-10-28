@@ -50,6 +50,8 @@ Interactive text commands on a shared USB console pause packet logs for five
 minutes after the last command. The three routine stats polls above keep
 their replies and renew the lease without starting or extending this pause.
 Dedicated logging ports and explicit Companion stream mode keep logging.
+On shared consoles, saved `set usb.logging.always on` also keeps packet logs
+running through commands; `off` restores pausing for subsequent commands.
 The pause does not disable measurements, LoRa telemetry, direct WiFi MQTT,
 or the saved logging master. USB packet collectors miss log copies during
 the pause. See [live USB logging](cli_commands.md#control-live-usb-logging).

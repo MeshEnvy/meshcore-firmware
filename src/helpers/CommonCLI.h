@@ -201,6 +201,8 @@ public:
   // USB diagnostics are opt-in independently of the packet output gate.
   // Appended after GPS sync cadence in /com_prefs, not beside usb_log.
   uint8_t usb_debug_enabled = 0;
+  // Reuses reserved /com_prefs byte 123; 0xA1 on disk means enabled.
+  uint8_t usb_logging_always = 0;
   // Repeater-only opt-in for routed trace diagnostics while repeat is off.
   // Appended after usb_debug in /com_prefs; existing images stay disabled.
   uint8_t trace_when_repeat_off = 0;
@@ -386,6 +388,7 @@ private:
       def("format", _parent->bridge_format);
       def("usb_log", _parent->usb_logging_enabled);
       def("usb_dbg", _parent->usb_debug_enabled);
+      def("usb_always", _parent->usb_logging_always);
 #ifdef WITH_RS232_BRIDGE
       def("rs232_heartbeat", _parent->rs232_heartbeat);
       def("rs232_autosleep", _parent->rs232_autosleep);

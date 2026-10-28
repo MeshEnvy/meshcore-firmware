@@ -1314,6 +1314,8 @@ bool DataStore::loadPrefsInt(const char *filename,
       if (success && file.read(static_cast<uint8_t*>(destination), field.length)
           != field.length) success = false;
     }
+    loaded_prefs.usb_logging_always = success
+        && pad[0] == CompanionNodePrefs::USB_LOGGING_ALWAYS_WIRE_ON;
 #else
     auto readField = [&file, &success](void* dest, size_t size) -> bool {
       if (!success
@@ -1332,6 +1334,8 @@ bool DataStore::loadPrefsInt(const char *filename,
     readField(&loaded_prefs.airtime_factor, sizeof(float));                                // 0
     readField(loaded_prefs.node_name, sizeof(loaded_prefs.node_name));                      // 4
     readField(pad, 4);                                                                      // 36
+    loaded_prefs.usb_logging_always = success
+        && pad[0] == CompanionNodePrefs::USB_LOGGING_ALWAYS_WIRE_ON;
     readField(&loaded_lat, sizeof(loaded_lat));                                             // 40
     readField(&loaded_lon, sizeof(loaded_lon));                                             // 48
     readField(&loaded_prefs.freq, sizeof(loaded_prefs.freq));                               // 56
@@ -1542,7 +1546,8 @@ bool DataStore::savePrefs(const CompanionNodePrefs& _prefs, double node_lat, dou
 #endif
 #if defined(STM32_PLATFORM) && defined(__GNUC__)
     using namespace mesh::companion_prefs;
-    const uint8_t pad[4] = {};
+    const uint8_t pad[4] = {uint8_t(_prefs.usb_logging_always == 1
+        ? CompanionNodePrefs::USB_LOGGING_ALWAYS_WIRE_ON : 0), 0, 0, 0};
     size_t used = 0;
     for (const PrefField& field : PREF_FIELDS) {
       if (field.length > PREFS_PREFIX_SIZE - used) {
@@ -1562,7 +1567,8 @@ bool DataStore::savePrefs(const CompanionNodePrefs& _prefs, double node_lat, dou
     // nRF52 retains streaming writes and its existing small stack footprint.
     // The table is the same validated wire order used by the scalar emitter.
     using namespace mesh::companion_prefs;
-    const uint8_t pad[4] = {};
+    const uint8_t pad[4] = {uint8_t(_prefs.usb_logging_always == 1
+        ? CompanionNodePrefs::USB_LOGGING_ALWAYS_WIRE_ON : 0), 0, 0, 0};
     bool success = true;
     for (const PrefField& field : PREF_FIELDS) {
       if (!success) break;
@@ -1595,6 +1601,8 @@ bool DataStore::savePrefs(const CompanionNodePrefs& _prefs, double node_lat, dou
 #endif
     uint8_t pad[8];
     memset(pad, 0, sizeof(pad));
+    pad[0] = _prefs.usb_logging_always == 1
+        ? CompanionNodePrefs::USB_LOGGING_ALWAYS_WIRE_ON : 0;
 
     bool success = writeField((uint8_t *)&_prefs.airtime_factor, sizeof(float)); // 0
     success = success && writeField((uint8_t *)_prefs.node_name, sizeof(_prefs.node_name)); // 4
@@ -1615,7 +1623,7 @@ bool DataStore::savePrefs(const CompanionNodePrefs& _prefs, double node_lat, dou
     success = success && writeField((uint8_t *)&_prefs.advert_loc_policy, sizeof(_prefs.advert_loc_policy)); // 76
     success = success && writeField((uint8_t *)&_prefs.multi_acks, sizeof(_prefs.multi_acks)); // 77
     success = success && writeField((uint8_t *)&_prefs.path_hash_mode, sizeof(_prefs.path_hash_mode)); // 78
-    success = success && writeField(pad, 1);                                            // 79
+    success = success && writeField(pad + 1, 1);                                        // 79
     success = success && writeField((uint8_t *)&_prefs.ble_pin, sizeof(_prefs.ble_pin)); // 80
     success = success && writeField((uint8_t *)&_prefs.buzzer_quiet, sizeof(_prefs.buzzer_quiet)); // 84
     success = success && writeField((uint8_t *)&_prefs.gps_enabled, sizeof(_prefs.gps_enabled)); // 85

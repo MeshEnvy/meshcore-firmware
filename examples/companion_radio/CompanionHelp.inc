@@ -150,6 +150,9 @@ MESH_COMPANION_HELP_BEGIN
 #if MESH_USB_LOGGING_AVAILABLE
     "  get/set usb.logging <on|off|stream> [reboot]\r\n"
     "  get/set usb.debug <on|off>\r\n"
+#if !defined(MESH_DUAL_CDC_LOGGING)
+    "  get/set usb.logging.always <on|off>\r\n"
+#endif
 #if MESH_USB_CONSOLE_COOPERATIVE
     "  get usb.watchdog.last\r\n"
     "  get/set usb.watchdog <off|on|auto> (saved; default auto)\r\n"

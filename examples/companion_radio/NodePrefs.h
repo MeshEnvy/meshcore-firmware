@@ -138,6 +138,9 @@ public:
 #endif
   uint8_t tx_media = mesh::RADIO_TX_AUTO;
   uint8_t tx_ssh = mesh::RADIO_TX_AUTO;
+  // Reserved wire byte 36; older writers stored zero here.
+  uint8_t usb_logging_always = 0;
+  static constexpr uint8_t USB_LOGGING_ALWAYS_WIRE_ON = 0xA1;
 
 private:
   class RadioPrefs : public CommonRadioPrefs {
@@ -168,6 +171,9 @@ private:
       def("rxps_level", _parent->rx_ps_level);
       def("rxps_preamble", _parent->rx_ps_preamble);
       def("usb_debug", _parent->usb_debug_enabled);
+#if !defined(MESH_DUAL_CDC_LOGGING)
+      def("usb_log_always", _parent->usb_logging_always);
+#endif
 #ifdef TBEAM_1W
       def("fan", _parent->fan_mode, sizeof(_parent->fan_mode));
       def("fan_lo", _parent->fan_lo);
@@ -183,25 +189,41 @@ private:
     }
 
     bool getByKey(const char* key, char* value, size_t max_len) override {
-      if (key != nullptr && strcmp(key, "usb_debug") == 0) {
+      uint8_t* flag = &_parent->usb_debug_enabled;
+      bool handled = key != nullptr && strcmp(key, "usb_debug") == 0;
+#if !defined(MESH_DUAL_CDC_LOGGING)
+      if (key != nullptr && strcmp(key, "usb_log_always") == 0) {
+        flag = &_parent->usb_logging_always;
+        handled = true;
+      }
+#endif
+      if (handled) {
         if (value == nullptr || max_len == 0) return false;
         if (max_len < 2) {
           value[0] = 0;
           return false;
         }
-        value[0] = _parent->usb_debug_enabled == 1 ? '1' : '0';
+        value[0] = *flag == 1 ? '1' : '0';
         value[1] = 0;
         return true;
       }
       return CommonRadioPrefs::getByKey(key, value, max_len);
     }
     bool setByKey(const char* key, const char* value) override {
-      if (key != nullptr && strcmp(key, "usb_debug") == 0) {
+      uint8_t* flag = &_parent->usb_debug_enabled;
+      bool handled = key != nullptr && strcmp(key, "usb_debug") == 0;
+#if !defined(MESH_DUAL_CDC_LOGGING)
+      if (key != nullptr && strcmp(key, "usb_log_always") == 0) {
+        flag = &_parent->usb_logging_always;
+        handled = true;
+      }
+#endif
+      if (handled) {
         if (value == nullptr
             || (strcmp(value, "0") != 0 && strcmp(value, "1") != 0)) {
           return false;
         }
-        _parent->usb_debug_enabled = value[0] == '1' ? 1 : 0;
+        *flag = value[0] == '1' ? 1 : 0;
         markDirty();
         return true;
       }
@@ -289,23 +311,23 @@ public:
   // both live adapters untouched and a scratch snapshot's adapters local.
   bool copyPersistedValuesFrom(const CompanionNodePrefs& source) {
     if (&source == this) return true;
-    const auto& last_value = tx_ssh;
-    static_assert(sizeof(tx_ssh) == sizeof(uint8_t),
-                  "The last persisted traffic policy is one byte");
+    const auto& last_value = usb_logging_always;
+    static_assert(sizeof(usb_logging_always) == sizeof(uint8_t),
+                  "The last persisted preference is one byte");
     const uintptr_t first = reinterpret_cast<uintptr_t>(&airtime_factor);
     const uintptr_t last = reinterpret_cast<uintptr_t>(&last_value);
     if (last < first
-        || last - first > sizeof(*this) - sizeof(tx_ssh)) {
+        || last - first > sizeof(*this) - sizeof(usb_logging_always)) {
       return false;
     }
     const size_t size = static_cast<size_t>(last - first)
-        + sizeof(tx_ssh);
+        + sizeof(usb_logging_always);
     const auto bounded = [size](const CompanionNodePrefs& values) -> bool {
       const uintptr_t object = reinterpret_cast<uintptr_t>(&values);
       const uintptr_t begin =
           reinterpret_cast<uintptr_t>(&values.airtime_factor);
       const uintptr_t end = reinterpret_cast<uintptr_t>(
-          &values.tx_ssh
+          &values.usb_logging_always
       );
       const uintptr_t radio_begin = reinterpret_cast<uintptr_t>(&values.radio);
       const uintptr_t custom_begin = reinterpret_cast<uintptr_t>(&values.custom);
@@ -314,7 +336,7 @@ public:
       return begin >= object && begin - object <= sizeof(values)
           && size <= sizeof(values) - static_cast<size_t>(begin - object)
           && end >= begin
-          && end - begin == size - sizeof(values.tx_ssh)
+          && end - begin == size - sizeof(values.usb_logging_always)
           && radio_begin >= begin && size <= radio_begin - begin
           && custom_begin >= begin && size <= custom_begin - begin;
     };

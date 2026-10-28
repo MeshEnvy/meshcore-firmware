@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # and the class's in-memory member order or padding. None represents reserved
 # padding; compact Wio Companion claims the single byte at wire offset 79.
 WIRE_FIELDS = (
-    ('airtime_factor', 4), ('node_name', 32), (None, 4),
+    ('airtime_factor', 4), ('node_name', 32), ('usb_logging_always', 4),
     ('@lat', 8), ('@lon', 8), ('freq', 4), ('sf', 1), ('cr', 1),
     ('client_repeat', 1), ('manual_add_contacts', 1), ('bw', 4),
     ('tx_power_dbm', 1), ('telemetry_mode_base', 1), ('telemetry_mode_loc', 1),
@@ -62,6 +62,7 @@ static void seed(CompanionNodePrefs& prefs, uint32_t& random) {
     }
   };
   @SEED@
+  prefs.usb_logging_always = random & 1;
   prefs.tx_media = random % 5;
   prefs.tx_ssh = (random >> 8) % 5;
 #if defined(RAK_4631)
@@ -148,22 +149,21 @@ int main() {
 #endif
     DataStore reference;
     assert(reference.savePrefsLegacy(prefs, 47.125, -122.25));
-#if defined(WIO_E5_MINI_HEADLESS_COMPANION_UI)
-    // The compact target claims exactly the former reserved byte. Its frozen
-    // predecessor still emits zero there; every other byte stays identical.
+    // The predecessor emitted zero at the newly claimed reserved bytes.
     auto historical = store.fs.files.at("/new_prefs");
+    assert(historical[36] == (prefs.usb_logging_always == 1 ? 0xa1 : 0));
+    historical[36] = 0;
+#if defined(WIO_E5_MINI_HEADLESS_COMPANION_UI)
     assert(historical[79] == prefs.leds_quiet);
     historical[79] = 0;
-    assert(reference.fs.files.at("/new_prefs") == historical);
-#else
-    assert(reference.fs.files.at("/new_prefs") == store.fs.files.at("/new_prefs"));
 #endif
+    assert(reference.fs.files.at("/new_prefs") == historical);
     ++comparisons;
   }
 
   CompanionNodePrefs original;
   assert(original.buzzer_quiet == 1 && original.vibe_quiet == 0);
-  assert(original.lost_reply == 0);
+  assert(original.lost_reply == 0 && original.usb_logging_always == 0);
   assert(original.tx_media == mesh::RADIO_TX_AUTO && original.tx_ssh == mesh::RADIO_TX_AUTO);
   strcpy(original.node_name, "durable image");
   original.freq = 915.25f; original.ble_pin = 123456;
@@ -324,6 +324,7 @@ int main() {
   changed.freq = 910.5f; changed.usb_debug_enabled = 0;
   changed.gps_sync_interval_hours = 24;
   changed.lost_reply = 1;
+  changed.usb_logging_always = 1;
 #if defined(WIO_E5_MINI_HEADLESS_COMPANION_UI)
   changed.leds_quiet = 0;
 #endif
@@ -465,6 +466,7 @@ int main() {
   assert(loaded.gps_sync_interval_hours == 24 && loaded.usb_debug_enabled == 0);
   assert(loaded.lost_reply == 1);
   assert(loaded.tx_media == original.tx_media && loaded.tx_ssh == original.tx_ssh);
+  assert(loaded.usb_logging_always == 1);
   assert(lat == 42.25 && lon == -121.125);
 
 #if defined(STM32_PLATFORM)
@@ -531,6 +533,12 @@ def field_code(rows, seed=False):
             if not seed:
                 result.append('#else\nbytes.push_back(0);')
             result.append('#endif')
+        elif name == 'usb_logging_always':
+            if seed:
+                result.append('fill(&prefs.usb_logging_always, sizeof(prefs.usb_logging_always));')
+            else:
+                result.append('bytes.push_back(prefs.usb_logging_always == 1 ? 0xa1 : 0);')
+                result.append('bytes.insert(bytes.end(), 3, uint8_t(0));')
         elif name == 'tz_offset':
             if seed:
                 result.append('prefs.tz_offset = float(int(random % 27) - 12);')

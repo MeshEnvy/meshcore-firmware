@@ -136,7 +136,8 @@ static const void* prefValue(const PrefField& field,
                             const int8_t* timezone = nullptr) {
   if (field.offset == PrefsLat) return &lat;
   if (field.offset == PrefsLon) return &lon;
-  if (field.offset == PrefsPad) return pad;
+  // Byte 36 carries the always-log marker; the separate byte 79 stays zero.
+  if (field.offset == PrefsPad) return pad + (field.length == 1);
   const void* value = reinterpret_cast<const uint8_t*>(&values) + field.offset;
   return timezone && value == &values.tz_offset_legacy ? timezone : value;
 }

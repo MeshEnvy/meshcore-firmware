@@ -610,17 +610,23 @@ public:
   bool getChannel(int channel_idx, ChannelDetails& channel);
   bool setChannel(int channel_idx, const ChannelDetails& channel);
   bool savePrefs() {
-    const uint8_t previous_usb_debug = _prefs.usb_debug_enabled;
+    const uint8_t previous_tail_flags[] = {
+        _prefs.usb_debug_enabled, _prefs.usb_logging_always};
     _prefs.usb_debug_enabled = _prefs.usb_debug_enabled == 1 ? 1 : 0;
+    _prefs.usb_logging_always = _prefs.usb_logging_always == 1 ? 1 : 0;
     const bool saved =
         _store->savePrefs(_prefs, sensors.node_lat, sensors.node_lon);
     if (saved) {
       _prefs.clearDirty();
 #if MESH_USB_LOGGING_AVAILABLE
       mesh::setUsbDebugEnabled(_prefs.usb_debug_enabled != 0);
+#if !defined(MESH_DUAL_CDC_LOGGING)
+      mesh::setUsbPacketLoggingAlways(_prefs.usb_logging_always != 0);
+#endif
 #endif
     } else {
-      _prefs.usb_debug_enabled = previous_usb_debug;
+      _prefs.usb_debug_enabled = previous_tail_flags[0];
+      _prefs.usb_logging_always = previous_tail_flags[1];
     }
     return saved;
   }

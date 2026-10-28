@@ -33,6 +33,7 @@ struct MyMesh {
 static void timerCases() {
  mesh::setUsbLoggingEnabled(true);mesh::resumeUsbPacketLogging();
  mesh::configureUsbLoggingPacketStream(false);g_mock_millis=0;
+ assert(!mesh::isUsbPacketLoggingAlways());
  for(const char* ignored:std::initializer_list<const char*>{nullptr,""," \t\r\n","stats-core"," \tstats-radio\t ","stats-packets",
      "\x01" "get name","get\x7f","\xff" "get name","get name\n","stats-core\r","get\rname"}) {
    mesh::noteUsbConsoleCommand(ignored);assert(mesh::isUsbPacketLoggingAllowed());
@@ -71,6 +72,20 @@ static void timerCases() {
  mesh::setUsbLoggingEnabled(true);mesh::configureUsbLoggingPacketStream(true);
  mesh::noteUsbConsoleCommand("get name");assert(mesh::isUsbPacketLoggingAllowed());
  mesh::configureUsbLoggingPacketStream(false);assert(mesh::isUsbPacketLoggingAllowed());
+ // Always-on capture clears an existing quiet period without enabling USB.
+ mesh::noteUsbConsoleCommand("get name");assert(!mesh::isUsbPacketLoggingAllowed());
+ mesh::setUsbPacketLoggingAlways(true);
+ assert(mesh::isUsbPacketLoggingAlways()&&mesh::isUsbPacketLoggingAllowed());
+ mesh::noteUsbConsoleCommand("get name");mesh::noteUsbConsoleCommand("get radio");
+ assert(mesh::isUsbPacketLoggingAllowed());
+ mesh::setUsbLoggingEnabled(false);
+ assert(mesh::isUsbPacketLoggingAlways()&&!mesh::isUsbPacketLoggingAllowed());
+ mesh::setUsbLoggingEnabled(true);
+ assert(mesh::isUsbPacketLoggingAlways()&&mesh::isUsbPacketLoggingAllowed());
+ mesh::setUsbPacketLoggingAlways(false);
+ assert(!mesh::isUsbPacketLoggingAlways()&&mesh::isUsbPacketLoggingAllowed());
+ mesh::noteUsbConsoleCommand("get name");assert(!mesh::isUsbPacketLoggingAllowed());
+ mesh::setUsbLoggingEnabled(true);assert(!mesh::isUsbPacketLoggingAllowed());
  std::puts("PASS: packet quiet timers, reset, wrap, polls, stream and saved master");
 }
 static void outputCases() {
@@ -109,6 +124,15 @@ static void outputCases() {
 #else
  assert(host=="stamp RAW: 00ABFF\r\n");
 #endif
+ host.clear();mesh::setUsbPacketLoggingAlways(true);mesh::noteUsbConsoleCommand("get name");
+ node.logRxRaw(2.5f,-92,raw,sizeof(raw));drain();
+#if MESH_PACKET_LOGGING_COMPACT
+ assert(host=="R00ABFF\n");
+#else
+ assert(host=="stamp RAW: 00ABFF\r\n");
+#endif
+ host.clear();mesh::setUsbPacketLoggingAlways(false);mesh::noteUsbConsoleCommand("get name");
+ node.logRxRaw(2.5f,-92,raw,sizeof(raw));drain();assert(host.empty());
  std::puts("PASS: quiet RAW records preserve replies and complete in-progress records");
 }
 int main(int argc,char**) {if(argc==1)timerCases();else outputCases();}
@@ -122,6 +146,7 @@ CORE_CASE = r'''
 namespace mesh {
 static std::atomic<bool> usb_logging_enabled{true};
 static std::atomic<uint32_t> usb_packet_logging_quiet_until{0};
+static std::atomic<bool> usb_packet_logging_always{false};
 bool dedicated=false,stream=false;
 bool hasDedicatedUsbLoggingPort(){return dedicated;}
 bool isUsbLoggingPacketStream(){return stream;}
@@ -175,7 +200,8 @@ class UsbPacketLoggingQuietTests(unittest.TestCase):
         source = (ROOT / "src/helpers/UsbLogging.cpp").read_text()
         methods = "\n".join(method(source, signature) for signature in (
             "bool isUsbLoggingEnabled(", "void noteUsbConsoleCommand(",
-            "void resumeUsbPacketLogging(", "bool isUsbPacketLoggingAllowed("))
+            "void resumeUsbPacketLogging(", "void setUsbPacketLoggingAlways(",
+            "bool isUsbPacketLoggingAlways(", "bool isUsbPacketLoggingAllowed("))
         with tempfile.TemporaryDirectory(prefix="meshcore-packet-dedicated-") as directory:
             binary = self.compile(Path(directory), "dedicated", CORE_CASE.replace("@METHODS@", methods), ["-DMESH_DEBUG=1"])
             ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20)
@@ -199,6 +225,7 @@ int main(){
    assert(mesh::hasDedicatedUsbLoggingPort()==!stream);
    mesh::noteUsbConsoleCommand(nullptr);mesh::noteUsbConsoleCommand("get name");
    assert(mesh::isUsbPacketLoggingAllowed()==enabled);
+   mesh::setUsbPacketLoggingAlways(true);assert(!mesh::isUsbPacketLoggingAlways());
    mesh::resumeUsbPacketLogging();
    assert(mesh::isUsbPacketLoggingAllowed()==enabled);
  }
@@ -219,6 +246,7 @@ int main(){
 int main(){
  static_assert(!MESH_USB_LOGGING_AVAILABLE,"disabled test profile");
  mesh::noteUsbConsoleCommand("get name");mesh::resumeUsbPacketLogging();
+ mesh::setUsbPacketLoggingAlways(true);assert(!mesh::isUsbPacketLoggingAlways());
  assert(!mesh::isUsbPacketLoggingAllowed());
 }
 ''', flags)

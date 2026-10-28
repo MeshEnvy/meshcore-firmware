@@ -1644,6 +1644,9 @@ set usb.logging on
 set usb.logging off
 set usb.logging on reboot
 set usb.logging off reboot
+get usb.logging.always
+set usb.logging.always on
+set usb.logging.always off
 get usb.debug
 set usb.debug on
 set usb.debug off
@@ -1701,18 +1704,29 @@ still reports that saved setting. `set usb.logging on` or
 `set logging.output usb|both` resumes packet logs immediately after a successful
 save. No reboot is needed.
 
+To keep packet logs running through commands on a shared USB console, use
+`set usb.logging.always on`. This choice is saved, ends any active pause
+immediately, and survives reboot. `get usb.logging.always` checks the setting.
+`set usb.logging.always off` restores the default five-minute pause for
+subsequent commands. The logging master remains separate: this option does
+not enable logging while `usb.logging` is off. With continuous logging,
+packet lines can appear between command replies.
+
 The routine `stats-core`, `stats-radio`, and `stats-packets` polls do not start
 or extend this pause. A separate logging USB port and explicit Companion
 `usb.logging stream` mode also keep logging. The pause leaves command replies,
 noise-floor sampling, saved history, LoRa telemetry, and direct WiFi MQTT
 running. A collector reading USB packet logs misses those log copies during
 the pause, including telemetry packets; this is not buffered capture.
+The `usb.logging.always` setting is provided for shared consoles; nRF52 Full
+Companion already keeps its dedicated logging port or explicit stream running.
 
 `meshcoretomqtt` polls these three stats commands every 300 seconds and
 publishes `noise_floor` from the `stats-radio` reply in its MQTT status. These
 polls keep working during the pause. Its startup identity queries do trigger
 a five-minute packet-capture gap on a shared console, as do ordinary commands
-sent through its remote serial feature.
+sent through its remote serial feature. Enable `usb.logging.always` to keep
+packet capture running through these commands too.
 
 For packet-only capture, use these separate text commands:
 

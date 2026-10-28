@@ -30,8 +30,10 @@ struct ConfigText : Stream {
  }
 };
 namespace mesh {
-bool logging_enabled=true, debug_enabled=false;
-unsigned debug_applies=0;
+bool logging_enabled=true, debug_enabled=false, always_enabled=false;
+unsigned debug_applies=0, always_applies=0;
+bool isUsbPacketLoggingAlways(){return always_enabled;}
+void setUsbPacketLoggingAlways(bool enabled){always_enabled=enabled;++always_applies;}
 bool isUsbLoggingEnabled(){return logging_enabled;}
 bool isUsbDebugEnabled(){return debug_enabled;}
 void setUsbDebugEnabled(bool enabled){debug_enabled=enabled;++debug_applies;}
@@ -177,6 +179,61 @@ int main(){
  // Bounded replies do not write beyond their supplied capacity.
  char small[9];memset(small,'X',sizeof(small));
  assert(node.command("get usb.debug",small,8));assert(small[7]==0&&small[8]=='X');
+ // The always-log policy uses only reserved byte 36, preserving all image sizes.
+ assert(node._prefs.usb_logging_always==0&&!mesh::always_enabled);
+ mesh::logging_enabled=false;
+ assert(node.command("set usb.logging.always on",reply,sizeof(reply)));
+ assert(node._prefs.usb_logging_always==1&&mesh::always_enabled&&!mesh::logging_enabled);
+ const auto always_disk=node.store.fs.files["/new_prefs"];
+ assert(always_disk[36]==0xa1&&always_disk[37]==0&&always_disk[38]==0
+        &&always_disk[39]==0&&always_disk[79]==0);
+ assert(node.command("get usb.logging.always",reply,sizeof(reply)));
+ assert(!strcmp(reply,"usb.logging.always on"));
+ for(const char* invalid : {"", "ON", "true", "1", "on extra", "on ", "off reboot"}) {
+   std::string command=std::string("set usb.logging.always ")+invalid;
+   const unsigned applied=mesh::always_applies;
+   assert(node.command(command.c_str(),reply,sizeof(reply))&&strstr(reply,"Error:"));
+   assert(node._prefs.usb_logging_always==1&&mesh::always_enabled);
+   assert(mesh::always_applies==applied&&node.store.fs.files["/new_prefs"]==always_disk);
+ }
+ for(int fail_after : {17,36,int(always_disk.size()-1)}) {
+   node.store.fs.fail_write_after=fail_after;
+   const unsigned applied=mesh::always_applies;
+   assert(node.command("set usb.logging.always off",reply,sizeof(reply)));
+   assert(strstr(reply,"could not be saved")&&node._prefs.usb_logging_always==1);
+   assert(mesh::always_enabled&&mesh::always_applies==applied);
+   assert(node.store.fs.files["/new_prefs"]==always_disk);
+ }
+ node.store.fs.fail_write_after=-1;
+ assert(node.command("set usb.logging.always off",reply,sizeof(reply)));
+ assert(!node._prefs.usb_logging_always&&!mesh::always_enabled&&!mesh::logging_enabled);
+ const auto quiet_disk=node.store.fs.files["/new_prefs"];
+ assert(quiet_disk.size()==always_disk.size());
+ for(size_t i=0;i<quiet_disk.size();++i)
+   assert(quiet_disk[i]==(i==36?0:always_disk[i]));
+ // Only the marker opts in. Historic zero padding and arbitrary padding stay off.
+ for(uint8_t marker : {0,1,2,0xa0,0xa1,0xff}) {
+   DataStore reload;reload.fs.files["/new_prefs"]=always_disk;
+   reload.fs.files["/new_prefs"][36]=marker;
+   CompanionNodePrefs loaded;loaded.usb_logging_always=1;
+   double lat=0,lon=0;assert(reload.loadPrefs(loaded,lat,lon));
+   assert(loaded.usb_logging_always==(marker==0xa1));
+   assert(loaded.ble_pin==876543&&loaded.freq==910.525f);
+ }
+ assert(node._prefs.getCustom()->setByKey("usb_log_always","1"));
+ assert(!node._prefs.getRadioPrefs()->setByKey("usb_log_always","2"));
+ assert(node.savePrefs()&&mesh::always_enabled);
+ assert(node._prefs.getCustom()->getByKey("usb_log_always",dynamic,sizeof(dynamic)));
+ assert(!strcmp(dynamic,"1"));
+ ConfigText policy_import;policy_import.text="{usb_log_always:0}";
+ assert(serializer->loadSerial(policy_import)&&node._prefs.usb_logging_always==0);
+ assert(node.savePrefs()&&!mesh::always_enabled);
+ ConfigText policy_export;assert(node._prefs.getRadioPrefs()->saveSerial(policy_export));
+ assert(policy_export.text.find("usb_log_always:0")!=std::string::npos);
+ node._prefs.usb_logging_always=255;assert(node.savePrefs());
+ assert(node._prefs.usb_logging_always==0&&!mesh::always_enabled);
+ node._prefs.usb_logging_always=255;node.store.fs.fail_write=true;
+ assert(!node.savePrefs()&&node._prefs.usb_logging_always==255&&!mesh::always_enabled);
 }
 '''
 
@@ -357,7 +414,10 @@ inline char* utoa(unsigned int value,char* output,int base){
         prefix = STORE_HARNESS.split('int main(')[0].replace('@METHODS@', store_methods)
         start = source.index('  if (strcmp(command, "get usb.debug") == 0)')
         end = source.index('  if (strcmp(command, "get usb.logging") == 0)', start)
-        harness = PREFERENCE_HARNESS.replace('@DEBUG_COMMANDS@', source[start:end])
+        always = '#if !defined(MESH_DUAL_CDC_LOGGING)\n' + '\n'.join(method(source, signature)
+            for signature in ('if (strcmp(command, "get usb.logging.always") == 0)',
+                              'if (strncmp(command, "set usb.logging.always", 22) == 0')) + '\n#endif\n'
+        harness = PREFERENCE_HARNESS.replace('@DEBUG_COMMANDS@', always + source[start:end])
         harness = harness.replace('@SAVE_PREFS@', method(header, '  bool savePrefs()'))
         harness = harness.replace('@SAVE_PREFERENCE@', method(
             header, 'template <typename T> bool savePreference('))

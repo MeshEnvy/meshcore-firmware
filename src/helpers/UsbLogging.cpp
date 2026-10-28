@@ -96,6 +96,7 @@ static std::atomic<bool> usb_logging_preference_known{false};
 static std::atomic<bool> usb_debug_enabled{false};
 #if MESH_USB_LOGGING_AVAILABLE && !defined(MESH_DUAL_CDC_LOGGING)
 static std::atomic<uint32_t> usb_packet_logging_quiet_until{0};
+static std::atomic<bool> usb_packet_logging_always{false};
 #endif
 #if MESH_ENABLE_HOST_KISS
 static std::atomic<bool> usb_binary_stream_owned{false};
@@ -1299,7 +1300,8 @@ bool isUsbLoggingEnabled() {
 
 #if MESH_USB_LOGGING_AVAILABLE && !defined(MESH_DUAL_CDC_LOGGING)
 void noteUsbConsoleCommand(const char* command) {
-  if (command == nullptr || hasDedicatedUsbLoggingPort() || isUsbLoggingPacketStream()) return;
+  if (command == nullptr || isUsbPacketLoggingAlways()
+      || hasDedicatedUsbLoggingPort() || isUsbLoggingPacketStream()) return;
   while (*command == ' ' || *command == '\t' || *command == '\r' || *command == '\n') ++command;
   if (*command == 0 || isUsbLoggingStatsCommand(command)) return;
   for (const unsigned char* p = reinterpret_cast<const unsigned char*>(command); *p; ++p) {
@@ -1314,6 +1316,15 @@ void resumeUsbPacketLogging() {
   usb_packet_logging_quiet_until.store(0, std::memory_order_relaxed);
 }
 
+void setUsbPacketLoggingAlways(bool enabled) {
+  usb_packet_logging_always.store(enabled, std::memory_order_relaxed);
+  if (enabled) resumeUsbPacketLogging();
+}
+
+bool isUsbPacketLoggingAlways() {
+  return usb_packet_logging_always.load(std::memory_order_relaxed);
+}
+
 bool isUsbPacketLoggingAllowed() {
   uint32_t deadline = usb_packet_logging_quiet_until.load(std::memory_order_relaxed);
   bool quiet = deadline != 0;
@@ -1323,7 +1334,7 @@ bool isUsbPacketLoggingAllowed() {
         deadline, 0, std::memory_order_relaxed) && deadline != 0;
   }
   return isUsbLoggingEnabled()
-      && (hasDedicatedUsbLoggingPort() || isUsbLoggingPacketStream() || !quiet);
+      && (isUsbPacketLoggingAlways() || hasDedicatedUsbLoggingPort() || isUsbLoggingPacketStream() || !quiet);
 }
 #endif
 

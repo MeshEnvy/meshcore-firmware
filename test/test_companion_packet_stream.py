@@ -42,6 +42,7 @@ bool isUsbLoggingEnabled(){return logging;}
 bool isUsbDebugLoggingEnabled(){return false;}
 void setPlatformDebugOutputEnabled(bool){}
 void setUsbDebugEnabled(bool){}
+void setUsbPacketLoggingAlways(bool){}
 void setUsbLoggingEnabled(bool enabled){logging=enabled;usb_logging_preference_known=true;}
 bool saveUsbLoggingBootPreference(bool){return true;}
 unsigned packet_logging_resumes=0;
@@ -190,7 +191,7 @@ class CompanionPacketStreamTests(unittest.TestCase):
         start = mesh.index('  if (strcmp(command, "get usb.logging") == 0)')
         end = mesh.index('\n#endif', start)
         boot_start = mesh.index('  const bool usb_logging_enabled = _prefs.usb_logging_enabled != 0;')
-        boot_end = mesh.index('\n#endif', boot_start)
+        boot_end = mesh.index('  if (!mesh::saveUsbLoggingBootPreference(', boot_start)
         normalize = next(line for line in mesh.splitlines()
                          if '_prefs.usb_logging_enabled = constrain(' in line)
         code = MODE_HARNESS.replace('@USB_FUNCTIONS@', functions)

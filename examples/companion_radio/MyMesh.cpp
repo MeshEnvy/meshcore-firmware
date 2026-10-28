@@ -3360,6 +3360,7 @@ void MyMesh::begin(bool has_display, bool radio_available,
   _prefs.wifi_enabled = constrain(_prefs.wifi_enabled, 0, 1);
   _prefs.usb_logging_enabled = constrain(_prefs.usb_logging_enabled, 0, 2);
   _prefs.usb_debug_enabled = _prefs.usb_debug_enabled == 1 ? 1 : 0;
+  _prefs.usb_logging_always = _prefs.usb_logging_always == 1 ? 1 : 0;
   _prefs.cad_enabled = constrain(_prefs.cad_enabled, 0, 1);
   if (_prefs.cad_scan_timeout_ms != 0
       && (_prefs.cad_scan_timeout_ms < mesh::CAD_SCAN_MIN_TIMEOUT_MS
@@ -3383,6 +3384,9 @@ void MyMesh::begin(bool has_display, bool radio_available,
   const bool usb_logging_enabled = _prefs.usb_logging_enabled != 0;
   mesh::configureUsbLoggingPacketStream(_prefs.usb_logging_enabled == 2);
   mesh::setUsbDebugEnabled(_prefs.usb_debug_enabled != 0);
+#if !defined(MESH_DUAL_CDC_LOGGING)
+  mesh::setUsbPacketLoggingAlways(_prefs.usb_logging_always != 0);
+#endif
   applyUsbLoggingState(usb_logging_enabled);
   if (!mesh::saveUsbLoggingBootPreference(usb_logging_enabled)) {
     MESH_DEBUG_PRINTLN("Unable to save next-boot USB logging interface state");
@@ -4311,6 +4315,28 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
   }
 #endif
 
+#if MESH_USB_LOGGING_AVAILABLE && !defined(MESH_DUAL_CDC_LOGGING)
+  if (strcmp(command, "get usb.logging.always") == 0) {
+    snprintf(reply, reply_size, "usb.logging.always %s",
+             mesh::isUsbPacketLoggingAlways() ? "on" : "off");
+    return true;
+  }
+  if (strncmp(command, "set usb.logging.always", 22) == 0
+      && (command[22] == 0 || command[22] == ' ' || command[22] == '\t')) {
+    const char* value = command + 22;
+    while (*value == ' ' || *value == '\t') value++;
+    if (strcmp(value, "on") != 0 && strcmp(value, "off") != 0) {
+      mesh::cli::formatError(reply, reply_size, "use set usb.logging.always on|off");
+    } else if (!savePreference(_prefs.usb_logging_always,
+                               uint8_t(strcmp(value, "on") == 0))) {
+      mesh::cli::formatError(reply, reply_size, "USB logging policy could not be saved");
+    } else {
+      snprintf(reply, reply_size, "OK - usb.logging.always %s (saved)",
+               _prefs.usb_logging_always ? "on" : "off");
+    }
+    return true;
+  }
+#endif
 #if MESH_USB_LOGGING_AVAILABLE
   if (strcmp(command, "get usb.debug") == 0) {
     snprintf(reply, reply_size, "usb.debug %s%s",

@@ -98,6 +98,8 @@ void setUsbLoggingEnabled(bool enabled);
 inline void noteUsbConsoleCommand(const char*) {}
 inline void resumeUsbPacketLogging() {}
 inline bool isUsbPacketLoggingAllowed() { return isUsbLoggingEnabled(); }
+inline void setUsbPacketLoggingAlways(bool) {}
+inline bool isUsbPacketLoggingAlways() { return false; }
 #elif MESH_USB_LOGGING_AVAILABLE
 // Human console commands pause packet records for five minutes without
 // changing the saved logging setting, functional replies, or debug output.
@@ -106,10 +108,15 @@ inline bool isUsbPacketLoggingAllowed() { return isUsbLoggingEnabled(); }
 void noteUsbConsoleCommand(const char* command);
 void resumeUsbPacketLogging();
 bool isUsbPacketLoggingAllowed();
+// The role persists this shared-port policy; it never enables the master gate.
+void setUsbPacketLoggingAlways(bool enabled);
+bool isUsbPacketLoggingAlways();
 #else
 inline void noteUsbConsoleCommand(const char*) {}
 inline void resumeUsbPacketLogging() {}
 inline bool isUsbPacketLoggingAllowed() { return false; }
+inline void setUsbPacketLoggingAlways(bool) {}
+inline bool isUsbPacketLoggingAlways() { return false; }
 #endif
 // Verbose diagnostics are opt-in and persisted by the role preferences.
 // The requested setting survives switching the master USB output gate off.

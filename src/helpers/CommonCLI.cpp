@@ -1055,6 +1055,7 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
   _prefs->usb_logging_enabled = 1;
 #endif
   _prefs->usb_debug_enabled = 0;
+  _prefs->usb_logging_always = 0;
   _prefs->trace_when_repeat_off = 0;
   _prefs->discovery_responses = mesh::discovery::DEFAULT_RESPONSES;
   _prefs->ota_channel = 0;
@@ -1295,6 +1296,7 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
 #endif
 #if MESH_USB_LOGGING_AVAILABLE
   mesh::setUsbDebugEnabled(_prefs->usb_debug_enabled != 0);
+  mesh::setUsbPacketLoggingAlways(_prefs->usb_logging_always != 0);
   mesh::setUsbLoggingEnabled(_prefs->usb_logging_enabled != 0);
 #endif
   _radio_profiles.adoptPrimaryPreamble(_prefs->primary_radio_preamble);
@@ -1329,6 +1331,7 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
   // Older or truncated preference images must never inherit these opt-ins
   // from a previous load of a newer image.
   _prefs->usb_debug_enabled = 0;
+  _prefs->usb_logging_always = 0;
   _prefs->trace_when_repeat_off = 0;
   _prefs->discovery_responses = mesh::discovery::DEFAULT_RESPONSES;
   _prefs->gps_sync_interval_hours = 0;
@@ -1408,7 +1411,9 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->agc_reset_interval, sizeof(_prefs->agc_reset_interval));         // 120
     file.read((uint8_t *)&_prefs->path_hash_mode, sizeof(_prefs->path_hash_mode));                 // 121
     file.read((uint8_t *)&_prefs->loop_detect, sizeof(_prefs->loop_detect));                       // 122
-    file.read(pad, 1);                                                                             // 123
+    uint8_t usb_logging_policy = 0;
+    file.read(&usb_logging_policy, 1);                                                             // 123: formerly padding
+    _prefs->usb_logging_always = usb_logging_policy == 0xA1 ? 1 : 0;
     file.read((uint8_t *)&_prefs->flood_max, sizeof(_prefs->flood_max));                           // 124
     file.read((uint8_t *)&_prefs->flood_advert_interval, sizeof(_prefs->flood_advert_interval));   // 125
     file.read((uint8_t *)&_prefs->interference_threshold, sizeof(_prefs->interference_threshold)); // 126
@@ -1963,6 +1968,7 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     _prefs->usb_logging_enabled = constrain(_prefs->usb_logging_enabled, 0, 1); // boolean
     // Only a deliberately saved 1 enables diagnostics; corrupted bytes are OFF.
     _prefs->usb_debug_enabled = _prefs->usb_debug_enabled == 1 ? 1 : 0;
+    _prefs->usb_logging_always = _prefs->usb_logging_always == 1 ? 1 : 0;
     // Corrupt or unknown values must not enable a repeat-off exception.
     _prefs->trace_when_repeat_off = _prefs->trace_when_repeat_off == 1 ? 1 : 0;
     _prefs->cad_enabled = constrain(_prefs->cad_enabled, 0, 1); // boolean
@@ -2093,7 +2099,8 @@ static bool writeCommonPrefsImage(Writer& writer, NodePrefs* prefs) {
   WRITE_COMMON_PREFS(&prefs->agc_reset_interval); // 120
   WRITE_COMMON_PREFS(&prefs->path_hash_mode);     // 121
   WRITE_COMMON_PREFS(&prefs->loop_detect);        // 122
-  WRITE_COMMON_PREFS_BYTES(pad, 1);               // 123
+  const uint8_t usb_logging_policy = prefs->usb_logging_always == 1 ? 0xA1 : 0;
+  WRITE_COMMON_PREFS(&usb_logging_policy);        // 123: formerly padding
   WRITE_COMMON_PREFS(&prefs->flood_max);          // 124
   WRITE_COMMON_PREFS(&prefs->flood_advert_interval); // 125
   WRITE_COMMON_PREFS(&prefs->interference_threshold); // 126
@@ -2311,6 +2318,7 @@ void CommonCLI::savePrefs(FILESYSTEM* fs, PrefsSaveRouting::Scope scope) {
     _common_save_result_known = true;
     _common_save_succeeded = false;
     _prefs->usb_debug_enabled = _prefs->usb_debug_enabled == 1 ? 1 : 0;
+    _prefs->usb_logging_always = _prefs->usb_logging_always == 1 ? 1 : 0;
     _prefs->trace_when_repeat_off = _prefs->trace_when_repeat_off == 1 ? 1 : 0;
     if (_prefs->discovery_responses > mesh::discovery::DEFAULT_RESPONSES)
       _prefs->discovery_responses = mesh::discovery::DEFAULT_RESPONSES;
@@ -2373,7 +2381,8 @@ void CommonCLI::savePrefs(FILESYSTEM* fs, PrefsSaveRouting::Scope scope) {
     file.write((uint8_t *)&_prefs->agc_reset_interval, sizeof(_prefs->agc_reset_interval));         // 120
     file.write((uint8_t *)&_prefs->path_hash_mode, sizeof(_prefs->path_hash_mode));                 // 121
     file.write((uint8_t *)&_prefs->loop_detect, sizeof(_prefs->loop_detect));                       // 122
-    file.write(pad, 1);                                                                             // 123
+    const uint8_t usb_logging_policy = _prefs->usb_logging_always == 1 ? 0xA1 : 0;
+    file.write(&usb_logging_policy, 1);                                                            // 123: formerly padding
     file.write((uint8_t *)&_prefs->flood_max, sizeof(_prefs->flood_max));                           // 124
     file.write((uint8_t *)&_prefs->flood_advert_interval, sizeof(_prefs->flood_advert_interval));   // 125
     file.write((uint8_t *)&_prefs->interference_threshold, sizeof(_prefs->interference_threshold)); // 126
@@ -2499,6 +2508,7 @@ void CommonCLI::savePrefs(FILESYSTEM* fs, PrefsSaveRouting::Scope scope) {
     // Dynamic config imports use this path too. Do not enable diagnostics
     // until the corresponding common preference image is committed.
     mesh::setUsbDebugEnabled(_prefs->usb_debug_enabled != 0);
+    mesh::setUsbPacketLoggingAlways(_prefs->usb_logging_always != 0);
     mesh::setUsbLoggingEnabled(_prefs->usb_logging_enabled != 0);
   }
 #endif
@@ -4438,6 +4448,29 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
   }
 #endif
 #if MESH_USB_LOGGING_AVAILABLE
+#if !defined(MESH_DUAL_CDC_LOGGING)
+  if (strncmp(config, "usb.logging.always", 18) == 0
+      && (config[18] == 0 || config[18] == ' ' || config[18] == '\t')) {
+    const char* value = config + 18;
+    while (*value == ' ' || *value == '\t') value++;
+    bool enabled = false, reboot_if_needed = false;
+    if (!mesh::cli::parseLoggingToggle(value, enabled, reboot_if_needed)
+        || reboot_if_needed) {
+      mesh::cli::formatError(reply, 160, "usage set usb.logging.always on|off");
+      return;
+    }
+    const uint8_t previous = _prefs->usb_logging_always;
+    _prefs->usb_logging_always = enabled ? 1 : 0;
+    if (!trySavePrefs()) {
+      _prefs->usb_logging_always = previous;
+      mesh::cli::formatError(reply, 160, "save unconfirmed; reboot may differ");
+      return;
+    }
+    mesh::setUsbPacketLoggingAlways(enabled);
+    snprintf(reply, 160, "OK - USB logging always %s (saved)", enabled ? "on" : "off");
+    return;
+  }
+#endif
   if (strncmp(config, "usb.logging", 11) == 0
       && (config[11] == 0 || config[11] == ' ' || config[11] == '\t')) {
     const char* value = &config[11];
@@ -6035,6 +6068,12 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
   }
 #endif
 #if MESH_USB_LOGGING_AVAILABLE
+#if !defined(MESH_DUAL_CDC_LOGGING)
+  if (strcmp(config, "usb.logging.always") == 0) {
+    snprintf(reply, 160, "> %s", mesh::isUsbPacketLoggingAlways() ? "on" : "off");
+    return;
+  }
+#endif
   if (strcmp(config, "usb.logging") == 0) {
     snprintf(reply, 160, "> %s",
              mesh::isUsbLoggingEnabled() ? "on" : "off");
