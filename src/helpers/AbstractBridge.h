@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Mesh.h>
+#include <helpers/BridgeIngressProfile.h>
 
 class AbstractBridge {
   using PacketFilter = bool (*)(void*, const mesh::Packet*);
@@ -9,18 +10,25 @@ class AbstractBridge {
   const mesh::RadioProfiles* _ingress_profiles = nullptr;
 
 protected:
-  // Bridges enter the local primary MeshCore network, not whichever tuple
-  // the physical scanner currently visits. Snapshot its generation at queue
-  // admission so a delayed frame cannot acquire a newer temporary lease.
+  // The receiver selects a local MeshCore profile, independent of the wire
+  // format and the scanner's current tuple. Legacy bridges default to primary.
+  // Snapshot the generation so delayed frames cannot acquire a newer lease.
   bool preparePacketIngress(mesh::Packet* packet) const {
-    if (!packet || (_ingress_profiles
-        && _ingress_profiles->params(0).protocol != mesh::RadioProfileProtocol::MeshCore)) return false;
-    packet->radio_profile = packet->radio_origin = 0;
+    const auto target = mesh::bridge::ingressProfile();
+    if (!packet || target == mesh::bridge::IngressProfile::Blocked) return false;
+    const uint8_t profile = target == mesh::bridge::IngressProfile::Radio2 ? 1 : 0;
+    if ((profile == 1 && (!_ingress_profiles || !_ingress_profiles->enabled()
+            || !_ingress_profiles->canTransmit(1)))
+        || (_ingress_profiles && _ingress_profiles->params(profile).protocol
+            != mesh::RadioProfileProtocol::MeshCore)) return false;
+    packet->radio_profile = packet->radio_origin = profile;
     packet->radio_generation = packet->radio_origin_generation =
-        _ingress_profiles ? _ingress_profiles->generation[0] : 0;
+        _ingress_profiles ? _ingress_profiles->generation[profile] : 0;
     packet->radio_bound = false;
     packet->radio_local = false;
-    packet->tx_radio = mesh::RADIO_TX_AUTO;
+    // Explicit secondary ingress stays secondary even if crossing is enabled.
+    // The default primary selector retains its historical crossing behavior.
+    packet->tx_radio = profile == 1 ? mesh::RADIO_TX_SECONDARY : mesh::RADIO_TX_AUTO;
     packet->radio_reply = packet->radio_reply_force = false;
     packet->forwarded = true;
     return true;

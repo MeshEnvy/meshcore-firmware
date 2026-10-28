@@ -409,6 +409,13 @@ int main() {
             work = Path(directory)
             (work/'Mesh.h').write_text(PACKET)
             code = '#include <initializer_list>\n' + HARNESS.replace('@METHODS@', '\n'.join(methods))
+            code += '''
+#if MESH_ENABLE_BRIDGE_INGRESS
+namespace mesh { namespace bridge {
+IngressProfile ingressProfile() { return IngressProfile::Radio; }
+}}
+#endif
+'''
             (work/'test.cpp').write_text(code)
             for macros in [[], ['-DWITH_ESPNOW_BRIDGE=1'], ['-DWITH_UDP_BRIDGE=1']]:
                 with self.subTest(macros=macros):

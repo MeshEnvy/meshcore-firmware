@@ -892,6 +892,7 @@ public:
 
 
   void configureBridgeFilter(AbstractBridge* active_bridge) {
+    active_bridge->setIngressProfiles(_radio->profiles());
 #if MESH_ENABLE_ROOM_FLOOD_RULE_ENGINE
     active_bridge->setPacketFilter([](void* context, const mesh::Packet* packet) {
       return static_cast<MyMesh*>(context)->allowTransportPacket(packet, 2);  // RULE_MODE_BRIDGE

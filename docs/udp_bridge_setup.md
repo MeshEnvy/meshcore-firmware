@@ -163,6 +163,14 @@ actual firmware. If sessions/probes work but mesh traffic does not, check
 `bridge.source rx` is valid; `tx` instead selects packets after LoRa forwarding
 decisions. These source/filter settings are shared with other compiled bridges.
 
+Incoming UDP mesh packets use `bridge.ingress radio` by default. To forward
+them only on an already configured MeshCore radio2, save
+`set bridge.ingress radio2` on the receiving board. Radio2 must permit TX;
+unavailable profiles cause drops, never a fallback to the primary. The sender,
+UDP framing, peer sessions and authentication stay unchanged. See the
+[MediaMesh example](espnow_bridge_setup.md#send-bridge-traffic-only-on-mediamesh)
+and [bridge-ingress reference](cli_commands.md#select-the-radio-for-incoming-bridge-packets).
+
 The peer list contains direct destinations for locally received/transmitted
 LoRa traffic. An incoming UDP packet enters the local LoRa mesh; it is not
 relayed to other UDP peers, including through its later local LoRa TX callback.

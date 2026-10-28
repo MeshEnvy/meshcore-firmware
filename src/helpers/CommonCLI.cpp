@@ -20,6 +20,7 @@
 #include "PowerSavingDiagnostics.h"
 #include "HilStartupTrace.h"
 #include "FilePresence.h"
+#include "BridgeIngressSettings.h"
 #if defined(ESP32_PLATFORM)
 #include "BootSlot.h"
 #include <helpers/esp32/CpuClockPolicy.h>
@@ -1017,6 +1018,9 @@ static void formatSnrDbX4Short(char* dest, size_t dest_len, int16_t snr_x4) {
 }
 
 void CommonCLI::loadPrefs(FILESYSTEM* fs) {
+#if MESH_ENABLE_BRIDGE_INGRESS
+  mesh::bridge::loadIngressSettings(fs);
+#endif
 #if MESH_ENABLE_BATTERY_FORWARDING
   loadBatteryForwarding(fs);
 #endif
@@ -3563,6 +3567,9 @@ bool CommonCLI::handleUDPBridgeCommand(uint32_t sender_timestamp,
 void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* reply) {
     PrefsSaveReplyGuard save_reply(_prefs_save_failures, reply);
     mesh::cli::normalizeCommandVerb(command);
+#if MESH_ENABLE_BRIDGE_INGRESS
+    if (mesh::bridge::handleIngressCommand(command, reply, 157)) return;
+#endif
 #if MESH_ENABLE_HOST_KISS
     if (mesh::hostkiss::handleCommand(command, reply, 157, sender_timestamp == 0)) return;
 #endif

@@ -94,6 +94,7 @@ Stopping it first lets you finish configuring both sides before connecting them.
 | `bridge.format` | `wrapped` is the default for this two-repeater setup and uses the shared secret. `raw` connects to primary-ESP-NOW nodes such as `Generic_ESPNOW` or `SenseCapIndicator-ESPNow`; it ignores the secret. Both peers must use compatible formats. |
 | `bridge.secret` | A matching, case-sensitive value of 1-15 characters for `wrapped` mode. It separates bridge groups; it is not strong encryption. MeshCore's own message encryption remains in place. |
 | `bridge.source` | `tx` crosses packets this repeater transmits on LoRa, after its forwarding decisions; use this for the setup above. `rx` crosses received packets before those decisions and can pass traffic the local repeater would not forward. |
+| `bridge.ingress` | Selects the local radio for incoming bridge packets: `radio` preserves the default primary-radio behavior; `radio2` forwards only on the active MeshCore second profile, with no primary fallback. |
 | `bridge.delay` | Wait before processing a packet received from the other bridge, in milliseconds. Range: 0-10000. Start with the default `500`. |
 | `repeat` | `on` enables normal LoRa forwarding; `off` disables forwarding. Keep it `on` on both bridge repeaters. Normal routing, scope, and packet-filter rules still apply. |
 | `bridge.type` | Read-only firmware capability, including combined transports. |
@@ -104,6 +105,46 @@ use `logTx` and `logRx`; those are not the command values used here.
 
 For a LoRa gateway connected to primary-ESP-NOW Companions instead of another
 LoRa repeater, see [raw ESP-NOW compatibility](WiFi.md#wifi-companion-setup).
+
+### Send bridge traffic only on MediaMesh
+
+Keep the receiving repeater's primary USA profile at 910.525 MHz while sending
+packets arriving over the bridge only on MediaMesh:
+
+```text
+MediaMesh 911.150 RX --> Repeater A --> ESP-NOW --> Repeater B --> radio2 911.150 TX
+```
+
+Configure the matching ESP-NOW channel, format and secret as above. On the
+source repeater already receiving MediaMesh, export receptions without local
+relay forwarding:
+
+```text
+set bridge.source rx
+set repeat off
+```
+
+`repeat off` still allows this source's own adverts and replies. For an RX-only
+MediaMesh profile, use `set radio2 911.150,250,7,5,rx` and keep crossing off;
+the bridge also exports receptions from any other active profile. This setting
+does not filter bridge output by the source frequency.
+
+On the destination repeater, leave its existing primary USA settings and use:
+
+```text
+set radio2 mediamesh
+set radio2.cross off
+set bridge.ingress radio2
+set repeat on
+get bridge.ingress
+```
+
+The incoming bridge packets are marked as radio2 traffic locally; the sender
+does not need updated firmware or an extra wire-format field. Radio2 must be
+available in `rxtx` MeshCore mode. Otherwise packets are dropped rather than
+sent on the primary. This saved setting covers all incoming ESP-NOW, UDP and
+RS-232 mesh traffic on the destination; `set bridge.ingress radio` restores
+the original behavior. Normal scope and filtering rules still apply.
 
 ## 4. Check the link
 

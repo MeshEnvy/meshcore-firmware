@@ -252,6 +252,7 @@ should use command `0x42`. See [Companion radio binary protocol](companion_proto
 | Bridge | [`get/set bridge.enabled`; `get bridge.running`](cli_commands.md#view-or-change-the-bridge-enabled-flag) | Compiled bridge | Feature | Feature | Feature |
 | Bridge | [`get/set bridge.delay`](cli_commands.md#add-a-delay-to-packets-routed-through-this-bridge) | Compiled bridge | Feature | Feature | Feature |
 | Bridge | [`get/set bridge.source`](cli_commands.md#view-or-change-the-source-of-packets-bridged-to-the-external-interface) | Compiled bridge | Feature | Feature | Feature |
+| Bridge | [`get/set bridge.ingress`](cli_commands.md#select-the-radio-for-incoming-bridge-packets) | Compiled incoming packet bridge; saved primary or radio2 selection | Feature | Feature | Feature |
 | Bridge | [`get/set bridge.baud`](cli_commands.md#view-or-change-the-speed-of-the-bridge-rs-232-only) | RS-232 bridge | Feature | Feature | Feature |
 | Bridge | [`get/set bridge.uart`](cli_commands.md#view-or-change-the-uart-used-by-the-bridge-rs-232-only) | RS-232 bridge | Feature | Feature | Feature |
 | Bridge | [`get/set bridge.channel`](cli_commands.md#view-or-change-the-channel-used-for-bridging-espnow-only) | ESP-NOW is ESP32 only | No | No | No |
@@ -431,6 +432,7 @@ should use command `0x42`. See [Companion radio binary protocol](companion_proto
 | Bridge | [`get/set bridge.enabled`; `get bridge.running`](cli_commands.md#view-or-change-the-bridge-enabled-flag) | Compiled bridge | Feature | Feature | Feature | Yes | Feature |
 | Bridge | [`get/set bridge.delay`](cli_commands.md#add-a-delay-to-packets-routed-through-this-bridge) | Compiled bridge | Feature | Feature | Feature | Yes | Feature |
 | Bridge | [`get/set bridge.source`](cli_commands.md#view-or-change-the-source-of-packets-bridged-to-the-external-interface) | Compiled bridge | Feature | Feature | Feature | Yes | Feature |
+| Bridge | [`get/set bridge.ingress`](cli_commands.md#select-the-radio-for-incoming-bridge-packets) | Compiled incoming packet bridge; saved primary or radio2 selection | Feature | Feature | Feature | Feature | Feature |
 | Bridge | [`get/set bridge.baud`](cli_commands.md#view-or-change-the-speed-of-the-bridge-rs-232-only) | RS-232 bridge | Feature | Feature | Feature | No | Feature |
 | Bridge | [`get/set bridge.uart`](cli_commands.md#view-or-change-the-uart-used-by-the-bridge-rs-232-only) | RS-232 bridge | Feature | Feature | Feature | No | Feature |
 | Bridge | [`get/set bridge.channel`](cli_commands.md#view-or-change-the-channel-used-for-bridging-espnow-only) | ESP-NOW bridge | No | No | No | Feature | Feature |
