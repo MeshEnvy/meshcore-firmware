@@ -30,12 +30,12 @@
         "MESH_ENABLE_LOST_REPLY=0"
       ],
       "output_bytes": [
-        4907,
-        4899
+        4946,
+        4938
       ],
       "output_sha256": [
-        "f35a89cf2f1f730069729b5d977edb48b89e5062e14ead8009b5675e1d3146f8",
-        "8d68da4d7f2b66a8a2ad889b0f7e01eb1a9a5432388ac6466ed3c53eebd558c1"
+        "bb14e81de08d1e49d30fd23aac0b32bbbe89e233021c7772ed00ff439fa4e530",
+        "abb5cd540b09c9b8c7451e0a2c1ec4afbd06a3c51203e0c747f32aa8f9c2bdab"
       ]
     },
     "all-options-native0-lost1": {
@@ -68,12 +68,12 @@
         "MESH_ENABLE_LOST_REPLY=1"
       ],
       "output_bytes": [
-        4942,
-        4934
+        4981,
+        4973
       ],
       "output_sha256": [
-        "1931d924971295f58e9c87606a101d52f4c584a3e2a76d8aed208874c17942b1",
-        "81707eb39133311da39145a722ac526997e21efe597ded614ef1818af11414dc"
+        "ff5e938adf128262f499720545073f775293cf867d7e78be46256ab3326e0ab7",
+        "93f43a333536b43ae308ab8dedcd929eec11b109901818aecfa66abad204b3cc"
       ]
     },
     "all-options-native1-lost0": {
@@ -106,12 +106,12 @@
         "MESH_ENABLE_LOST_REPLY=0"
       ],
       "output_bytes": [
-        4992,
-        4984
+        5031,
+        5023
       ],
       "output_sha256": [
-        "916dfbc8915ca39d0f298d2c23dee8674605f73ede5d0f39134e791523864114",
-        "8ed4ff32d2e8a6e9f3dabae7bf0d1e5497ee09d77294b8e4b5399aa43e57cee9"
+        "65b1c10004b7f43587eba91698e6f0d281e811c22114b77401fc34248364d603",
+        "14d510af8083cbf03b7ac77af8bb51fca947a050a4953132e6239a3a5bf17ca7"
       ]
     },
     "all-options-native1-lost1": {
@@ -144,12 +144,12 @@
         "MESH_ENABLE_LOST_REPLY=1"
       ],
       "output_bytes": [
-        5027,
-        5019
+        5066,
+        5058
       ],
       "output_sha256": [
-        "7b7caa2c93f326246bc6a31b26a4efc11cae71548c812742924259b51c8d43ae",
-        "bd9c03ac867cf6ad62d3febbfa4875951902878226a67081d72f188e073a0c20"
+        "693e01f6ee384f9d3c96ef1e43148fdc3528a30dafd137515a3e77d1c900bf48",
+        "4437daf200af4bd6bb8ab651c0315ddd8743c7a880c07b8d9c82b3d5a9774dcb"
       ]
     },
     "full-native0-lost0": {
@@ -173,12 +173,12 @@
         "MESH_ENABLE_LOST_REPLY=0"
       ],
       "output_bytes": [
-        3564,
-        3556
+        3603,
+        3595
       ],
       "output_sha256": [
-        "2df296daf6c3050c2390dc55afffd0c2c43b35620cd8ce1a73162202b8abf02a",
-        "b4b69f1a12aebab76945cdef4c7e94078a8e9a8d3f718b68facb215570e9d0cc"
+        "8bfd3694e0bc33aa808895f6e4a76b082bb159c882b8d3937c14e51880dca78d",
+        "786c12671e62289d8468c43fdc3776f6e3299aa6e8d0006fd8ad5613840bd78c"
       ]
     },
     "full-native0-lost1": {
@@ -202,12 +202,12 @@
         "MESH_ENABLE_LOST_REPLY=1"
       ],
       "output_bytes": [
-        3599,
-        3591
+        3638,
+        3630
       ],
       "output_sha256": [
-        "3105232dfa903a6c15f3ed6d6034b59b0a32ca24d6151ad48fc33de621b3277a",
-        "8bd526c52eedc16c7cfdc013311634470a40fdc80035760a6accacd876cca794"
+        "ae3b7cf29e9892a554d04ba5558ad89aa3ff94478a1bd434ed498b1435f8b0d0",
+        "17528343802f445c17dda60c803cc469aa0d8b9ce4c492fb64fd45cfabd5f56a"
       ]
     },
     "full-native1-lost0": {
@@ -231,12 +231,12 @@
         "MESH_ENABLE_LOST_REPLY=0"
       ],
       "output_bytes": [
-        3649,
-        3641
+        3688,
+        3680
       ],
       "output_sha256": [
-        "88ca44fdc7bce777e3120131c0631e981c497aa0a80849b5badca9df29c0b624",
-        "64f96b9832d0f83ed5fea70ae9514cf60ae1232d1589c4e73a31ddbf246bb40d"
+        "83b832f5de59fbfe04a49fb550245b8256a9dd924b50215f72e64b76b0e59cdf",
+        "52c5b5821c64d4100462d4ef08b8cef85b350150372e74abd3c2047836cb1954"
       ]
     },
     "full-native1-lost1": {
@@ -260,12 +260,12 @@
         "MESH_ENABLE_LOST_REPLY=1"
       ],
       "output_bytes": [
-        3684,
-        3676
+        3723,
+        3715
       ],
       "output_sha256": [
-        "c1db29ea27a6db989227eef74c55b2ca4e07b0909df8232842d52886e02697ce",
-        "f9428924f7fc57fee248100282deeb03ba66ee1a83d11ee37c3dd3bfc9edd61d"
+        "525c50beeb01595634f469b38c265000f6ad6d6ad5443b4dad6d3e36db0b5a8e",
+        "dd4d7390ba42b655c8cc78b9da25048328c921c14eb8d2b4c3eccf343142d8ac"
       ]
     },
     "minimal-native0-lost0": {
@@ -359,12 +359,12 @@
         "MESH_ENABLE_LOST_REPLY=0"
       ],
       "output_bytes": [
-        4767,
-        4759
+        4806,
+        4798
       ],
       "output_sha256": [
-        "35197aca1bdc0f7bf52f8b468a23f019e05f5779b6eaf0cb1e498a042685ea8d",
-        "69b0ad692bb4adf99dedbc192269b5f43c0270dee6c863ec93fa333952d730ac"
+        "4cc6eed0758a5f99006b17d3d6b4564665d86e4cd65f3b0365926a78f562356e",
+        "9d6cc39d8b397abd81543346fd88786517fb385a44abb317ac2cf1e7b2cbd8a9"
       ]
     },
     "qspi-native0-lost1": {
@@ -398,12 +398,12 @@
         "MESH_ENABLE_LOST_REPLY=1"
       ],
       "output_bytes": [
-        4802,
-        4794
+        4841,
+        4833
       ],
       "output_sha256": [
-        "6c8d2efbc41010b73ccc76cc6da9e37e1ad7f85cc38e271e982314d94f9ccbf4",
-        "8f664370def3695157f7d2b56a36826182d19f8866b69643e6c654f15fc8aff6"
+        "3bfd0dc32ba035ea4254e72fe21fde8e18a0b26d6621eec6df4e077ddc1069b9",
+        "ff22590ebdb6ed569fff20b9680050b7ac746d76ccc87cac85034b8f49adc0c4"
       ]
     },
     "qspi-native1-lost0": {
@@ -437,12 +437,12 @@
         "MESH_ENABLE_LOST_REPLY=0"
       ],
       "output_bytes": [
-        4852,
-        4844
+        4891,
+        4883
       ],
       "output_sha256": [
-        "d5f33dd01c217329a8c8833b52fef66d7f8cb36d8318099b2365e541d0c2d20d",
-        "7e74ea47a40bb08a968edd6b9164901e8611ed87581df2826e10c62dc8f1c418"
+        "6dc1e3ab146948fa9c59c8eca47cd0ca3171281c161dc7fd66a3e17eb5d966b4",
+        "ddec9acf0156c143bbf40d8372002c6eadcdac355ebc567dbb18ec627bbc992c"
       ]
     },
     "qspi-native1-lost1": {
@@ -476,12 +476,12 @@
         "MESH_ENABLE_LOST_REPLY=1"
       ],
       "output_bytes": [
-        4887,
-        4879
+        4926,
+        4918
       ],
       "output_sha256": [
-        "8c718f17d64ee474727fe90ab49a3c829bb040e24b9d1f3164034d1ed85b4a4b",
-        "f46636f6b6aa8a8f0104f84d1ddffb689ea56fd42d7294b209222ba76f75dd2d"
+        "5cb4b4679630e65a8a6739158fc31c8830b393cdf18a69a259f3e31f6e4c0a74",
+        "9883ae8a436098ac6c6d2edf03164d19a0f07624ddcec74b598e79243387060e"
       ]
     }
   },
