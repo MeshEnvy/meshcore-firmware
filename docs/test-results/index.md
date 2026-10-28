@@ -77,6 +77,7 @@ Completed validation reports, experiments, and test guides are collected here. O
 
 ## Build, storage, memory, and checklists
 
+- [Emergency battery schedule: native and firmware build checks, 2026-10-28](emergency_power_2026-10-28.md)
 - [RAK4631 Full/Reduced RAM repair and RAK3401 Room Server radio/sleep qualification, 2026-10-22](rak_release_fixes_2026-10-22.md)
 - [Shared battery ADC calibration validation, 2026-10-22](battery_calibration_2026-10-22.md)
 - [Heltec V2 BLE RAM reserve repair, 2026-10-22](heltec_v2_ble_memory_2026-10-22.md)

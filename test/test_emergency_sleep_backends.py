@@ -23,6 +23,7 @@ HARNESS = r'''
 static std::vector<std::string> events;
 static bool radio_test = false, interrupt_context = false, wireless_ready = true;
 static bool usb_held = false;
+static bool attach_on_delay = false;
 static unsigned primask = 0, basepri = 0, faultmask = 0;
 static unsigned __get_IPSR() { return interrupt_context; }
 static unsigned __get_PRIMASK() { return primask; }
@@ -40,6 +41,7 @@ static void vTaskDelay(TickType_t ticks) {
   assert(ticks != 0);
   delayed_ticks = ticks;
   events.push_back("delay");
+  if (attach_on_delay) usb_held = true; // Model the USB SOF hook observing a new host.
 }
 static unsigned nrf_feeds = 0;
 static constexpr uint32_t WDT_RR_RR_Reload = 0x6e524635;
@@ -112,6 +114,7 @@ struct ESP32Board : Base {
 static void reset() {
   events.clear(); radio_test = interrupt_context = false; wireless_ready = true;
   usb_held = false;
+  attach_on_delay = false;
   primask = basepri = faultmask = 0; nrf_nvic_state.__cr_flag = 0;
   scheduler = taskSCHEDULER_RUNNING;
   tick_ms = 1; delayed_ticks = nrf_feeds = 0;
@@ -293,6 +296,12 @@ int main() {
   reset(); usb_held = true; wireless_ready = false;
   assert(esp.emergencySleepMilliseconds(10000));
   assert(delayed_ticks == 100 && !sleep_calls); // Existing host still bypasses physical USB sleep.
+  reset(); attach_on_delay = true;
+  assert(esp.emergencySleepMilliseconds(10000) && usb_held);
+  assert(sleep_calls == 1 && clear_calls == 1);
+  events.clear();
+  assert(esp.emergencySleepMilliseconds(10000));
+  assert(events == std::vector<std::string>{"delay"} && sleep_calls == 1);
 }
 '''
         self.run_code(code, ("-DMESH_ESP32_USB_CONSOLE_COOPERATIVE=1",))

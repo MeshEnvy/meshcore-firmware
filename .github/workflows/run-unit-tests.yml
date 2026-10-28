@@ -598,6 +598,7 @@ jobs:
           python3 -B test/test_emergency_power.py -v
           python3 -B test/test_emergency_power_runtime.py -v
           python3 -B test/test_emergency_power_ota.py -v
+          python3 -B test/test_emergency_power_bench.py -v
           python3 -B test/test_emergency_sleep_backends.py -v
           python3 -B test/test_battery_calibration.py -v
           python3 -B test/test_battery_calibration_store.py -v

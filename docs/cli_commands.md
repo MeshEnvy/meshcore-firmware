@@ -3141,6 +3141,9 @@ radio sleeps and normal mesh, sensor and screen work is suspended. The CPU
 uses timed sleep with brief watchdog, clock, voltage-protection and command
 maintenance wakes. Active firmware updates and unfinished critical operations
 defer sleep. Existing hard low-voltage protection remains in force.
+On ESP32, an active native USB connection uses short CPU idle waits to keep
+the console usable while the radio sleeps. Timed light sleep resumes after
+USB detaches and its disconnect grace expires.
 
 ```text
 get power.emergency
@@ -3161,8 +3164,9 @@ up to one ten-second maintenance interval while the node is sleeping.
 
 `get power.emergency` reports the mode, battery estimate, desired `window`,
 actual radio ownership, seconds until the next awake window, and remaining
-hold. With an unset clock it reports `clock=uptime` and follows the same
-15/45-minute cycle from boot until a valid UTC clock is available. Queued
+hold. With an implausible clock timestamp it reports `clock=uptime` and follows
+the same 15/45-minute cycle from boot. Keep the clock set to UTC: a plausible
+timestamp alone does not prove it is synchronized. Queued
 future traffic does not keep a critically low node awake indefinitely.
 
 This schedule uses resumable timed sleep, preserving identity and settings.

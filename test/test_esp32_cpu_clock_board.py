@@ -186,9 +186,11 @@ int main(){
             clock_service=source.index("mesh::esp32::serviceCpuFrequencyPolicy(",loop_start)
             # Emergency maintenance also services UART restoration before its
             # early return. Keep this fixture anchored to the clock policy.
-            start=source.rindex("  board.servicePowerTestControls();",loop_start,clock_service)
-            end=source.index("#endif",clock_service)
-            service=source[start:end]
+            quiet_service=source.rindex("  board.servicePowerTestControls();",loop_start,clock_service)
+            # Execute the two real calls without importing unrelated enclosing
+            # feature guards (early emergency placement is tested separately).
+            service=source[quiet_service:source.index(";",quiet_service)+1]+"\n"
+            service+=source[clock_service:source.index(";",clock_service)+1]+"\n"
             tests="void role_service(){\n"+service+"}\n"+r'''
 int main(){
  prefs.cpu_freq_mhz=160;role_service();assert(actual_mhz==160&&board.quiet_services==1);
