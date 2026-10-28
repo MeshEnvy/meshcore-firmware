@@ -252,7 +252,7 @@ should use command `0x42`. See [Companion radio binary protocol](companion_proto
 | Bridge | [`get/set bridge.enabled`; `get bridge.running`](cli_commands.md#view-or-change-the-bridge-enabled-flag) | Compiled bridge | Feature | Feature | Feature |
 | Bridge | [`get/set bridge.delay`](cli_commands.md#add-a-delay-to-packets-routed-through-this-bridge) | Compiled bridge | Feature | Feature | Feature |
 | Bridge | [`get/set bridge.source`](cli_commands.md#view-or-change-the-source-of-packets-bridged-to-the-external-interface) | Compiled bridge | Feature | Feature | Feature |
-| Bridge | [`get/set bridge.ingress`](cli_commands.md#select-the-radio-for-incoming-bridge-packets) | Compiled incoming packet bridge; saved primary or radio2 selection | Feature | Feature | Feature |
+| Bridge | [`get/set bridge.ingress`](cli_commands.md#select-the-radio-for-incoming-bridge-packets) | Compiled incoming packet bridge; saved primary/radio2 target or off | Feature | Feature | Feature |
 | Bridge | [`get/set bridge.baud`](cli_commands.md#view-or-change-the-speed-of-the-bridge-rs-232-only) | RS-232 bridge | Feature | Feature | Feature |
 | Bridge | [`get/set bridge.uart`](cli_commands.md#view-or-change-the-uart-used-by-the-bridge-rs-232-only) | RS-232 bridge | Feature | Feature | Feature |
 | Bridge | [`get/set bridge.channel`](cli_commands.md#view-or-change-the-channel-used-for-bridging-espnow-only) | ESP-NOW is ESP32 only | No | No | No |
@@ -348,6 +348,7 @@ should use command `0x42`. See [Companion radio binary protocol](companion_proto
 | Logging | [`get/set usb.watchdog off\|on\|auto`](usb_logging_watchdog.md) | Current source; recovery requires native USB, live logging, and durable storage; Auto qualifies from USB stats polling | Yes | Yes | Feature | Yes | Yes |
 | Logging | [`get usb.watchdog.last`](usb_logging_watchdog.md#last-event-review) | Current source; latest USB watchdog event with advisory timestamp, uptime, action, reasons, and durability; native USB required | Yes | Yes | Feature | Yes | Yes |
 | Radio | [`get radio`; `set radio ...`](cli_commands.md#view-or-change-this-nodes-radio-parameters) | All text CLI roles | Yes | Yes | Yes | Yes | Yes |
+| Radio | [`get/set radio.mode`](cli_commands.md#select-lora-receive-and-transmit-directions) | ESP32 infrastructure LoRa direction: both, rx, tx or off | Yes | Yes | Yes | Yes | Yes |
 | Radio | [`get tx`; `set tx <dbm>`](cli_commands.md#view-or-change-this-nodes-transmit-power) | Board TX-power limits apply; busy changes apply automatically | Yes | Yes | Yes | Yes | Yes |
 | Radio | [`tempradio ...`; `normalradio`](cli_commands.md#change-the-radio-parameters-for-a-set-duration) | Full parser | Yes | Yes | Yes | Yes | Yes |
 | Radio | [`get/set/del radioat`; `get/set/del tempradioat`](cli_commands.md#schedule-radio-parameter-changes) | Full parser | Yes | Yes | Yes | Yes | Yes |
@@ -432,7 +433,8 @@ should use command `0x42`. See [Companion radio binary protocol](companion_proto
 | Bridge | [`get/set bridge.enabled`; `get bridge.running`](cli_commands.md#view-or-change-the-bridge-enabled-flag) | Compiled bridge | Feature | Feature | Feature | Yes | Feature |
 | Bridge | [`get/set bridge.delay`](cli_commands.md#add-a-delay-to-packets-routed-through-this-bridge) | Compiled bridge | Feature | Feature | Feature | Yes | Feature |
 | Bridge | [`get/set bridge.source`](cli_commands.md#view-or-change-the-source-of-packets-bridged-to-the-external-interface) | Compiled bridge | Feature | Feature | Feature | Yes | Feature |
-| Bridge | [`get/set bridge.ingress`](cli_commands.md#select-the-radio-for-incoming-bridge-packets) | Compiled incoming packet bridge; saved primary or radio2 selection | Feature | Feature | Feature | Feature | Feature |
+| Bridge | [`get/set bridge.ingress`](cli_commands.md#select-the-radio-for-incoming-bridge-packets) | Compiled incoming packet bridge; saved primary/radio2 target or off | Feature | Feature | Feature | Feature | Feature |
+| Bridge | [`get/set/del bridge.route.1..8`; `clear bridge.routes`](cli_commands.md#route-incoming-bridge-packets-by-sender) | Exact ESP-NOW station MAC or UDP endpoint routing; compiled bridge required | Feature | Feature | Feature | Feature | Feature |
 | Bridge | [`get/set bridge.baud`](cli_commands.md#view-or-change-the-speed-of-the-bridge-rs-232-only) | RS-232 bridge | Feature | Feature | Feature | No | Feature |
 | Bridge | [`get/set bridge.uart`](cli_commands.md#view-or-change-the-uart-used-by-the-bridge-rs-232-only) | RS-232 bridge | Feature | Feature | Feature | No | Feature |
 | Bridge | [`get/set bridge.channel`](cli_commands.md#view-or-change-the-channel-used-for-bridging-espnow-only) | ESP-NOW bridge | No | No | No | Feature | Feature |

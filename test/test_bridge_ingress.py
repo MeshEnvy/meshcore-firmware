@@ -152,8 +152,10 @@ int main() {
  bridge.setIngressProfiles(nullptr);
  mesh::Packet missing;bridge.handleReceivedPacket(&missing);assert(bridge.manager.freed==++drops);
  bridge.setIngressProfiles(&profiles);
- selection=IngressProfile::Blocked;
- mesh::Packet blocked;bridge.handleReceivedPacket(&blocked);assert(bridge.manager.freed==++drops);
+ for (auto target : {IngressProfile::Blocked, IngressProfile::Off}) {
+   selection=target;
+   mesh::Packet blocked;bridge.handleReceivedPacket(&blocked);assert(bridge.manager.freed==++drops);
+ }
  assert(bridge.manager.queued==queued&&bridge._seen_packets.checks==checks&&bridge._seen_packets.marks==marks);
  assert(filter_calls==filters&&dispatch.outbound.size()==sent);
 
@@ -165,6 +167,24 @@ int main() {
  assert(dispatch.getTransmitProfileMask(&normal)==1);
  assert(dispatch.queueOutboundPacket(&normal,0,0));
  assert(dispatch.outbound.back().radio_profile==0);
+
+ // Explicit source mappings can also pin USA to primary while crossing is
+ // enabled. The source identity is visible only during this admission.
+ bridge.setPacketFilter(nullptr,nullptr);
+ selection=IngressProfile::Radio;
+ mesh::bridge::requested_explicit=true;
+ profiles.cross=RadioCrossMode::On;
+ const uint8_t address[]={2,16,32,48,64,81};
+ const auto source=mesh::bridge::IngressSource::mac(address);
+ mesh::Packet usa;bridge.receiveFrom(&usa,source);
+ assert(mesh::bridge::observed_source.kind==mesh::bridge::IngressSource::Kind::Mac);
+ assert(memcmp(mesh::bridge::observed_source.bytes,address,6)==0);
+ assert(usa.radio_profile==0&&usa.radio_generation==profiles.generation[0]&&usa.tx_radio==mesh::RADIO_TX_PRIMARY);
+ assert(dispatch.getTransmitProfileMask(&usa)==1);
+ mesh::bridge::requested_explicit=false;
+ mesh::Packet next;bridge.handleReceivedPacket(&next);
+ assert(mesh::bridge::observed_source.kind==mesh::bridge::IngressSource::Kind::None);
+ assert(next.tx_radio==mesh::RADIO_TX_AUTO&&dispatch.getTransmitProfileMask(&next)==3);
 }
 '''
         code = code.replace("@DISPATCH_GUARD@", guard)
@@ -173,13 +193,16 @@ int main() {
                                   ("@CURRENT@", "bool Dispatcher::isPacketRadioCurrent(")):
             code = code.replace(marker, method(dispatcher, signature))
         packet = PACKET.replace(" uint8_t payload[64]", " uint8_t path_len=0;\n static bool isValidPathLen(uint8_t n) {return n<64;}\n uint8_t payload[64]")
-        selector = r'''
-#pragma once
-#include <cstdint>
+        selector = (ROOT / "src/helpers/BridgeIngressProfile.h").read_text() + r'''
 namespace mesh { namespace bridge {
-enum class IngressProfile : uint8_t {Radio=0,Radio2=1,Blocked=2};
 static IngressProfile requested_ingress=IngressProfile::Radio;
+static bool requested_explicit=false;
+static IngressSource observed_source;
 inline IngressProfile ingressProfile() {return requested_ingress;}
+inline IngressRoute ingressRoute(const IngressSource* source) {
+ observed_source=source?*source:IngressSource();
+ return {requested_ingress, requested_explicit};
+}
 }}
 '''
         with tempfile.TemporaryDirectory(prefix="meshcore-bridge-radio2-") as directory:

@@ -21,6 +21,7 @@
 #include "HilStartupTrace.h"
 #include "FilePresence.h"
 #include "BridgeIngressSettings.h"
+#include "RadioDirectionSettings.h"
 #if defined(ESP32_PLATFORM)
 #include "BootSlot.h"
 #include <helpers/esp32/CpuClockPolicy.h>
@@ -1018,6 +1019,9 @@ static void formatSnrDbX4Short(char* dest, size_t dest_len, int16_t snr_x4) {
 }
 
 void CommonCLI::loadPrefs(FILESYSTEM* fs) {
+#if MESH_ENABLE_RADIO_DIRECTION
+  mesh::radioDirection::loadDirectionSettings(fs);
+#endif
 #if MESH_ENABLE_BRIDGE_INGRESS
   mesh::bridge::loadIngressSettings(fs);
 #endif
@@ -3567,6 +3571,9 @@ bool CommonCLI::handleUDPBridgeCommand(uint32_t sender_timestamp,
 void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* reply) {
     PrefsSaveReplyGuard save_reply(_prefs_save_failures, reply);
     mesh::cli::normalizeCommandVerb(command);
+#if MESH_ENABLE_RADIO_DIRECTION
+    if (mesh::radioDirection::handleDirectionCommand(command, reply, 157)) return;
+#endif
 #if MESH_ENABLE_BRIDGE_INGRESS
     if (mesh::bridge::handleIngressCommand(command, reply, 157)) return;
 #endif
@@ -6230,7 +6237,10 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
   } else if (configKeyEquals(config, "int.thresh")) {
     sprintf(reply, "> %d", (uint32_t) _prefs->interference_threshold);
   } else if (configKeyEquals(config, "cad")) {
-    sprintf(reply, "> %s. # channel busy: %u", _prefs->cad_enabled ? "on" : "off", _board->n_cad_busy);
+    const bool required = mesh::radioDirection::mode() == mesh::radioDirection::Mode::Tx;
+    snprintf(reply, 160, "> %s%s. # channel busy: %u",
+             (_prefs->cad_enabled || required) ? "on" : "off",
+             required ? " (required by radio.mode tx)" : "", _board->n_cad_busy);
   } else if (configKeyEquals(config, "agc.reset.interval")) {
     sprintf(reply, "> %d", ((uint32_t) _prefs->agc_reset_interval) * 4);
   } else if (configKeyEquals(config, "multi.acks")) {

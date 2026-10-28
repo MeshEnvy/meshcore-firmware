@@ -36,6 +36,8 @@ struct Packet {
 
 HARNESS = r'''
 #include <helpers/AbstractBridge.h>
+#include <helpers/RadioDirectionPolicy.h>
+namespace radioDirection = mesh::radioDirection;
 #include <atomic>
 #include <cassert>
 #include <vector>
@@ -88,6 +90,9 @@ struct BridgeBase : AbstractBridge {
  bool isRunning() const override {return _initialized;}
  void sendPacket(mesh::Packet*) override {}
  void onPacketReceived(mesh::Packet* p) override {handleReceivedPacket(p);}
+ void receiveFrom(mesh::Packet* p, const mesh::bridge::IngressSource& source) {
+   IngressSourceScope scope(*this, source); handleReceivedPacket(p);
+ }
  void handleReceivedPacket(mesh::Packet*);
  uint16_t fletcher16(const uint8_t*,size_t) {return 0;}
 };
@@ -413,6 +418,7 @@ int main() {
 #if MESH_ENABLE_BRIDGE_INGRESS
 namespace mesh { namespace bridge {
 IngressProfile ingressProfile() { return IngressProfile::Radio; }
+IngressRoute ingressRoute(const IngressSource*) { return {IngressProfile::Radio, false}; }
 }}
 #endif
 '''

@@ -2009,6 +2009,35 @@ capacity. Remote use follows the existing administrator-command permissions.
 
 ### Radio
 
+#### Select LoRa receive and transmit directions
+
+```text
+get radio.mode
+set radio.mode both
+set radio.mode rx
+set radio.mode tx
+set radio.mode off
+```
+
+Supported ESP32 infrastructure images save this setting across reboot. The
+default is `both`. `rx` permits LoRa reception and blocks all LoRa transmission,
+including forwarding, adverts and replies. `tx` accepts no LoRa packets while
+allowing bridge-fed and locally generated transmissions. Queued packets require a clear
+CAD result on the selected profile before sending and keep backing off while
+busy, without a timeout that bypasses CAD. `get cad` reports the effective
+mandatory check in TX-only mode, even if its saved preference is off. A clear
+check cannot guarantee collision-free delivery. `off` disables both packet directions. These
+choices apply to the primary and second LoRa profiles; they do not change the
+WiFi, ESP-NOW or serial bridge directions, or make an RX-only radio2 profile
+transmit-capable.
+
+Use USB or a direct WiFi CLI when changing direction. A receive-only node
+cannot send its LoRa command reply, and a transmit-only node cannot receive a
+LoRa command. Invalid or unreadable saved settings leave LoRa off rather than
+silently enabling transmission. A known malformed record can be replaced
+explicitly; uncertain storage requires a reboot before another save.
+See [two RX-only V4s feeding one TX-only V4](split_radio_repeater.md).
+
 #### Tune and save radio switching acceleration
 
 Use local USB or BLE to change these settings on supported radio HALs.
@@ -6799,6 +6828,7 @@ updated active peer can still answer a valid incoming ping in passive mode.
 get bridge.ingress
 set bridge.ingress radio2
 set bridge.ingress radio
+set bridge.ingress off
 ```
 
 This receiver-side setting applies to incoming mesh packets from ESP-NOW, UDP
@@ -6813,8 +6843,8 @@ silently restoring the primary; `get bridge.ingress` reports the fault.
 keeps their forwarding on that profile, even with `radio2.cross on`. If radio2
 is off, RX-only, owned by another protocol, or changed while a packet waits,
 the packet is dropped; it never falls back to the primary radio. Normal repeat,
-scope, duplicate and filter checks still apply. This setting selects every
-incoming packet on these bridges, not individual senders or payload types.
+scope, duplicate and filter checks still apply. A matching source route below
+overrides this default. `off` drops incoming packets without a matching route.
 The selection follows forwarded packets, retries and relayed ACKs. Locally
 generated adverts and admin replies keep their existing routing, including
 `tx.reply`; this is not a global transmit override.
@@ -6824,6 +6854,31 @@ see the [MediaMesh bridge example](espnow_bridge_setup.md#send-bridge-traffic-on
 `bridge.source` controls traffic leaving for the bridge and is independent of
 `bridge.ingress`. This does not add MQTT packet injection or change MQTT
 publication settings.
+
+#### Route incoming bridge packets by sender
+
+```text
+get bridge.route
+get bridge.route.1
+set bridge.route.1 mac:AA:BB:CC:DD:EE:10 radio2
+set bridge.route.2 udp:192.168.1.51:4404 radio
+del bridge.route.1
+clear bridge.routes
+```
+
+Slots `1..8` match an exact ESP-NOW station MAC (`mac:`) or UDP sender address
+and listening port (`udp:`). Each source can appear once. A matching rule
+selects only `radio`, only `radio2`, or drops that source with `off`, regardless
+of crossing settings. Unmatched packets use `bridge.ingress`; set that to
+`off` to accept only listed senders. `get bridge.route` reports the count and
+default; query each numbered slot for its saved rule. `get espnow.stats mac`
+reads the local station MAC once the ESP-NOW/WiFi driver is active.
+
+Rules are saved separately from the default and from legacy node preferences.
+Missing routes preserve existing behavior and bridge frames remain unchanged.
+New admissions use the saved route; queued packets retain their original
+profile and generation. Unavailable, RX-only or foreign-protocol targets drop
+the packet rather than falling back. See the [three-V4 example](split_radio_repeater.md).
 
 ---
 

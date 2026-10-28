@@ -174,7 +174,7 @@ class BridgeIngressSettingsTests(unittest.TestCase):
                 "  bool fail_after_publication = false;\n  bool fail_metadata = false;")
             mock = mock.replace("    files[to] = files[from]; files.erase(from); return true;",
                 "    files[to] = files[from]; files.erase(from);\n"
-                "    if (fail_after_publication && !strcmp(to, \"/bridge_ingress\")) fail_read_open = true;\n"
+                "    if (fail_after_publication && (!strcmp(to, \"/bridge_ingress\") || !strcmp(to, \"/bridge_routes\"))) fail_read_open = true;\n"
                 "    return true;")
             (work / "IdentityStore.h").write_text(mock)
             (work / "helpers/IdentityStore.h").write_text('#include "../IdentityStore.h"\n')

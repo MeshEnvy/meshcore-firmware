@@ -4,6 +4,9 @@
 
 # ESP-NOW bridge: simple setup
 
+For two dedicated receivers feeding one dual-profile transmitter, see
+[the three-V4 split repeater setup](split_radio_repeater.md).
+
 Use two ESP32 LoRa boards to join two MeshCore networks with different radio
 settings. Each board repeats on its own LoRa network, and the boards exchange
 packets directly over 2.4 GHz ESP-NOW. No router, internet connection, or manual

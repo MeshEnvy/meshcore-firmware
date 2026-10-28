@@ -8,14 +8,30 @@ class AbstractBridge {
   PacketFilter _packet_filter = nullptr;
   void* _packet_filter_context = nullptr;
   const mesh::RadioProfiles* _ingress_profiles = nullptr;
+  const mesh::bridge::IngressSource* _ingress_source = nullptr;
 
 protected:
+  // Source identity is borrowed only while the main loop admits one frame.
+  // The queued Packet retains the selected profile, not this stack pointer.
+  class IngressSourceScope {
+    AbstractBridge& owner;
+    const mesh::bridge::IngressSource* previous;
+  public:
+    IngressSourceScope(AbstractBridge& bridge, const mesh::bridge::IngressSource& source)
+        : owner(bridge), previous(bridge._ingress_source) { owner._ingress_source = &source; }
+    ~IngressSourceScope() { owner._ingress_source = previous; }
+    IngressSourceScope(const IngressSourceScope&) = delete;
+    IngressSourceScope& operator=(const IngressSourceScope&) = delete;
+  };
+
   // The receiver selects a local MeshCore profile, independent of the wire
   // format and the scanner's current tuple. Legacy bridges default to primary.
   // Snapshot the generation so delayed frames cannot acquire a newer lease.
   bool preparePacketIngress(mesh::Packet* packet) const {
-    const auto target = mesh::bridge::ingressProfile();
-    if (!packet || target == mesh::bridge::IngressProfile::Blocked) return false;
+    const auto route = mesh::bridge::ingressRoute(_ingress_source);
+    const auto target = route.profile;
+    if (!packet || target == mesh::bridge::IngressProfile::Blocked
+        || target == mesh::bridge::IngressProfile::Off) return false;
     const uint8_t profile = target == mesh::bridge::IngressProfile::Radio2 ? 1 : 0;
     if ((profile == 1 && (!_ingress_profiles || !_ingress_profiles->enabled()
             || !_ingress_profiles->canTransmit(1)))
@@ -28,7 +44,8 @@ protected:
     packet->radio_local = false;
     // Explicit secondary ingress stays secondary even if crossing is enabled.
     // The default primary selector retains its historical crossing behavior.
-    packet->tx_radio = profile == 1 ? mesh::RADIO_TX_SECONDARY : mesh::RADIO_TX_AUTO;
+    packet->tx_radio = profile == 1 ? mesh::RADIO_TX_SECONDARY
+        : route.explicit_profile ? mesh::RADIO_TX_PRIMARY : mesh::RADIO_TX_AUTO;
     packet->radio_reply = packet->radio_reply_force = false;
     packet->forwarded = true;
     return true;

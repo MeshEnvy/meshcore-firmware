@@ -13,6 +13,7 @@
 #include <helpers/BeaconConfig.h>
 #include <helpers/RegulatorMode.h>
 #include <helpers/TelemetryHistoryConfig.h>
+#include <helpers/RadioDirectionPolicy.h>
 #ifndef RADIO_LIVENESS_SOFT_ONLY
   #include <helpers/RadioLivenessTracker.h>
 #endif

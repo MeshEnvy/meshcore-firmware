@@ -475,6 +475,8 @@ jobs:
           python3 -B test/test_bridge_recovery.py -v
           python3 -B test/test_bridge_ingress.py -v
           python3 -B test/test_bridge_ingress_settings.py -v
+          python3 -B test/test_bridge_source_routes.py -v
+          python3 -B test/test_radio_direction_settings.py -v
 
       - name: Verify signed private fleet management
         run: |
@@ -614,6 +616,8 @@ jobs:
           python3 -B test/test_esp32_cpu_clock.py -v
           python3 -B test/test_esp32_cpu_clock_board.py -v
           python3 -B test/test_boot_slot_cli.py -v
+          python3 -B test/test_radio_direction_driver.py -v
+          python3 -B test/test_radio_direction_dispatcher.py -v
           python3 -B test/test_esp32_power_test_controls.py -v
           python3 -B test/test_esp32_uart_quiet_session.py -v
           python3 -B test/test_companion_rxps_getters.py -v

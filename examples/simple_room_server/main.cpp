@@ -5,6 +5,9 @@
 #include <helpers/sensors/SolarXiaoPower.h>
 #include <helpers/LedSettings.h>
 #include <Arduino.h>   // needed for PlatformIO
+#if defined(ESP32_PLATFORM)
+#include <helpers/RadioDirectionSettings.h>
+#endif
 #include <Mesh.h>
 #include <helpers/IdentityGeneration.h>
 #include <helpers/ui/StartupScreen.h>
@@ -154,6 +157,9 @@ void setup() {
   IdentityStore store(SPIFFS, "/identity");
 #else
   #error "need to define filesystem"
+#endif
+#if defined(ESP32_PLATFORM)
+  mesh::radioDirection::loadDirectionSettings(fs);
 #endif
   FILESYSTEM* regulator_prefs_fs = fs;
 #if defined(NRF52_PLATFORM)

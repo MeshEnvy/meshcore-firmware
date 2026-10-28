@@ -4,6 +4,9 @@
 
 # WiFi UDP bridge: up to eight IP peers
 
+For two receive-only V4s feeding one transmit-only V4, see
+[the split repeater setup](split_radio_repeater.md#wifi-udp-alternative).
+
 Supported ESP32 repeater images can bridge MeshCore packets directly over an
 existing WiFi network, without an MQTT broker. Each board has one UDP listening
 port and up to eight configured IPv4 address/port destinations. Eight is the

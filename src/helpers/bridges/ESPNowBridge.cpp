@@ -628,6 +628,8 @@ void ESPNowBridge::queueReceivedFrame(const uint8_t *mac, const uint8_t *data,
 
 bool ESPNowBridge::processReceivedFrame(mesh::Packet* packet_slot, const uint8_t *mac,
                                         const uint8_t *data, size_t len) {
+  const auto ingress_source = mesh::bridge::IngressSource::mac(mac);
+  IngressSourceScope ingress_scope(*this, ingress_source);
   if (data == nullptr || len == 0 || len > MAX_ESPNOW_PACKET_SIZE) {
     noteRx(&mesh::bridge::diag::RxStats::badframe);
     return false;
@@ -920,6 +922,12 @@ void ESPNowBridge::formatStats(const char* page, char* reply, size_t reply_size)
     snprintf(reply, reply_size, "> rx=%lu mesh=%lu tx=%lu sent=%lu; pages: rx tx drops test",
         (unsigned long)s.rx.frames, (unsigned long)s.rx.delivered,
         (unsigned long)s.tx.queued, (unsigned long)s.tx.callback_ok);
+  } else if (strcmp(page, "mac") == 0) {
+    uint8_t mac[6];
+    if (esp_wifi_get_mac(WIFI_IF_STA, mac) != ESP_OK)
+      snprintf(reply, reply_size, "Error: ESP-NOW station MAC unavailable; start the bridge first");
+    else snprintf(reply, reply_size, "> mac:%02X:%02X:%02X:%02X:%02X:%02X",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
   } else if (strcmp(page, "rx") == 0) {
     snprintf(reply, reply_size, "> frames=%lu decoded=%lu mesh=%lu crc=%lu bad=%lu parse=%lu",
         (unsigned long)s.rx.frames, (unsigned long)s.rx.packet_ok,
