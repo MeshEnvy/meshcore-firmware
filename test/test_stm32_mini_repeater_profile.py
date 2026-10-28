@@ -22,8 +22,8 @@ LINK_SIZE_FLAGS = (
     "-fno-reorder-blocks",
     "-fno-reorder-functions",
     "-fno-tree-switch-conversion",
-    "-fno-inline-functions-called-once",
 )
+LINK_ONLY_SIZE_FLAGS = ("-flto-partition=one",)
 OPTIONAL_CUTS = (
     "MESH_ENABLE_CARRIER_TOOLS",
     "MESH_ENABLE_MANAGEMENT_REPORTING",
@@ -121,6 +121,8 @@ class MiniRepeaterProfileTest(unittest.TestCase):
         tokens = shlex.split(self.flags)
         for flag in ("-Oz", "-flto", *LINK_SIZE_FLAGS):
             self.assertIn(flag, tokens)
+        for flag in LINK_ONLY_SIZE_FLAGS:
+            self.assertNotIn(flag, tokens)
         scripts = self.repeater["extra_scripts"].split()
         self.assertIn("${stm32_base.extra_scripts}", scripts)
         self.assertIn("post:scripts/stm32_mini_size.py", scripts)
@@ -133,7 +135,8 @@ class MiniRepeaterProfileTest(unittest.TestCase):
                     "env": environment,
                     "Import": lambda name: self.assertEqual(name, "env"),
                 })
-                expected = ["keep-existing-flag", *(LINK_SIZE_FLAGS if target == TARGET else ())]
+                expected = ["keep-existing-flag",
+                            *((LINK_SIZE_FLAGS + LINK_ONLY_SIZE_FLAGS) if target == TARGET else ())]
                 self.assertEqual(environment["LINKFLAGS"], expected)
                 self.assertEqual(set(environment), {"PIOENV", "LINKFLAGS"})
                 self.assertFalse(getattr(environment, "middleware", []))
@@ -193,7 +196,7 @@ class MiniRepeaterProfileTest(unittest.TestCase):
         run_script(post)
         self.assertEqual(captured["CCFLAGS"], ["-Oz", "-flto", "-fno-builtin-strcpy"])
         self.assertEqual(environment["CCFLAGS"], ["-Oz", "-flto"])
-        self.assertEqual(environment["LINKFLAGS"], list(LINK_SIZE_FLAGS))
+        self.assertEqual(environment["LINKFLAGS"], list(LINK_SIZE_FLAGS + LINK_ONLY_SIZE_FLAGS))
         for target in ("wio-e5-mini_sensor", "wio-e5-mini_companion_radio_usb", "wio-e5_repeater"):
             environment = FakeEnvironment(PIOENV=target)
             run_script(pre)
