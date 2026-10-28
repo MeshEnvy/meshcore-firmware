@@ -135,8 +135,7 @@ class MiniRepeaterProfileTest(unittest.TestCase):
                 expected = ["keep-existing-flag", *(LINK_SIZE_FLAGS if target == TARGET else ())]
                 self.assertEqual(environment["LINKFLAGS"], expected)
                 self.assertEqual(set(environment), {"PIOENV", "LINKFLAGS"})
-                self.assertEqual(len(getattr(environment, "middleware", [])),
-                                 int(target == TARGET))
+                self.assertFalse(getattr(environment, "middleware", []))
 
     def test_shared_reply_copy_policy_changes_only_the_exact_mini_cli_object(self):
         class Node:
@@ -145,7 +144,7 @@ class MiniRepeaterProfileTest(unittest.TestCase):
             def get_abspath(self): return str(self.path)
 
         environment = FakeEnvironment(PIOENV=TARGET, CCFLAGS=["-Oz", "-flto"])
-        runpy.run_path(str(ROOT / "scripts/stm32_mini_size.py"), init_globals={
+        runpy.run_path(str(ROOT / "scripts/stm32_mini_cli_replies.py"), init_globals={
             "env": environment, "Import": lambda name: self.assertEqual(name, "env")})
         callback, pattern = environment.middleware[0]
         self.assertEqual(pattern, "*CommonCLI.cpp")
@@ -160,15 +159,44 @@ class MiniRepeaterProfileTest(unittest.TestCase):
             self.assertIs(callback(environment, other), other)
 
     def test_scons_script_context_without_file_still_installs_exact_cli_policy(self):
-        script = ROOT / "scripts/stm32_mini_size.py"
+        script = ROOT / "scripts/stm32_mini_cli_replies.py"
         environment = FakeEnvironment(PIOENV=TARGET)
         namespace = {"env": environment,
                      "Import": lambda name: self.assertEqual(name, "env")}
         exec(compile(script.read_text(), str(script), "exec"), namespace)
         self.assertNotIn("__file__", namespace)
-        self.assertEqual(environment["LINKFLAGS"], list(LINK_SIZE_FLAGS))
+        self.assertNotIn("LINKFLAGS", environment)
         self.assertEqual(len(environment.middleware), 1)
         self.assertEqual(environment.middleware[0][1], "*CommonCLI.cpp")
+
+    def test_middleware_is_registered_before_object_flags_are_captured(self):
+        environment = FakeEnvironment(PIOENV=TARGET, CCFLAGS=["-Oz", "-flto"])
+        scripts = self.repeater["extra_scripts"].split()
+        pre = "pre:scripts/stm32_mini_cli_replies.py"
+        post = "post:scripts/stm32_mini_size.py"
+        self.assertIn(pre, scripts)
+        self.assertIn(post, scripts)
+        self.assertNotIn(pre.replace("pre:", "post:"), scripts)
+
+        def run_script(entry):
+            runpy.run_path(str(ROOT / entry.split(":", 1)[1]), init_globals={
+                "env": environment, "Import": lambda name: self.assertEqual(name, "env")})
+
+        # PlatformIO constructs source objects before executing post scripts.
+        run_script(pre)
+        callback, _ = environment.middleware[0]
+        class Node:
+            def srcnode(self): return self
+            def get_abspath(self): return str(ROOT / "src/helpers/CommonCLI.cpp")
+        _, captured = callback(environment, Node())
+        run_script(post)
+        self.assertEqual(captured["CCFLAGS"], ["-Oz", "-flto", "-fno-builtin-strcpy"])
+        self.assertEqual(environment["CCFLAGS"], ["-Oz", "-flto"])
+        self.assertEqual(environment["LINKFLAGS"], list(LINK_SIZE_FLAGS))
+        for target in ("wio-e5-mini_sensor", "wio-e5-mini_companion_radio_usb", "wio-e5_repeater"):
+            environment = FakeEnvironment(PIOENV=target)
+            run_script(pre)
+            self.assertFalse(getattr(environment, "middleware", []))
 
     def test_capability_contract_declares_only_exact_mini_repeater_omissions(self):
         command = r'''
