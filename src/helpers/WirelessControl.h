@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CLIReplyText.h"
+
 #include <atomic>
 #include <stdint.h>
 #include <stdio.h>
@@ -141,7 +143,7 @@ public:
     const uint8_t available = backend_ ? backend_->available() : 0;
     const char* name = command.scope == All ? "2.4ghz" : command.scope == EspNow ? "espnow" : "wifi";
     if (command.action == Action::Invalid) {
-      snprintf(reply, size, "Error: use set wifi/espnow on|off [force]; set 2.4ghz on [all|force]|off [force]");
+      snprintf(reply, size, MESH_CLI_REPLY_TEXT("Error: use set wifi/espnow on|off [force]; set 2.4ghz on [all|force]|off [force]", "Error: set wifi/espnow on|off [force]; set 2.4ghz on [all|force]|off [force]"));
       return true;
     }
     const uint8_t current = enabled();
@@ -158,7 +160,7 @@ public:
     }
 #endif
     if (!(available & command.scope)) {
-      snprintf(reply, size, "Error: requested wireless service unavailable in this build/boot");
+      snprintf(reply, size, MESH_CLI_REPLY_TEXT("Error: requested wireless service unavailable in this build/boot", "Error: wireless service unavailable this build/boot"));
       return true;
     }
     const bool on = command.action == Action::On || command.action == Action::OnAll;
@@ -167,7 +169,7 @@ public:
       return true;
     }
     if (command.scope != All && on && master_off_) {
-      snprintf(reply, size, "Error: 2.4ghz is off; use set 2.4ghz on first");
+      snprintf(reply, size, MESH_CLI_REPLY_TEXT("Error: 2.4ghz is off; use set 2.4ghz on first", "Error: 2.4ghz off; set 2.4ghz on first"));
       return true;
     }
     const uint8_t scope = command.scope & available;

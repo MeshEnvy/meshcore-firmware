@@ -1,3 +1,4 @@
+#include <helpers/CLIReplyText.h>
 #include "MyMesh.h"
 #include <helpers/ui/DisplayNightLocation.h>
 
@@ -234,7 +235,7 @@ static const char FLOOD_PACKET_FILTER_USAGE[] =
 #if MESH_ENABLE_FLOOD_RULE_ENGINE
     "Err - use: set flood.rule[.n] type=<type> [hops=<range>] [...]";
 #else
-    "Err - use: set flood.filter[.n] <type> [hops] [path=blacklist] [scope=<name>] [require=region] [tx=slow] [suspend=tempradio]";
+    MESH_CLI_REPLY_TEXT("Err - use: set flood.filter[.n] <type> [hops] [path=blacklist] [scope=<name>] [require=region] [tx=slow] [suspend=tempradio]", "Err - set flood.filter[.n] <type> [hops] [path=blacklist] [scope=<name>] [require=region] [tx=slow] [suspend=tempradio]");
 #endif
 static const char FLOOD_PACKET_FILTER_DUPLICATE[] =
     "Err - duplicate filter option";
@@ -3173,8 +3174,8 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
                                                  request_id, packet->radio_profile,
                                                  packet->radio_generation)) {
           const char* error = deferred_cli_command.pending
-              ? "Err - another remote command is still running"
-              : "Err - remote command is too long";
+              ? MESH_CLI_REPLY_TEXT("Err - another remote command is still running", "Err - remote command busy")
+              : MESH_CLI_REPLY_TEXT("Err - remote command is too long", "Err - remote command too long");
           remote_cli_reply_cache.remember(client->id.pub_key, request_id,
                                           command_fingerprint, error);
           sendRemoteCliReply(client, secret, packet->getPathHashSize(),
@@ -4926,15 +4927,15 @@ void MyMesh::addScheduledRadioParams(bool temporary, float freq, float bw, uint8
     return;
   }
   if (start_time <= now) {
-    strcpy(reply, "Error: start is in the past");
+    strcpy(reply, MESH_CLI_REPLY_TEXT("Error: start is in the past", "Error: start in past"));
     return;
   }
   if (temporary && end_time <= now) {
-    strcpy(reply, "Error: end is in the past");
+    strcpy(reply, MESH_CLI_REPLY_TEXT("Error: end is in the past", "Error: end in past"));
     return;
   }
   if (temporary && end_time <= start_time) {
-    strcpy(reply, "Error: end must be after start");
+    strcpy(reply, MESH_CLI_REPLY_TEXT("Error: end must be after start", "Error: end must follow start"));
     return;
   }
   if (countScheduledRadioSettings(temporary) >= MAX_SCHEDULED_RADIO_SETTINGS_PER_TYPE) {
@@ -5054,7 +5055,7 @@ void MyMesh::formatScheduledRadioParams(bool temporary, const char* selector, ch
 
   int wanted = 0;
   if (!parsePositiveSelector(selector, wanted)) {
-    strcpy(reply, temporary ? "Error, use: get tempradioat [n]" : "Error, use: get radioat [n]");
+    strcpy(reply, temporary ? MESH_CLI_REPLY_TEXT("Error, use: get tempradioat [n]", "Error, get tempradioat [n]") : MESH_CLI_REPLY_TEXT("Error, use: get radioat [n]", "Error, get radioat [n]"));
     return;
   }
 
@@ -5077,7 +5078,7 @@ void MyMesh::deleteScheduledRadioParams(bool temporary, const char* selector, ch
     if (!all) {
       int wanted = 0;
       if (!parsePositiveSelector(selector, wanted)) {
-        strcpy(reply, temporary ? "Error, use: del tempradioat [n]" : "Error, use: del radioat [n]"); return;
+        strcpy(reply, temporary ? MESH_CLI_REPLY_TEXT("Error, use: del tempradioat [n]", "Error, del tempradioat [n]") : MESH_CLI_REPLY_TEXT("Error, use: del radioat [n]", "Error, del radioat [n]")); return;
       }
       idx = findScheduledRadioSettingByIndex(temporary, wanted);
       if (idx < 0) { strcpy(reply, "Error: not found"); return; }
@@ -5122,7 +5123,7 @@ void MyMesh::deleteScheduledRadioParams(bool temporary, const char* selector, ch
 
   int wanted = 0;
   if (!parsePositiveSelector(selector, wanted)) {
-    strcpy(reply, temporary ? "Error, use: del tempradioat [n]" : "Error, use: del radioat [n]");
+    strcpy(reply, temporary ? MESH_CLI_REPLY_TEXT("Error, use: del tempradioat [n]", "Error, del tempradioat [n]") : MESH_CLI_REPLY_TEXT("Error, use: del radioat [n]", "Error, del radioat [n]"));
     return;
   }
 
@@ -5696,7 +5697,7 @@ bool MyMesh::handleGuestCommand(const char* command, char* reply, size_t capacit
   const char* value = command + 9;
   while (*value == ' ' || *value == '\t') ++value;
   if ((get && *value) || (set && strcmp(value, "on") && strcmp(value, "off"))) {
-    snprintf(reply, capacity, "Err - use get guest or set guest on|off");
+    snprintf(reply, capacity, MESH_CLI_REPLY_TEXT("Err - use get guest or set guest on|off", "Err - get guest / set guest on|off"));
   } else if (get) {
     snprintf(reply, capacity, "> %s%s", guest_login.enabled() ? "on" : "off",
         guest_login.healthy() ? "" : " (settings unavailable)");
@@ -6391,7 +6392,7 @@ void MyMesh::formatFloodPacketFilterBlacklist(const char* args, char* reply) con
     uint8_t slot = 0;
     if (!parseFloodFilterUnsigned(selector, FLOOD_PACKET_FILTER_BLACKLIST_MAX, slot)
         || slot == 0 || slot > flood_packet_filter_blacklist_count) {
-      snprintf(reply, 160, "Err - blacklist slot must be 1-%u",
+      snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - blacklist slot must be 1-%u", "Err - blacklist slot: 1-%u"),
                (uint32_t)flood_packet_filter_blacklist_count);
       return;
     }
@@ -6437,7 +6438,7 @@ void MyMesh::setFloodPacketFilterBlacklist(const char* args, char* reply) {
     size_t slot_len = (size_t)(cursor - slot_start);
     char slot_text[8];
     if (slot_len == 0 || slot_len >= sizeof(slot_text)) {
-      snprintf(reply, 160, "Err - blacklist slot must be 1-%u",
+      snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - blacklist slot must be 1-%u", "Err - blacklist slot: 1-%u"),
                (uint32_t)FLOOD_PACKET_FILTER_BLACKLIST_MAX);
       return;
     }
@@ -6446,13 +6447,13 @@ void MyMesh::setFloodPacketFilterBlacklist(const char* args, char* reply) {
     uint8_t slot = 0;
     if (!parseFloodFilterUnsigned(slot_text, FLOOD_PACKET_FILTER_BLACKLIST_MAX, slot)
         || slot == 0) {
-      snprintf(reply, 160, "Err - blacklist slot must be 1-%u",
+      snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - blacklist slot must be 1-%u", "Err - blacklist slot: 1-%u"),
                (uint32_t)FLOOD_PACKET_FILTER_BLACKLIST_MAX);
       return;
     }
     requested_slot = slot - 1;
     if (*cursor != ' ') {
-      strcpy(reply, "Err - expected six-digit repeater ID");
+      strcpy(reply, MESH_CLI_REPLY_TEXT("Err - expected six-digit repeater ID", "Err - repeater ID: six hex digits"));
       return;
     }
   }
@@ -6463,10 +6464,10 @@ void MyMesh::setFloodPacketFilterBlacklist(const char* args, char* reply) {
   uint8_t count = 0;
   if (!parseFloodPacketFilterBlacklist(cursor, parsed, count)) {
     if (requested_slot >= 0) {
-      snprintf(reply, 160, "Err - use 1-%d unique six-digit hex IDs separated by commas",
+      snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - use 1-%d unique six-digit hex IDs separated by commas", "Err - use 1-%d unique six-digit hex IDs, comma-separated"),
                FLOOD_PACKET_FILTER_BLACKLIST_REPLACE_MAX);
     } else {
-      snprintf(reply, 160, "Err - use 1-%d unique six-digit hex IDs separated by commas",
+      snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - use 1-%d unique six-digit hex IDs separated by commas", "Err - use 1-%d unique six-digit hex IDs, comma-separated"),
                FLOOD_PACKET_FILTER_BLACKLIST_REPLACE_MAX);
     }
     return;
@@ -6478,12 +6479,12 @@ void MyMesh::setFloodPacketFilterBlacklist(const char* args, char* reply) {
 
   if (requested_slot >= 0) {
     if (requested_slot > flood_packet_filter_blacklist_count) {
-      snprintf(reply, 160, "Err - next blacklist slot is %u",
+      snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - next blacklist slot is %u", "Err - next blacklist slot: %u"),
                (uint32_t)flood_packet_filter_blacklist_count + 1U);
       return;
     }
     if ((uint16_t)requested_slot + count > FLOOD_PACKET_FILTER_BLACKLIST_MAX) {
-      snprintf(reply, 160, "Err - blacklist range exceeds slot %u",
+      snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - blacklist range exceeds slot %u", "Err - blacklist range past slot %u"),
                (uint32_t)FLOOD_PACKET_FILTER_BLACKLIST_MAX);
       return;
     }
@@ -6513,7 +6514,7 @@ void MyMesh::setFloodPacketFilterBlacklist(const char* args, char* reply) {
   if (!saveFloodPacketFilterBlacklist()) {
     flood_packet_filter_blacklist_count = previous_count;
     memcpy(flood_packet_filter_blacklist, previous, sizeof(previous));
-    strcpy(reply, "Err - unable to save flood filter blacklist");
+    strcpy(reply, MESH_CLI_REPLY_TEXT("Err - unable to save flood filter blacklist", "Err - flood filter blacklist not saved"));
     return;
   }
   if (requested_slot >= 0) {
@@ -6538,7 +6539,7 @@ void MyMesh::deleteFloodPacketFilterBlacklist(const char* args, char* reply) {
   if (!delete_all
       && (!parseFloodFilterUnsigned(selector, FLOOD_PACKET_FILTER_BLACKLIST_MAX, slot)
           || slot == 0 || slot > flood_packet_filter_blacklist_count)) {
-    snprintf(reply, 160, "Err - use: del flood.filter.blacklist[.<1-%u>| all]",
+    snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - use: del flood.filter.blacklist[.<1-%u>| all]", "Err - del flood.filter.blacklist[.<1-%u>| all]"),
              (uint32_t)FLOOD_PACKET_FILTER_BLACKLIST_MAX);
     return;
   }
@@ -6564,7 +6565,7 @@ void MyMesh::deleteFloodPacketFilterBlacklist(const char* args, char* reply) {
   if (!saveFloodPacketFilterBlacklist()) {
     flood_packet_filter_blacklist_count = previous_count;
     memcpy(flood_packet_filter_blacklist, previous, sizeof(previous));
-    strcpy(reply, "Err - unable to save flood filter blacklist");
+    strcpy(reply, MESH_CLI_REPLY_TEXT("Err - unable to save flood filter blacklist", "Err - flood filter blacklist not saved"));
     return;
   }
   if (delete_all) {
@@ -8330,7 +8331,7 @@ void MyMesh::formatFloodPacketFilters(const char* args, char* reply, bool compac
     }
     uint8_t slot;
     if (!parseFloodFilterUnsigned(selector, flood_packet_filter_slots, slot) || slot == 0) {
-      snprintf(reply, 160, "Err - filter slot must be 1-%d", flood_packet_filter_slots);
+      snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - filter slot must be 1-%d", "Err - filter slot: 1-%d"), flood_packet_filter_slots);
       return;
     }
     formatFloodPacketFilterDetail(slot - 1, reply, 160, compact);
@@ -8402,14 +8403,14 @@ void MyMesh::setFloodPacketFilter(const char* args, char* reply,
     size_t slot_len = (size_t)(cursor - slot_start);
     char slot_text[8];
     if (slot_len == 0 || slot_len >= sizeof(slot_text)) {
-      snprintf(reply, 160, "Err - filter slot must be 1-%d", flood_packet_filter_slots);
+      snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - filter slot must be 1-%d", "Err - filter slot: 1-%d"), flood_packet_filter_slots);
       return;
     }
     memcpy(slot_text, slot_start, slot_len);
     slot_text[slot_len] = 0;
     uint8_t slot;
     if (!parseFloodFilterUnsigned(slot_text, flood_packet_filter_slots, slot) || slot == 0) {
-      snprintf(reply, 160, "Err - filter slot must be 1-%d", flood_packet_filter_slots);
+      snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - filter slot must be 1-%d", "Err - filter slot: 1-%d"), flood_packet_filter_slots);
       return;
     }
     requested_slot = slot - 1;
@@ -8464,7 +8465,7 @@ void MyMesh::setFloodPacketFilter(const char* args, char* reply,
       ? tokens[0] + strlen("type=")
       : floodFilterAsciiStartsWith(tokens[0], "t=") ? tokens[0] + 2 : tokens[0];
   if (!parseFloodFilterPayloadType(type_text, payload_type)) {
-    strcpy(reply, "Err - packet type must be name, any, 0-15, or 0x00-0x0F");
+    strcpy(reply, MESH_CLI_REPLY_TEXT("Err - packet type must be name, any, 0-15, or 0x00-0x0F", "Err - type: name|any|0-15|0x00-0x0F"));
     return;
   }
 
@@ -8673,7 +8674,7 @@ void MyMesh::setFloodPacketFilter(const char* args, char* reply,
       if (floodFilterAsciiEqual(tokens[i], "tx=slow")) {
         scope_uses_slow_timing = true;
       } else if (!floodFilterAsciiEqual(tokens[i], "tx=fast")) {
-        strcpy(reply, "Err - tx timing must be fast or slow");
+        strcpy(reply, MESH_CLI_REPLY_TEXT("Err - tx timing must be fast or slow", "Err - tx: fast|slow"));
         return;
       }
       scope_timing_set = true;
@@ -8685,7 +8686,7 @@ void MyMesh::setFloodPacketFilter(const char* args, char* reply,
       }
       if (!normalizeFloodFilterScopeName(strchr(tokens[i], '=') + 1,
                                          scope_name, sizeof(scope_name))) {
-        strcpy(reply, "Err - scope must be a public name of at most 30 characters");
+        strcpy(reply, MESH_CLI_REPLY_TEXT("Err - scope must be a public name of at most 30 characters", "Err - scope: public name, max 30 chars"));
         return;
       }
       target_set = true;
@@ -8953,7 +8954,7 @@ void MyMesh::setFloodPacketFilter(const char* args, char* reply,
   if (!saveFloodPacketFilters()) {
     flood_packet_filters[slot] = previous;
     flood_channel_data_rule_slot = previous_channel_data_slot;
-    strcpy(reply, "Err - unable to save flood filter");
+    strcpy(reply, MESH_CLI_REPLY_TEXT("Err - unable to save flood filter", "Err - flood filter not saved"));
     return;
   }
 
@@ -9003,7 +9004,7 @@ void MyMesh::formatFloodPacketFilters(const char* args, char* reply, bool compac
   if (*selector != 0) {
     uint8_t slot;
     if (!parseFloodFilterUnsigned(selector, flood_packet_filter_slots, slot) || slot == 0) {
-      snprintf(reply, 160, "Err - filter slot must be 1-%d", flood_packet_filter_slots);
+      snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - filter slot must be 1-%d", "Err - filter slot: 1-%d"), flood_packet_filter_slots);
       return;
     }
     formatFloodPacketFilterDetail(slot - 1, reply, 160);
@@ -9055,19 +9056,19 @@ void MyMesh::setFloodPacketFilter(const char* args, char* reply,
     size_t slot_len = (size_t)(cursor - slot_start);
     char slot_text[8];
     if (slot_len == 0 || slot_len >= sizeof(slot_text)) {
-      snprintf(reply, 160, "Err - filter slot must be 1-%d", flood_packet_filter_slots);
+      snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - filter slot must be 1-%d", "Err - filter slot: 1-%d"), flood_packet_filter_slots);
       return;
     }
     memcpy(slot_text, slot_start, slot_len);
     slot_text[slot_len] = 0;
     uint8_t slot;
     if (!parseFloodFilterUnsigned(slot_text, flood_packet_filter_slots, slot) || slot == 0) {
-      snprintf(reply, 160, "Err - filter slot must be 1-%d", flood_packet_filter_slots);
+      snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - filter slot must be 1-%d", "Err - filter slot: 1-%d"), flood_packet_filter_slots);
       return;
     }
     requested_slot = slot - 1;
     if (*cursor != ' ') {
-      strcpy(reply, "Err - packet type must be name, any, 0-15, or 0x00-0x0F");
+      strcpy(reply, MESH_CLI_REPLY_TEXT("Err - packet type must be name, any, 0-15, or 0x00-0x0F", "Err - type: name|any|0-15|0x00-0x0F"));
       return;
     }
   }
@@ -9078,7 +9079,7 @@ void MyMesh::setFloodPacketFilter(const char* args, char* reply,
   char params[140];
 #endif
   if (strlen(cursor) >= sizeof(params)) {
-    strcpy(reply, "Err - filter parameters too long");
+    strcpy(reply, MESH_CLI_REPLY_TEXT("Err - filter parameters too long", "Err - filter params too long"));
     return;
   }
 
@@ -9088,7 +9089,7 @@ void MyMesh::setFloodPacketFilter(const char* args, char* reply,
   char* token = params;
   while (*token != 0) {
     if (token_count >= 7) {
-      strcpy(reply, "Err - too many flood filter parameters");
+      strcpy(reply, MESH_CLI_REPLY_TEXT("Err - too many flood filter parameters", "Err - excess flood filter parameters"));
       return;
     }
     tokens[token_count++] = token;
@@ -9105,7 +9106,7 @@ void MyMesh::setFloodPacketFilter(const char* args, char* reply,
 
   uint8_t payload_type;
   if (!parseFloodFilterPayloadType(tokens[0], payload_type)) {
-    strcpy(reply, "Err - packet type must be name, any, 0-15, or 0x00-0x0F");
+    strcpy(reply, MESH_CLI_REPLY_TEXT("Err - packet type must be name, any, 0-15, or 0x00-0x0F", "Err - type: name|any|0-15|0x00-0x0F"));
     return;
   }
 
@@ -9146,7 +9147,7 @@ void MyMesh::setFloodPacketFilter(const char* args, char* reply,
       if (floodFilterAsciiEqual(tokens[i], "tx=slow")) {
         scope_uses_slow_timing = true;
       } else if (!floodFilterAsciiEqual(tokens[i], "tx=fast")) {
-        strcpy(reply, "Err - tx timing must be fast or slow");
+        strcpy(reply, MESH_CLI_REPLY_TEXT("Err - tx timing must be fast or slow", "Err - tx: fast|slow"));
         return;
       }
       scope_timing_set = true;
@@ -9157,7 +9158,7 @@ void MyMesh::setFloodPacketFilter(const char* args, char* reply,
       }
       if (!normalizeFloodFilterScopeName(tokens[i] + strlen("scope="),
                                          scope_name, sizeof(scope_name))) {
-        strcpy(reply, "Err - scope must be a public name of at most 30 characters");
+        strcpy(reply, MESH_CLI_REPLY_TEXT("Err - scope must be a public name of at most 30 characters", "Err - scope: public name, max 30 chars"));
         return;
       }
     } else if (!hops_set && parseFloodFilterHopSpec(tokens[i], min_hops, max_hops)) {
@@ -9168,11 +9169,11 @@ void MyMesh::setFloodPacketFilter(const char* args, char* reply,
     }
   }
   if (scope_requires_region_match && scope_name[0] == 0) {
-    strcpy(reply, "Err - require=region requires scope=<name>");
+    strcpy(reply, MESH_CLI_REPLY_TEXT("Err - require=region requires scope=<name>", "Err - require=region needs scope=<name>"));
     return;
   }
   if (scope_timing_set && scope_name[0] == 0) {
-    strcpy(reply, "Err - tx timing requires scope=<name>");
+    strcpy(reply, MESH_CLI_REPLY_TEXT("Err - tx timing requires scope=<name>", "Err - tx needs scope=<name>"));
     return;
   }
 
@@ -9217,7 +9218,7 @@ void MyMesh::setFloodPacketFilter(const char* args, char* reply,
   StrHelper::strzcpy(entry.scopeName(), scope_name, sizeof(entry.scopeName()));
   if (!saveFloodPacketFilters()) {
     entry = previous;
-    strcpy(reply, "Err - unable to save flood filter");
+    strcpy(reply, MESH_CLI_REPLY_TEXT("Err - unable to save flood filter", "Err - flood filter not saved"));
     return;
   }
 
@@ -9232,20 +9233,20 @@ void MyMesh::deleteFloodPacketFilter(const char* args, char* reply) {
   if (*selector == '.') selector = skipFloodFilterSpaces(selector + 1);
   if (floodFilterAsciiEqual(selector, "all")) {
     if (!saveFloodPacketFilters(false, true)) {
-      strcpy(reply, "Err - unable to save flood filter");
+      strcpy(reply, MESH_CLI_REPLY_TEXT("Err - unable to save flood filter", "Err - flood filter not saved"));
     } else {
       if (flood_packet_filters) memset(flood_packet_filters, 0, sizeof(FloodPacketFilterEntry) * flood_packet_filter_slots);
 #if MESH_ENABLE_FLOOD_RULE_ENGINE
       flood_channel_data_rule_slot = 0xFF;
 #endif
-      strcpy(reply, "OK - all flood filters removed");
+      strcpy(reply, MESH_CLI_REPLY_TEXT("OK - all flood filters removed", "OK - flood filters cleared"));
     }
     return;
   }
 
   uint8_t slot;
   if (!parseFloodFilterUnsigned(selector, flood_packet_filter_slots, slot) || slot == 0) {
-    snprintf(reply, 160, "Err - use: del flood.filter.<1-%d>|all", flood_packet_filter_slots);
+    snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - use: del flood.filter.<1-%d>|all", "Err - del flood.filter.<1-%d>|all"), flood_packet_filter_slots);
     return;
   }
   int index = slot - 1;
@@ -9266,7 +9267,7 @@ void MyMesh::deleteFloodPacketFilter(const char* args, char* reply) {
 #if MESH_ENABLE_FLOOD_RULE_ENGINE
     flood_channel_data_rule_slot = previous_channel_data_slot;
 #endif
-    strcpy(reply, "Err - unable to save flood filter");
+    strcpy(reply, MESH_CLI_REPLY_TEXT("Err - unable to save flood filter", "Err - flood filter not saved"));
   } else {
     strcpy(reply, "OK");
   }
@@ -9821,7 +9822,7 @@ static bool parseFloodChannelScopeIndex(const char*& cursor, int& index) {
 
 void MyMesh::formatFloodChannelScopeDetail(int index, char* reply, size_t reply_len) {
   if (index < 0 || index >= FLOOD_CHANNEL_SCOPE_SLOTS) {
-    snprintf(reply, reply_len, "Err - scope slot must be 1-%d", FLOOD_CHANNEL_SCOPE_SLOTS);
+    snprintf(reply, reply_len, MESH_CLI_REPLY_TEXT("Err - scope slot must be 1-%d", "Err - scope slot: 1-%d"), FLOOD_CHANNEL_SCOPE_SLOTS);
     return;
   }
   const auto& entry = floodChannelScopes()[index];
@@ -9879,7 +9880,7 @@ void MyMesh::formatFloodChannelScopes(const char* args, char* reply) {
   const char* cursor = args;
   int index = -1;
   if (!parseFloodChannelScopeIndex(cursor, index)) {
-    snprintf(reply, 160, "Err - scope slot must be 1-%d", FLOOD_CHANNEL_SCOPE_SLOTS);
+    snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - scope slot must be 1-%d", "Err - scope slot: 1-%d"), FLOOD_CHANNEL_SCOPE_SLOTS);
     return;
   }
   if (*cursor != 0) {
@@ -9956,7 +9957,7 @@ void MyMesh::setFloodChannelScope(const char* args, char* reply) {
               option + (option[0] == 'p' && option[1] == '=' ? 3 : 12),
               FLOOD_RETRY_BRIDGE_BUCKETS, bucket)
           || bucket == 0) {
-        strcpy(reply, "Err - path bucket must be 1-6");
+        strcpy(reply, MESH_CLI_REPLY_TEXT("Err - path bucket must be 1-6", "Err - path bucket: 1-6"));
         return;
       }
       path_set = true;
@@ -9981,7 +9982,7 @@ void MyMesh::setFloodChannelScope(const char* args, char* reply) {
             target_text + strlen("scope="), direct_scope_name,
             sizeof(direct_scope_name))) {
       strcpy(reply,
-             "Err - scope must be a public name of at most 30 characters");
+             MESH_CLI_REPLY_TEXT("Err - scope must be a public name of at most 30 characters", "Err - scope: public name, max 30 chars"));
       return;
     }
   } else {
@@ -10151,7 +10152,7 @@ void MyMesh::deleteFloodChannelScope(const char* args, char* reply) {
 void MyMesh::formatFloodChannelScopeRequirementDetail(
     int index, char* reply, size_t reply_len) const {
   if (index < 0 || index >= FLOOD_CHANNEL_SCOPE_REQUIRE_SLOTS) {
-    snprintf(reply, reply_len, "Err - require slot must be 1-%d",
+    snprintf(reply, reply_len, MESH_CLI_REPLY_TEXT("Err - require slot must be 1-%d", "Err - require slot: 1-%d"),
              FLOOD_CHANNEL_SCOPE_REQUIRE_SLOTS);
     return;
   }
@@ -10174,7 +10175,7 @@ void MyMesh::formatFloodChannelScopeRequirements(const char* args,
   const char* cursor = args;
   int index = -1;
   if (!parseFloodChannelScopeIndex(cursor, index)) {
-    snprintf(reply, 160, "Err - require slot must be 1-%d",
+    snprintf(reply, 160, MESH_CLI_REPLY_TEXT("Err - require slot must be 1-%d", "Err - require slot: 1-%d"),
              FLOOD_CHANNEL_SCOPE_REQUIRE_SLOTS);
     return;
   }
@@ -10219,7 +10220,7 @@ void MyMesh::setFloodChannelScopeRequirement(const char* args, char* reply) {
   char ignored_name[FLOOD_GROUP_MODERATION_NAME_LEN];
   if (!parseFloodModerationChannel(channel_text, secret, key_len, hash_prefix,
                                    ignored_name, sizeof(ignored_name))) {
-    strcpy(reply, "Err - channel must be public, #name, or 128/256-bit key");
+    strcpy(reply, MESH_CLI_REPLY_TEXT("Err - channel must be public, #name, or 128/256-bit key", "Err - channel: public|#name|128/256-bit key"));
     return;
   }
 
@@ -12474,7 +12475,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, ClientInfo* sender, char *
   }
 
   if (region_load_active && sender && !sender->isAdmin() && !sender->isRegionMgr()) {
-    strcpy(reply, "Err - region load owned by admin/region manager");
+    strcpy(reply, MESH_CLI_REPLY_TEXT("Err - region load owned by admin/region manager", "Err - region load: admin/region manager only"));
     return;
   }
 
@@ -13194,7 +13195,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, ClientInfo* sender, char *
           && mesh::Utils::fromHex(pubkey, (int)(hex_len / 2), hex)) {
         uint32_t perms;
         if (!mesh::cli::parseUnsignedIntegerStrict(sp, perms) || perms > UINT8_MAX) {
-          strcpy(reply, "Err - permissions must be 0-255");
+          strcpy(reply, MESH_CLI_REPLY_TEXT("Err - permissions must be 0-255", "Err - permissions: 0-255"));
         } else if (acl.applyPermissions(self_id, pubkey, (int)(hex_len / 2), static_cast<uint8_t>(perms))) {
           mesh::scheduleLazyPersistenceMutation(
               dirty_contacts_expiry, contacts_save_failures,
@@ -13240,7 +13241,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, ClientInfo* sender, char *
   } else if (strncmp(command, "send text.flood ", 16) == 0) {
     char* text = trimSpaces(command + 16);
     if (*text == 0) {
-      strcpy(reply, "Err - usage: send text.flood <message>");
+      strcpy(reply, MESH_CLI_REPLY_TEXT("Err - usage: send text.flood <message>", "Err - send text.flood <message>"));
     } else if (sendRepeatersFloodText(text)) {
       strcpy(reply, "OK");
     } else {
@@ -13275,7 +13276,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, ClientInfo* sender, char *
       snprintf(reply, 160, "OK - saved off; rx.watchdog=%s",
                radio_timing.watchdogLabel(_prefs.rx_watchdog_enabled));
     } else {
-      strcpy(reply, "Err - usage: set rx.watchdog <on|off>");
+      strcpy(reply, MESH_CLI_REPLY_TEXT("Err - usage: set rx.watchdog <on|off>", "Err - set rx.watchdog <on|off>"));
     }
   } else if (strncmp(command, "set battery.alert ", 18) == 0) {
     const char* value = command + 18;
@@ -13286,22 +13287,22 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, ClientInfo* sender, char *
 
       if (*region_name) {
         if (strchr(region_name, ' ') != NULL) {
-          strcpy(reply, "Err - region names cannot contain spaces");
+          strcpy(reply, MESH_CLI_REPLY_TEXT("Err - region names cannot contain spaces", "Err - region name: no spaces"));
           return;
         }
         region = region_map.findByName(region_name);
         if (region == NULL || region->isWildcard()) {
-          strcpy(reply, "Err - unknown or invalid alert region");
+          strcpy(reply, MESH_CLI_REPLY_TEXT("Err - unknown or invalid alert region", "Err - unknown/invalid alert region"));
           return;
         }
       } else {
         region = findNarrowestBatteryAlertRegion(ambiguous);
         if (region == NULL) {
-          strcpy(reply, "Err - define a usable region before enabling battery alerts");
+          strcpy(reply, MESH_CLI_REPLY_TEXT("Err - define a usable region before enabling battery alerts", "Err - battery alerts need a usable region first"));
           return;
         }
         if (ambiguous) {
-          strcpy(reply, "Err - multiple narrowest regions; specify one");
+          strcpy(reply, MESH_CLI_REPLY_TEXT("Err - multiple narrowest regions; specify one", "Err - specify one of the narrowest regions"));
           return;
         }
       }
@@ -13324,14 +13325,14 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, ClientInfo* sender, char *
       savePrefs();
       strcpy(reply, "OK");
     } else {
-      strcpy(reply, "Err - usage: set battery.alert <on [region]|off>");
+      strcpy(reply, MESH_CLI_REPLY_TEXT("Err - usage: set battery.alert <on [region]|off>", "Err - set battery.alert <on [region]|off>"));
     }
   } else if (strncmp(command, "set battery.alert.low ", 22) == 0) {
     uint8_t percent;
     if (!parseBatteryAlertPercent(command + 22, 1, 100, percent)) {
-      strcpy(reply, "Err - usage: set battery.alert.low <1-100>");
+      strcpy(reply, MESH_CLI_REPLY_TEXT("Err - usage: set battery.alert.low <1-100>", "Err - set battery.alert.low <1-100>"));
     } else if (percent <= _prefs.battery_alert_critical_percent) {
-      strcpy(reply, "Err - low must be greater than critical");
+      strcpy(reply, MESH_CLI_REPLY_TEXT("Err - low must be greater than critical", "Err - low must exceed critical"));
     } else {
       _prefs.battery_alert_low_percent = percent;
       next_battery_alert_check = 0;
@@ -13341,9 +13342,9 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, ClientInfo* sender, char *
   } else if (strncmp(command, "set battery.alert.critical ", 27) == 0) {
     uint8_t percent;
     if (!parseBatteryAlertPercent(command + 27, 0, 99, percent)) {
-      strcpy(reply, "Err - usage: set battery.alert.critical <0-99>");
+      strcpy(reply, MESH_CLI_REPLY_TEXT("Err - usage: set battery.alert.critical <0-99>", "Err - set battery.alert.critical <0-99>"));
     } else if (percent >= _prefs.battery_alert_low_percent) {
-      strcpy(reply, "Err - critical must be less than low");
+      strcpy(reply, MESH_CLI_REPLY_TEXT("Err - critical must be less than low", "Err - critical must be below low"));
     } else {
       _prefs.battery_alert_critical_percent = percent;
       next_battery_alert_check = 0;

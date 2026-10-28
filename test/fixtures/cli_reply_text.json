@@ -1,0 +1,598 @@
+{
+  "schema": 1,
+  "profiles": [
+    "wio-e5-mini_repeater"
+  ],
+  "messages": [
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, unsupported on this role",
+      "concise": "Error, unsupported role"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, retry configuration unsupported on this role",
+      "concise": "Error, retry unsupported for role"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "ERROR: dutycycle must be 1-100",
+      "concise": "ERROR: dutycycle 1-100"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, invalid airtime factor",
+      "concise": "Error, bad airtime factor"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "ERROR: telemetry.access must be all or acl",
+      "concise": "ERROR: telemetry.access all|acl"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error: interval must be 0 (off) or %d-240 minutes",
+      "concise": "Error: interval 0 (off) or %d-240 minutes"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, must be 0,1, or 2",
+      "concise": "Error, 0|1|2"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, must be on or off",
+      "concise": "Error, on|off"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, must be 0-20",
+      "concise": "Error, 0-20"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, must be 0-2",
+      "concise": "Error, 0-2"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, must be 0-40 dB",
+      "concise": "Error, 0-40 dB"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, must be 1-15",
+      "concise": "Error, 1-15"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, must be 10-5000 ms",
+      "concise": "Error, 10-5000 ms"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, must be 0-5000 ms",
+      "concise": "Error, 0-5000 ms"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, must be all or 1-7",
+      "concise": "Error, all|1-7"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, must be 0-15",
+      "concise": "Error, 0-15"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, must be 0-63 or off",
+      "concise": "Error, 0-63|off"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, must be infra, rooftop, or mobile",
+      "concise": "Error, infra|rooftop|mobile"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, use up to %u comma-separated 3-byte hex prefixes",
+      "concise": "Error, max %u comma-separated 3-byte hex prefixes"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, use on or off on this role",
+      "concise": "Error, on|off"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, SNR must fit -32.00..31.75 dB",
+      "concise": "Error, SNR -32.00..31.75 dB"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, use CR4,CR5,CR7,CR8 SNRs or off",
+      "concise": "Error, CR4,CR5,CR7,CR8 SNRs|off"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, must be: off, minimal, moderate, or strict",
+      "concise": "Error, off|minimal|moderate|strict"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error: TX power range is %d to %d dBm",
+      "concise": "Error: TX power %d..%d dBm"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, invalid radio params",
+      "concise": "Error, bad radio params"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, invalid latitude",
+      "concise": "Error, bad latitude"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, invalid longitude",
+      "concise": "Error, bad longitude"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, table rejected prefix",
+      "concise": "Error, prefix rejected"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Err - unknown or ambiguous jump: %s",
+      "concise": "Err - unknown/ambiguous jump: %s"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "ERROR: Power management not supported",
+      "concise": "ERROR: Power management unsupported"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "OK - repeat is now OFF",
+      "concise": "OK - repeat OFF"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "OK - repeat is now ON",
+      "concise": "OK - repeat ON"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "OK - clock set: %02d:%02d - %d/%d/%d UTC",
+      "concise": "OK - clock: %02d:%02d - %d/%d/%d UTC"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "OK - interval rounded to %d",
+      "concise": "OK - rounded interval %d"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "radio settings could not be saved",
+      "concise": "radio settings not saved"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "unsupported on this platform",
+      "concise": "platform unsupported"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "OK - LoRa FEM RX gain on",
+      "concise": "OK - FEM RX gain on"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "OK - LoRa FEM RX gain off",
+      "concise": "OK - FEM RX gain off"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "OK - LoRa FEM TX gain on",
+      "concise": "OK - FEM TX gain on"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "OK - LoRa FEM TX gain off",
+      "concise": "OK - FEM TX gain off"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "ERROR: range is %lu-%lu us",
+      "concise": "ERROR: range %lu-%lu us"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, argument too long",
+      "concise": "Error, arg too long"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, SNR must be numeric",
+      "concise": "Error, numeric SNR needed"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, invalid frequency",
+      "concise": "Error, bad frequency"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, use: tempradio f,bw,sf,cr,minutes[,preamble]",
+      "concise": "Error, tempradio f,bw,sf,cr,minutes[,preamble]"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, use: set radioat f,bw,sf,cr,start (UTC or +minutes)",
+      "concise": "Error, set radioat f,bw,sf,cr,start (UTC or +minutes)"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, use: set tempradioat f,bw,sf,cr,start,end (UTC or +minutes)",
+      "concise": "Error, set tempradioat f,bw,sf,cr,start,end (UTC or +minutes)"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, use: set recent.repeater <hex> [snr_db]",
+      "concise": "Error, set recent.repeater <hex> [snr_db]"
+    },
+    {
+      "file": "src/helpers/CommonCLI.cpp",
+      "verbose": "Error, use: get recent.repeaters [page] | search <2|4|6 hex> [page]",
+      "concise": "Error, get recent.repeaters [page] | search <2|4|6 hex> [page]"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - blacklist slot must be 1-%u",
+      "concise": "Err - blacklist slot: 1-%u"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - expected six-digit repeater ID",
+      "concise": "Err - repeater ID: six hex digits"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - use 1-%d unique six-digit hex IDs separated by commas",
+      "concise": "Err - use 1-%d unique six-digit hex IDs, comma-separated"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - next blacklist slot is %u",
+      "concise": "Err - next blacklist slot: %u"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - blacklist range exceeds slot %u",
+      "concise": "Err - blacklist range past slot %u"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - unable to save flood filter blacklist",
+      "concise": "Err - flood filter blacklist not saved"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - filter slot must be 1-%d",
+      "concise": "Err - filter slot: 1-%d"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - packet type must be name, any, 0-15, or 0x00-0x0F",
+      "concise": "Err - type: name|any|0-15|0x00-0x0F"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - tx timing must be fast or slow",
+      "concise": "Err - tx: fast|slow"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - scope must be a public name of at most 30 characters",
+      "concise": "Err - scope: public name, max 30 chars"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - unable to save flood filter",
+      "concise": "Err - flood filter not saved"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - too many flood filter parameters",
+      "concise": "Err - excess flood filter parameters"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - require=region requires scope=<name>",
+      "concise": "Err - require=region needs scope=<name>"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - tx timing requires scope=<name>",
+      "concise": "Err - tx needs scope=<name>"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - scope slot must be 1-%d",
+      "concise": "Err - scope slot: 1-%d"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - path bucket must be 1-6",
+      "concise": "Err - path bucket: 1-6"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - require slot must be 1-%d",
+      "concise": "Err - require slot: 1-%d"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - channel must be public, #name, or 128/256-bit key",
+      "concise": "Err - channel: public|#name|128/256-bit key"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - permissions must be 0-255",
+      "concise": "Err - permissions: 0-255"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - region names cannot contain spaces",
+      "concise": "Err - region name: no spaces"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - unknown or invalid alert region",
+      "concise": "Err - unknown/invalid alert region"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - define a usable region before enabling battery alerts",
+      "concise": "Err - battery alerts need a usable region first"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - multiple narrowest regions; specify one",
+      "concise": "Err - specify one of the narrowest regions"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - low must be greater than critical",
+      "concise": "Err - low must exceed critical"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - critical must be less than low",
+      "concise": "Err - critical must be below low"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "OK - all flood filters removed",
+      "concise": "OK - flood filters cleared"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - use get guest or set guest on|off",
+      "concise": "Err - get guest / set guest on|off"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - region load owned by admin/region manager",
+      "concise": "Err - region load: admin/region manager only"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Error: start is in the past",
+      "concise": "Error: start in past"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Error: end is in the past",
+      "concise": "Error: end in past"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Error: end must be after start",
+      "concise": "Error: end must follow start"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - another remote command is still running",
+      "concise": "Err - remote command busy"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - remote command is too long",
+      "concise": "Err - remote command too long"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - filter parameters too long",
+      "concise": "Err - filter params too long"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - use: set flood.filter[.n] <type> [hops] [path=blacklist] [scope=<name>] [require=region] [tx=slow] [suspend=tempradio]",
+      "concise": "Err - set flood.filter[.n] <type> [hops] [path=blacklist] [scope=<name>] [require=region] [tx=slow] [suspend=tempradio]"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Error, use: get tempradioat [n]",
+      "concise": "Error, get tempradioat [n]"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Error, use: get radioat [n]",
+      "concise": "Error, get radioat [n]"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Error, use: del tempradioat [n]",
+      "concise": "Error, del tempradioat [n]"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Error, use: del radioat [n]",
+      "concise": "Error, del radioat [n]"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - use: del flood.filter.blacklist[.<1-%u>| all]",
+      "concise": "Err - del flood.filter.blacklist[.<1-%u>| all]"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - use: del flood.filter.<1-%d>|all",
+      "concise": "Err - del flood.filter.<1-%d>|all"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - usage: send text.flood <message>",
+      "concise": "Err - send text.flood <message>"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - usage: set rx.watchdog <on|off>",
+      "concise": "Err - set rx.watchdog <on|off>"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - usage: set battery.alert <on [region]|off>",
+      "concise": "Err - set battery.alert <on [region]|off>"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - usage: set battery.alert.low <1-100>",
+      "concise": "Err - set battery.alert.low <1-100>"
+    },
+    {
+      "file": "examples/simple_repeater/MyMesh.cpp",
+      "verbose": "Err - usage: set battery.alert.critical <0-99>",
+      "concise": "Err - set battery.alert.critical <0-99>"
+    },
+    {
+      "file": "src/helpers/RadioProfileCLI.cpp",
+      "verbose": "slot must be 1-4 or all",
+      "concise": "slot: 1-4|all"
+    },
+    {
+      "file": "src/helpers/RadioProfileCLI.cpp",
+      "verbose": "future UTC start/end required, within 24 days",
+      "concise": "future UTC start/end within 24 days"
+    },
+    {
+      "file": "src/helpers/RadioProfileCLI.cpp",
+      "verbose": "all four schedule slots occupied",
+      "concise": "all four slots full"
+    },
+    {
+      "file": "src/helpers/RadioProfileCLI.cpp",
+      "verbose": "settings could not be saved",
+      "concise": "settings not saved"
+    },
+    {
+      "file": "src/helpers/RadioProfileCLI.cpp",
+      "verbose": "invalid radio2 command",
+      "concise": "bad radio2 command"
+    },
+    {
+      "file": "src/helpers/RadioProfileCLI.cpp",
+      "verbose": "MediaMesh region unavailable or full",
+      "concise": "MediaMesh region unavailable/full"
+    },
+    {
+      "file": "src/helpers/RadioProfileCLI.cpp",
+      "verbose": "Error: use %s f,bw,sf,cr,rx|rxtx%s[,preamble|auto]",
+      "concise": "Error: %s f,bw,sf,cr,rx|rxtx%s[,preamble|auto]"
+    },
+    {
+      "file": "src/helpers/WirelessControl.h",
+      "verbose": "Error: requested wireless service unavailable in this build/boot",
+      "concise": "Error: wireless service unavailable this build/boot"
+    },
+    {
+      "file": "src/helpers/WirelessControl.h",
+      "verbose": "Error: 2.4ghz is off; use set 2.4ghz on first",
+      "concise": "Error: 2.4ghz off; set 2.4ghz on first"
+    },
+    {
+      "file": "src/helpers/WirelessControl.h",
+      "verbose": "Error: use set wifi/espnow on|off [force]; set 2.4ghz on [all|force]|off [force]",
+      "concise": "Error: set wifi/espnow on|off [force]; set 2.4ghz on [all|force]|off [force]"
+    },
+    {
+      "file": "src/helpers/PowerSavingDiagnostics.h",
+      "verbose": "OK - power diagnostics %s (RAM only; sleep policy unchanged)",
+      "concise": "OK - power diag %s (RAM only; sleep policy unchanged)"
+    },
+    {
+      "file": "src/helpers/PowerSavingDiagnostics.h",
+      "verbose": "OK - power diagnostics cleared; sleep policy unchanged",
+      "concise": "OK - power diag cleared; sleep policy unchanged"
+    },
+    {
+      "file": "src/helpers/PowerSavingDiagnostics.h",
+      "verbose": "Error: use set powersaving.diag on|off",
+      "concise": "Error: set powersaving.diag on|off"
+    },
+    {
+      "file": "src/helpers/PowerSavingDiagnostics.h",
+      "verbose": "Error: use clear powersaving.diag",
+      "concise": "Error: clear powersaving.diag"
+    },
+    {
+      "file": "src/helpers/FloodAdvertCLI.h",
+      "verbose": "ERR: advert limiter unavailable on this role",
+      "concise": "ERR: advert limiter unavailable for role"
+    },
+    {
+      "file": "src/helpers/FloodAdvertCLI.h",
+      "verbose": "ERR: advert list index out of range",
+      "concise": "ERR: advert index out of range"
+    },
+    {
+      "file": "src/helpers/FloodAdvertCLI.h",
+      "verbose": "OK - all advert limit history cleared",
+      "concise": "OK - all advert history cleared"
+    },
+    {
+      "file": "src/helpers/FloodAdvertCLI.h",
+      "verbose": "OK - key advert limit history cleared",
+      "concise": "OK - key advert history cleared"
+    },
+    {
+      "file": "src/helpers/LedSettings.cpp",
+      "verbose": "Error: usage get leds",
+      "concise": "Error: get leds"
+    },
+    {
+      "file": "src/helpers/LedSettings.cpp",
+      "verbose": "Error: usage set leds on|off",
+      "concise": "Error: set leds on|off"
+    },
+    {
+      "file": "src/helpers/StorageLayout.cpp",
+      "verbose": "Error: use get storage.layout",
+      "concise": "Error: get storage.layout"
+    }
+  ],
+  "noncompact_tokens_sha256": {
+    "src/helpers/CommonCLI.cpp": "0a3d2e2eabd3e161e352176c4a6a4c4baa184944c08c93b522d4f1ddb5a24edd",
+    "examples/simple_repeater/MyMesh.cpp": "8567eeef2f327100e397c40b0aaf5b675fcdfea254987437d1ca8d005ad3a6f0",
+    "src/helpers/RadioProfileCLI.cpp": "d641d16e872eba3e73b9b5a50f9718c10b0b7da72782f793706ac36b3724a624",
+    "src/helpers/WirelessControl.h": "bbde183f091a8afa7fd65c7b379783f8be2ac4e74ae6037a99a71fde3fb89f1e",
+    "src/helpers/PowerSavingDiagnostics.h": "18b78f5780046ea8c772c4ce6c337741ae0c027039d9399c94c5f4205d114000",
+    "src/helpers/FloodAdvertCLI.h": "0f378e4d0f6c3b9b79991068a4b4208139484d2144ee1d7c5094d39043463be4",
+    "src/helpers/LedSettings.cpp": "df0681234ca1337148ad59caa935857bc692f98bf18603ca6d099c0382028400",
+    "src/helpers/StorageLayout.cpp": "5dd1c8bcbe2902e1f22d14f9ab425465bdc38926fae23989987d850b484cbb18"
+  }
+}
