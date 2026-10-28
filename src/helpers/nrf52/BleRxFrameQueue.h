@@ -58,6 +58,14 @@ public:
     }
   }
 
+  // Physical CONNECT is observed by the BLE worker before deferred lifecycle
+  // callbacks. A disable/re-enable invalidates that observation even if the
+  // SoftDevice still has the same numeric handle.
+  bool hasConnection(uint16_t handle) const {
+    Guard guard;
+    return _enabled && handle != INVALID_HANDLE && _handle == handle;
+  }
+
   void disconnect(uint16_t handle) {
     Guard guard;
     if (_handle != handle) return;

@@ -1038,6 +1038,7 @@ jobs:
           python3 -B test/test_nrf52_svc_compat.py -v
           python3 -B test/test_nrf52_ble_cccd_fix.py -v
           python3 -B test/test_nrf52_ble_disconnect.py -v
+          python3 -B test/test_nrf52_ble_usb_lifecycle.py -v
           pip install unicorn==2.1.4
           python3 -B test/test_nrf52_ble_dfu_fix.py -v
 
