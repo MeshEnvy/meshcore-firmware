@@ -1037,12 +1037,12 @@ class Nrf52ExtraFsContractTest(unittest.TestCase):
         self.assertIn("mesh::companion::writePackedCompanionHelp(output);", terminal)
         help_fragments = (MESH.parent / "CompanionHelp.inc").read_text(encoding="ascii")
         self.assertIn(
-            "repair extrafs (erases/rebuilds internal ExtraFS)", help_fragments
+            "repair extrafs (erases ExtraFS)", help_fragments
         )
         self.assertRegex(help_fragments,
             r"#if defined\(NRF52_PLATFORM\) && defined\(EXTRAFS\) && !defined\(QSPIFLASH\)"
             r"\s+MESH_COMPANION_HELP_BEGIN\s+"
-            r'"  repair extrafs \(erases/rebuilds internal ExtraFS\)\\r\\n"')
+            r'"  repair extrafs \(erases ExtraFS\)\\r\\n"')
         packed_help = (MESH.parent / "CompanionHelpPacked.cpp").read_text(encoding="ascii")
         self.assertIn('#include "CompanionHelp.inc"', packed_help)
 

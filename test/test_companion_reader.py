@@ -342,7 +342,7 @@ int main() {
         self.assertLess(terminal.index("mesh::handleReaderCommand("),
                         terminal.index("char local_reply[160]"))
         help_text = (ROOT / "examples/companion_radio/CompanionHelp.inc").read_text()
-        self.assertIn("get reader <chapter>[:<verse>[-<last>]] [page] (World English Bible, offline)", help_text)
+        self.assertIn("get reader <chapter>[:<verse>[-<last>]] [page]", help_text)
         self.assertIn('#include "CompanionHelp.inc"', terminal)
         self.assertIn("mesh::companion::writePackedCompanionHelp(output)", terminal)
         packed_help = (ROOT / "examples/companion_radio/CompanionHelpPacked.cpp").read_text()
