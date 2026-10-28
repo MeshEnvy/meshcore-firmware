@@ -145,6 +145,36 @@ command aliases are listed there explicitly.
 
 ---
 
+### Select the next application slot (ESP32)
+
+**Usage:**
+
+```text
+get boot.slot
+set boot.slot app1
+get boot.slot
+reboot
+```
+
+Use `app0` or `app1` to select an installed application for the next reboot.
+This works through the ESP32 Repeater, Room Server, Sensor and Companion CLI
+with the usual administration permissions. Selection sends a reply and does
+not reboot automatically.
+
+`get boot.slot` reports the running application, the next boot selection and
+each slot's capacity, or `missing`. A capacity does not mean the slot contains
+a valid image. Selection verifies the complete image through ESP-IDF and
+rejects missing, corrupt, rejected or unconfirmed applications. It does not
+create a second slot or install firmware.
+
+Finish or stop an active/staged OTA update before changing slots; stop the
+WiFi OTA server if it is running. Use firmware for the exact board and installed
+partition layout. Both applications share NVS and filesystem settings, and a
+later OTA update can overwrite the inactive application or change the next
+boot selection. Automatic rollback depends on the installed bootloader.
+
+---
+
 ### Enter the UF2 bootloader (nRF52 only)
 
 **Search terms:** bootloader mode, USB firmware update, UF2 mode.

@@ -1049,6 +1049,10 @@ public:
     return true;
   }
 
+#if defined(ESP32_PLATFORM)
+  bool isDeferredOtaUpdatePending() const override { return _ota_update_at != 0; }
+#endif
+
   int getQueueSize() override {
     return bridge ? bridge->getQueueSize() : 0;
   }

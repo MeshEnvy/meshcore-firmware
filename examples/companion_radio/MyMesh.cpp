@@ -5,6 +5,7 @@
 #include <helpers/radiolib/LR2021CalibrationSettings.h>
 #endif
 #if defined(ESP32_PLATFORM)
+#include <helpers/BootSlot.h>
 #include <helpers/esp32/CpuClockPolicy.h>
 #include <helpers/esp32/PowerTestControls.h>
 #endif
@@ -4146,6 +4147,7 @@ bool MyMesh::handleLocalControlCommand(const char* command, char* reply,
   if (mesh::powerdiag::handleCommand(command, reply, reply_size, millis())) return true;
   if (mesh::companion::handlePowerDiagnosticsCommand(board, command, reply, reply_size)) return true;
 #if defined(ESP32_PLATFORM)
+  if (mesh::esp32::handleBootSlotCommand(command, board, reply, reply_size)) return true;
   if (mesh::esp32::cpuclock::handleCommand(board, _prefs.cpu_freq_mhz,
           _prefs.powersaving_enabled != 0, command, reply, reply_size,
           [this]() { return savePrefs(); })) return true;

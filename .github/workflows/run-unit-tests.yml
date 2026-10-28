@@ -612,6 +612,7 @@ jobs:
           python3 -B test/test_companion_rtc_terminal_input.py -v
           python3 -B test/test_esp32_cpu_clock.py -v
           python3 -B test/test_esp32_cpu_clock_board.py -v
+          python3 -B test/test_boot_slot_cli.py -v
           python3 -B test/test_esp32_power_test_controls.py -v
           python3 -B test/test_esp32_uart_quiet_session.py -v
           python3 -B test/test_companion_rxps_getters.py -v

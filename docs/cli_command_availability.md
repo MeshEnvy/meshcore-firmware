@@ -115,6 +115,7 @@ over the normal binary USB, BLE, or TCP connection:
 | [`board`](cli_commands.md#show-the-hardware-name) | Every Companion text terminal and command `0x42` |
 | [`version`](cli_commands.md#get-the-version) | Every Companion text terminal and protocol-v14 command `0x42`; returns the untruncated build identity |
 | [`get storage.layout`](cli_commands.md#show-the-storage-layout) | Every Companion text terminal and command `0x42`; reports the running platform's storage layout |
+| [`get/set boot.slot`](cli_commands.md#select-the-next-application-slot-esp32) | ESP32 Companion terminal, command `0x42`, and authorized LoRa CLI; select an installed `app0` or `app1` image for the next reboot |
 | [`memory`](#memory) | ESP32 Full Companion text terminal and command `0x42` |
 | [`get/set radio.rxgain`](cli_commands.md#view-or-change-this-nodes-rx-boosted-gain-mode-sx12xx-and-lr1110-v1141) | Companion with a supported radio |
 | [`get/set radio.fem.rxgain`](cli_commands.md#view-or-change-the-lora-fem-receive-path-gain-state-on-supported-boards) | Companion on a board with controllable LoRa FEM LNA |
@@ -323,6 +324,7 @@ should use command `0x42`. See [Companion radio binary protocol](companion_proto
 | Information | [`ver`](cli_commands.md#get-the-version) | All text CLI roles | Yes | Yes | Yes | Yes | Yes |
 | Information | [`board`](cli_commands.md#show-the-hardware-name) | All text CLI roles | Yes | Yes | Yes | Yes | Yes |
 | Diagnostics | [`get storage.layout`](cli_commands.md#show-the-storage-layout) | Detected flash size and live partition table | Yes | Yes | Yes | Yes | Yes |
+| Operational | [`get/set boot.slot`](cli_commands.md#select-the-next-application-slot-esp32) | Installed ESP32 `app0`/`app1`; selected image starts after `reboot` | Yes | Yes | Yes | Yes | Yes |
 | Diagnostics | [`memory`](#memory) | ESP32 heap and PSRAM summary | Yes | Yes | Yes | Yes | Yes |
 | Diagnostics | [`sensor`](#sensor-hardware-summary) | Hardware wiring summary | Yes | Yes | Yes | Yes | Yes |
 | Diagnostics | [`powerlog`](#powerlog) | Reset-reason summary | Yes | Yes | Yes | Yes | Yes |

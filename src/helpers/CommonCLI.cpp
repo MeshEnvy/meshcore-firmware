@@ -21,6 +21,7 @@
 #include "HilStartupTrace.h"
 #include "FilePresence.h"
 #if defined(ESP32_PLATFORM)
+#include "BootSlot.h"
 #include <helpers/esp32/CpuClockPolicy.h>
 #include <helpers/esp32/PowerTestControls.h>
 #endif
@@ -3598,6 +3599,8 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
     if (mesh::handleUsbLoggingWatchdogCommand(command, reply, 160)) return;
     if (mesh::powerdiag::handleCommand(command, reply, 157, millis())) return;
 #if defined(ESP32_PLATFORM)
+    if (mesh::esp32::handleBootSlotCommand(command, *_board, reply, 157,
+            _callbacks->isDeferredOtaUpdatePending())) return;
     if (mesh::esp32::cpuclock::handleCommand(*_board, _prefs->cpu_freq_mhz,
             _prefs->powersaving_enabled != 0, command, reply, 157,
             [this]() { return saveCommonPrefs(); })) return;

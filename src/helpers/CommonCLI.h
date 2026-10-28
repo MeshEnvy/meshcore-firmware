@@ -743,6 +743,9 @@ public:
   virtual bool beginDeferredOtaUpdate() {
     return false;
   };
+#if defined(ESP32_PLATFORM)
+  virtual bool isDeferredOtaUpdatePending() const { return false; }
+#endif
 
   // Browser-based configuration portal. ESP32 infrastructure roles override
   // these; force_ap=true asks for the captive SoftAP even when WiFi is set.
