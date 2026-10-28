@@ -20,6 +20,7 @@
 #include <helpers/HostKiss.h>
 #include <helpers/MorseLoopPolicy.h>
 #include <helpers/PowerManagementUtils.h>
+#include <helpers/EmergencyPowerRuntime.h>
 #include <helpers/HilStartupTrace.h>
 #if MESH_PACKET_LOGGING
   #include <helpers/SerialPacketLog.h>
@@ -727,6 +728,23 @@ void loop() {
 #endif
   serviceCommandInterfaces();
 
+#if MESH_ENABLE_EMERGENCY_POWER
+  static mesh::power::EmergencyPowerRuntime emergency_power;
+#if defined(ESP32_PLATFORM)
+  board.servicePowerTestControls();
+#endif
+  rtc_clock.tick();
+#ifdef HAS_EXTERNAL_WATCHDOG
+  external_watchdog.loop();
+#endif
+  bool emergency_busy = command[0];
+#if MESH_USB_CONSOLE_COOPERATIVE
+  emergency_busy = emergency_busy || the_mesh.hasPendingSerialOutput();
+#endif
+  if (emergency_power.service(the_mesh, radio_driver, board,
+          the_mesh.getPowerCLI(), emergency_busy, the_mesh.emergencyPowerBusy())) return;
+#endif
+
 #if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
   // Hold the user button to power off the SenseCAP Solar repeater.
   int btnState = digitalRead(PIN_USER_BTN);
@@ -778,7 +796,9 @@ void loop() {
   // Report the guard that really stopped this iteration, without probing
   // later guards or changing their short-circuit hardware access.
 #if defined(ESP32_PLATFORM)
+#if !MESH_ENABLE_EMERGENCY_POWER
   board.servicePowerTestControls();
+#endif
   mesh::esp32::serviceCpuFrequencyPolicy(board, the_mesh.getNodePrefs()->cpu_freq_mhz,
       the_mesh.getNodePrefs()->powersaving_enabled != 0, millis(), false, the_mesh.isDualRadioActive());
 #endif

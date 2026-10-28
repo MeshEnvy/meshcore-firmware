@@ -595,6 +595,10 @@ jobs:
           python3 -B test/test_regulator_recovery.py -v
           python3 -B test/test_regulator_settings.py -v
           python3 -B test/test_battery_forwarding.py -v
+          python3 -B test/test_emergency_power.py -v
+          python3 -B test/test_emergency_power_runtime.py -v
+          python3 -B test/test_emergency_power_ota.py -v
+          python3 -B test/test_emergency_sleep_backends.py -v
           python3 -B test/test_battery_calibration.py -v
           python3 -B test/test_battery_calibration_store.py -v
           python3 -B test/test_power_saving_diagnostics.py -v

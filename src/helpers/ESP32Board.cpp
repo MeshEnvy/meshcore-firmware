@@ -8,6 +8,9 @@
 #include "FileRead.h"
 #include "UserGpioPinPolicy.h"
 #include <helpers/esp32/ManagementPassword.h>
+#if MESH_ENABLE_EMERGENCY_POWER
+#include <esp_task_wdt.h>
+#endif
 
 namespace mesh {
 namespace esp32_clock {
@@ -1407,6 +1410,34 @@ void ESP32Board::shutdownPeripherals() {
 void ESP32Board::powerOff() {
   enterDeepSleep(0); // Do not wakeup
 }
+
+#if MESH_ENABLE_EMERGENCY_POWER
+bool ESP32Board::emergencySleepMilliseconds(uint32_t millisecs) {
+  // The caller owns radio suspension and reversible wireless shutdown. Never
+  // force a live WiFi/Bluetooth stack through explicit light sleep.
+  if (millisecs == 0 || isRadioTestActive() || xPortInIsrContext()
+      || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING
+      || !mesh::esp32::manualLightSleepReady()) return false;
+  if (millisecs > 10000UL) millisecs = 10000UL;
+  const esp_err_t watchdog_status = esp_task_wdt_status(nullptr);
+  const bool watched = watchdog_status == ESP_OK;
+  if (!watched && watchdog_status != ESP_ERR_NOT_FOUND
+      && watchdog_status != ESP_ERR_INVALID_STATE) return false;
+#if defined(CONFIG_ESP_TASK_WDT_TIMEOUT_S) && CONFIG_ESP_TASK_WDT_TIMEOUT_S > 0
+  if (watched && millisecs > uint32_t(CONFIG_ESP_TASK_WDT_TIMEOUT_S) * 500UL)
+    millisecs = uint32_t(CONFIG_ESP_TASK_WDT_TIMEOUT_S) * 500UL;
+#endif
+  if (watched && esp_task_wdt_reset() != ESP_OK) return false;
+  if (esp_sleep_enable_timer_wakeup(uint64_t(millisecs) * 1000ULL) != ESP_OK)
+    return false;
+  // Add no radio/GPIO wake. Existing button sources remain untouched. The
+  // normal sleep path installs its own next timer; never leave ours armed.
+  const esp_err_t slept = esp_light_sleep_start();
+  const esp_err_t cleared = esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+  const bool watchdog_ok = !watched || esp_task_wdt_reset() == ESP_OK;
+  return slept == ESP_OK && cleared == ESP_OK && watchdog_ok;
+}
+#endif
 
 void ESP32Board::enterDeepSleep(uint32_t secs) {
   shutdownPeripherals();

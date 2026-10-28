@@ -19,6 +19,8 @@
 #include <helpers/WirelessControl.h>
 #include <helpers/FleetCommand.h>
 #include <helpers/BatteryForwarding.h>
+#include <helpers/EmergencyPowerConfig.h>
+#include <helpers/EmergencyPowerPolicy.h>
 #if defined(NRF52_PLATFORM) && defined(OTA_SD_STORE)
 #include <helpers/SdCardCLI.h>
 #endif
@@ -91,8 +93,8 @@ static constexpr uint8_t DEFAULT_ADVERT_LOC_POLICY = ADVERT_LOC_PREFS;
 #define FLOOD_RETRY_ADVERT_DEFAULT        0
 #define FLOOD_RETRY_GROUP_MAX_PATH_DEFAULT 1
 
-#define BATTERY_ALERT_LOW_PERCENT_DEFAULT       20
-#define BATTERY_ALERT_CRITICAL_PERCENT_DEFAULT  10
+#define BATTERY_ALERT_LOW_PERCENT_DEFAULT       25
+#define BATTERY_ALERT_CRITICAL_PERCENT_DEFAULT  15
 
 #ifndef FLOOD_RETRY_PREFIX_SLOTS
   #define FLOOD_RETRY_PREFIX_SLOTS        8
@@ -939,6 +941,15 @@ class CommonCLI {
   void loopBatteryForwarding(bool = false) const {}
   bool handleBatteryForwardingCommand(const char*, char*) { return false; }
 #endif
+#if MESH_ENABLE_EMERGENCY_POWER
+  FILESYSTEM* _emergency_power_fs = nullptr;
+  mesh::emergencypower::State _emergency_power;
+  bool _emergency_radio_sleeping = false;
+  void loadEmergencyPower(FILESYSTEM* fs);
+  bool saveEmergencyPower(const mesh::emergencypower::Settings& settings);
+  void loopEmergencyPower();
+  bool handleEmergencyPowerCommand(const char* command, char* reply);
+#endif
   uint16_t batteryEmptyMv() const;
   uint16_t batteryFullMv() const;
 #if defined(WITH_ESPNOW_BRIDGE) \
@@ -1110,6 +1121,15 @@ public:
 #else
   bool batteryAllowsForward(bool) const { return true; }
   bool batteryAllowsTransmit(const mesh::Packet*) const { return true; }
+#endif
+#if MESH_ENABLE_EMERGENCY_POWER
+  uint32_t emergencySleepMilliseconds();
+  bool emergencyActive() const { return _emergency_power.active(); }
+  void setEmergencyRadioSleeping(bool sleeping) { _emergency_radio_sleeping = sleeping; }
+#else
+  uint32_t emergencySleepMilliseconds() { return 0; }
+  bool emergencyActive() const { return false; }
+  void setEmergencyRadioSleeping(bool) {}
 #endif
   uint8_t batteryPercent(uint16_t mv) const;
   bool hasActiveUserGpioTimer() const;

@@ -222,6 +222,9 @@ void CommonCLI::loop() {
 #if MESH_ENABLE_BATTERY_FORWARDING
   loopBatteryForwarding();
 #endif
+#if MESH_ENABLE_EMERGENCY_POWER
+  loopEmergencyPower();
+#endif
 #if MESH_ENABLE_MORSE_RX
   if (_morse_reply.pending()) {
     const ClientInfo* actor = _acl->getClient(_morse_reply.actor(), PUB_KEY_SIZE);
@@ -1012,6 +1015,9 @@ static void formatSnrDbX4Short(char* dest, size_t dest_len, int16_t snr_x4) {
 void CommonCLI::loadPrefs(FILESYSTEM* fs) {
 #if MESH_ENABLE_BATTERY_FORWARDING
   loadBatteryForwarding(fs);
+#endif
+#if MESH_ENABLE_EMERGENCY_POWER
+  loadEmergencyPower(fs);
 #endif
   mesh::hilStartupTrace("prefs_profiles_begin");
   _radio_profiles.begin(fs, _callbacks->getProfileRadio(), _rtc, true);
@@ -3562,6 +3568,9 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
           })) return;
 #if MESH_ENABLE_BATTERY_FORWARDING
     if (handleBatteryForwardingCommand(command, reply)) return;
+#endif
+#if MESH_ENABLE_EMERGENCY_POWER
+    if (handleEmergencyPowerCommand(command, reply)) return;
 #endif
 #if defined(WITH_UDP_BRIDGE)
     if (handleUDPBridgeCommand(sender_timestamp, command, reply)) return;

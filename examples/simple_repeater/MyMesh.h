@@ -5,6 +5,7 @@
 #include <Mesh.h>
 #include <helpers/PacketFileLoggingConfig.h>
 #include <helpers/PowerSavingDiagnostics.h>
+#include <helpers/EmergencyOtaWork.h>
 #include <helpers/FloodGroupPlainText.h>
 #include <helpers/FloodRuleExtensions.h>
 #include <helpers/GuestLoginSettings.h>
@@ -1277,6 +1278,21 @@ public:
   NodePrefs* getNodePrefs() {
     return &_prefs;
   }
+#if MESH_ENABLE_EMERGENCY_POWER
+  mesh::power::EmergencyOtaWork _emergency_ota_work;
+  CommonCLI& getPowerCLI() { return _cli; }
+  bool emergencyPowerBusy() const {
+#if defined(ENABLE_OTA)
+    if (_emergency_ota_work.busy(mesh::ota::ota_context_if_active(), millis())) return true;
+#endif
+#if MESH_ENABLE_DIRECT_OTA_ADMIN
+    if (direct_ota_admin.awaitingPeer()) return true;
+#endif
+    return hasPendingOtaApply() || _cli.hasPendingRadioSettings()
+        || _cli.hasActiveUserGpioTimer() || dirty_contacts_expiry != 0
+        || (saved_radio_apply_pending && !temp_radio_applied) || _ota_update_at != 0;
+  }
+#endif
   bool isHiddenNode() const {
     return _prefs.advert_interval == 0 && _prefs.flood_advert_interval == 0;
   }
