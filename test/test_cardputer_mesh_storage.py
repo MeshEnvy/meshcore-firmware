@@ -339,19 +339,25 @@ class CardputerMeshStorageTests(unittest.TestCase):
         return MESH_HARNESS.replace("@METHODS@", methods)
 
     def test_history_storage_and_faults(self):
-        self.run_cpp(self.storage_source(), headers={"DataStore.h": FILESYSTEM_STUB})
+        self.run_cpp(self.storage_source(), headers=self.storage_headers())
+
+    def storage_headers(self):
+        # Production includes SD.h for PlatformIO's variant-local dependency
+        # discovery. The filesystem stub supplies every API this source uses;
+        # no concrete SD driver is needed by the native ownership/fault tests.
+        return {"DataStore.h": FILESYSTEM_STUB, "SD.h": "#pragma once\n"}
 
     def test_history_source_bound_negative_control(self):
         source = self.storage_source().replace(
             "msg_len < MAX_MESSAGE_LENGTH && text[msg_len] != '\\0'",
             "text[msg_len] != '\\0' && msg_len < MAX_MESSAGE_LENGTH")
         self.assertNotEqual(source, self.storage_source())
-        self.run_cpp(source, headers={"DataStore.h": FILESYSTEM_STUB}, fails=True)
+        self.run_cpp(source, headers=self.storage_headers(), fails=True)
 
     def test_sd_no_progress_negative_control(self):
         source = self.storage_source().replace("    if (bytesRead <= 0) {\n      break;\n    }\n", "")
         self.assertNotEqual(source, self.storage_source())
-        self.run_cpp(source, headers={"DataStore.h": FILESYSTEM_STUB}, fails=True)
+        self.run_cpp(source, headers=self.storage_headers(), fails=True)
 
     def test_group_admission_and_packet_ownership(self):
         self.run_cpp(self.mesh_source())
