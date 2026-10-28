@@ -6,15 +6,21 @@
 #include "nrf52/SoftDeviceState.h"
 #include "nrf52/SleepCycleState.h"
 #include "nrf52/ShutdownLeds.h"
+// BLE_DFU_DISABLED drops the Bluefruit DFU fallback so slim repeaters do not
+// link a stack they never start. `start ota` returns an error on those builds.
+#ifndef BLE_DFU_DISABLED
 #include "nrf52/BluetoothLed.h"
+#endif
 #include <target.h>
 #include "UserGpioPinPolicy.h"
 #include "PowerSavingDiagnostics.h"
 #include "Nrf52RegulatorPlatform.h"
 
+#ifndef BLE_DFU_DISABLED
 #include <bluefruit.h>
 #include "ble_gap.h"
 #include "ble_hci.h"
+#endif
 #include <nrf.h>
 #include <nrf_nvic.h>
 #include <nrf_soc.h>
@@ -26,10 +32,12 @@
 #include <Adafruit_nRFCrypto.h>
 #endif
 
+#ifndef BLE_DFU_DISABLED
 static BLEDfu bledfu;
 static uint16_t ota_conn_handle = BLE_CONN_HANDLE_INVALID;
 static bool ota_active = false;
 static bool ota_ble_started = false;
+#endif
 
 // Intentional reboot paths share the recovery policy's clean-reset marker.
 // Keep this optional for standalone board/library builds without the policy.
@@ -130,6 +138,7 @@ ResetKind platformResetKind() {
 #error "NRF52_WATCHDOG_TIMEOUT_SECONDS exceeds the nRF52 WDT counter range"
 #endif
 
+#ifndef BLE_DFU_DISABLED
 static void format_ota_reply(char reply[]) {
   uint8_t mac_addr[6];
   memset(mac_addr, 0, sizeof(mac_addr));
@@ -137,6 +146,7 @@ static void format_ota_reply(char reply[]) {
   sprintf(reply, "OK - mac: %02X:%02X:%02X:%02X:%02X:%02X", mac_addr[5], mac_addr[4], mac_addr[3],
           mac_addr[2], mac_addr[1], mac_addr[0]);
 }
+#endif
 
 namespace {
 
@@ -201,6 +211,7 @@ bool NRF52Board::rebootToUf2Bootloader() {
   return true;
 }
 
+#ifndef BLE_DFU_DISABLED
 static void connect_callback(uint16_t conn_handle) {
   ota_conn_handle = conn_handle;
   MESH_DEBUG_PRINTLN("BLE client connected");
@@ -214,6 +225,7 @@ static void disconnect_callback(uint16_t conn_handle, uint8_t reason) {
 
   MESH_DEBUG_PRINTLN("BLE client disconnected");
 }
+#endif
 
 void NRF52Board::begin() {
   startup_reason = BD_STARTUP_NORMAL;
@@ -265,7 +277,9 @@ bool NRF52Board::applyMcuRegulator(mesh::power::RegulatorMode mode) {
 }
 
 void NRF52Board::applyLedPolicy() {
+#ifndef BLE_DFU_DISABLED
   mesh_nrf52::applyBluetoothLedPolicy();
+#endif
 }
 
 void NRF52Board::loop() {
@@ -502,9 +516,11 @@ void NRF52Board::initiateShutdown(uint8_t reason) {
 void NRF52Board::enterSystemOff(uint8_t reason) {
   MESH_DEBUG_PRINTLN("PWRMGT: Entering SYSTEMOFF (%s)", getShutdownReasonString(reason));
 
+#ifndef BLE_DFU_DISABLED
   // This path can run before BLE begin() during boot voltage protection.
   // autoConnLed(false) is safe then too and stops future automatic LED writes.
   Bluefruit.autoConnLed(false);
+#endif
 
   // Record shutdown reason in GPREGRET2
   uint8_t sd_enabled = 0;
@@ -847,10 +863,12 @@ float NRF52Board::getMCUTemperature() {
 }
 
 void NRF52Board::shutdownPeripherals() {
+#ifndef BLE_DFU_DISABLED
   // Stop Bluefruit's LED owner before setting a final OFF latch. Its timer
   // stop is queued, so allow the existing shutdown delay to drain a pending
   // blinky callback before the final write below (also safe before BLE begin).
   Bluefruit.autoConnLed(false);
+#endif
 
   // Power off the display if any
 #ifdef DISPLAY_CLASS
@@ -993,6 +1011,19 @@ bool NRF52Board::getBootloaderVersion(char* out, size_t max_len) {
                                     bootloaderVersion, out, max_len);
 }
 
+#ifdef BLE_DFU_DISABLED
+bool NRF52Board::startOTAUpdate(const char *id, char reply[], bool force_ap) {
+  (void)id;
+  (void)force_ap;
+  strcpy(reply, "Error - BLE DFU disabled");
+  return false;
+}
+
+bool NRF52Board::stopOTAUpdate(char reply[]) {
+  strcpy(reply, "OK - OTA not running");
+  return true;
+}
+#else
 bool NRF52Board::startOTAUpdate(const char *id, char reply[], bool force_ap) {
   (void)id;
   (void)force_ap;
@@ -1085,4 +1116,5 @@ bool NRF52Board::stopOTAUpdate(char reply[]) {
   strcpy(reply, "OK - OTA stopped");
   return true;
 }
+#endif  // BLE_DFU_DISABLED
 #endif
