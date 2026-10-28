@@ -127,8 +127,7 @@ class Nrf52FlashTrimTest(unittest.TestCase):
         companion = Node(ROOT / "examples/companion_radio/MyMesh.cpp")
         result, flags = TRIM.compile_shared_companion_replies(env, companion)
         self.assertIs(result, companion)
-        self.assertEqual(flags["CCFLAGS"], ["-Os", "-flto", "-fno-builtin-strcpy",
-                                          "-fno-builtin-strncpy"])
+        self.assertEqual(flags["CCFLAGS"], ["-Os", "-flto", "-fno-builtin-strcpy"])
         self.assertEqual(env["CCFLAGS"], ["-Os", "-flto"])
         for path in ("examples/simple_repeater/MyMesh.cpp", "test/fixtures/MyMesh.cpp",
                      "src/helpers/CommonCLI.cpp", "src/helpers/RadioProfileCLI.cpp"):
