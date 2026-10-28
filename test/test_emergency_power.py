@@ -186,6 +186,8 @@ class EmergencyPowerTests(unittest.TestCase):
         checked_write = extract_braced(checked, "MESH_SETTINGS_FILE_SHARED inline AtomicFileWriter::Outcome writeCheckedSettingsFile(")
         prefix = POLICY_PREFIX + r'''
 #include <helpers/BatteryForwarding.h>
+#include <helpers/OperatingSchedule.h>
+#include <helpers/FleetLocation.h>
 #include <cstdio>
 #include <map>
 #include <string>
@@ -247,16 +249,35 @@ struct Clock {
   uint32_t time = epoch + 1800;
   uint32_t getCurrentTime() { return time; }
 };
+struct Prefs {
+  double node_lat = 0, node_lon = 0;
+};
+struct Sensors {
+  bool cached = false;
+  double latitude = 0, longitude = 0;
+  mutable unsigned reads = 0;
+  bool getCachedGpsPosition(double& lat, double& lon) const {
+    ++reads;
+    lat = latitude; lon = longitude;
+    return cached;
+  }
+};
+static Prefs defaultPrefs;
+static Sensors defaultSensors;
 class CommonCLI {
 public:
   Board* _board;
   Clock* _rtc;
+  Prefs* _prefs;
+  Sensors* _sensors;
   mesh::batteryforward::Settings _battery_forward_settings;
 ''' + private + "\n" + public + r'''
   uint16_t batteryEmptyMv() const;
   uint16_t batteryFullMv() const;
   uint8_t batteryPercent(uint16_t) const;
-  CommonCLI(Board& board, Clock& rtc) : _board(&board), _rtc(&rtc) {}
+  CommonCLI(Board& board, Clock& rtc, Prefs& prefs = defaultPrefs,
+            Sensors& sensors = defaultSensors)
+      : _board(&board), _rtc(&rtc), _prefs(&prefs), _sensors(&sensors) {}
 };
 ''' + battery_methods + "\n" + implementation
         return prefix
@@ -378,7 +399,8 @@ public:
   cli.setEmergencyRadioSleeping(true);
   assert(!cli.emergencyActive() && cli.emergencySleepMilliseconds() == 0);
   assert(board.reads == 0 && fs.writes == 0);
-  static_assert(sizeof(CommonCLI) == sizeof(Board*) + sizeof(Clock*) + 8,
+  static_assert(sizeof(CommonCLI) == sizeof(Board*) + sizeof(Clock*)
+                + sizeof(Prefs*) + sizeof(Sensors*) + 8,
                 "disabled emergency policy must not retain its scheduler or filesystem");
 ''', prefix, flags=("-DSTM32_PLATFORM", "-DMESH_ENABLE_EMERGENCY_POWER=0"))
 

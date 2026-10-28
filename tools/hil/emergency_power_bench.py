@@ -328,7 +328,7 @@ def hold_network_clock(console):
         value = reply_value(console.command("set wifi off force", allow_error=True))
         if value.startswith("OK"):
             break
-        if not value.startswith("Error: emergency sleep") or time.monotonic() > deadline:
+        if not value.startswith(("Error: emergency sleep", "Error: scheduled sleep")) or time.monotonic() > deadline:
             raise RuntimeError("WiFi runtime clock isolation was rejected")
         time.sleep(.1)  # Wait for the completed awake request to resume its backend.
     while True:

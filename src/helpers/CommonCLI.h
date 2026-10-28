@@ -21,6 +21,9 @@
 #include <helpers/BatteryForwarding.h>
 #include <helpers/EmergencyPowerConfig.h>
 #include <helpers/EmergencyPowerPolicy.h>
+#if MESH_ENABLE_EMERGENCY_POWER
+#include <helpers/OperatingSchedule.h>
+#endif
 #if defined(NRF52_PLATFORM) && defined(OTA_SD_STORE)
 #include <helpers/SdCardCLI.h>
 #endif
@@ -948,6 +951,12 @@ class CommonCLI {
   bool saveEmergencyPower(const mesh::emergencypower::Settings& settings);
   void loopEmergencyPower();
   bool handleEmergencyPowerCommand(const char* command, char* reply);
+  FILESYSTEM* _power_schedule_fs = nullptr;
+  mesh::powerschedule::State _power_schedule;
+  void loadPowerSchedule(FILESYSTEM* fs);
+  bool savePowerSchedule(const mesh::powerschedule::Settings& settings);
+  bool handlePowerScheduleCommand(const char* command, char* reply);
+  uint32_t powerScheduleSleepMilliseconds(uint32_t epoch);
 #endif
   uint16_t batteryEmptyMv() const;
   uint16_t batteryFullMv() const;

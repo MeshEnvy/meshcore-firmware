@@ -12,6 +12,7 @@ from test_replay_reset_integration import extract_braced
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS = r'''
 #include <helpers/EmergencyPowerRuntime.h>
+#include <helpers/OperatingSchedule.h>
 #include <cassert>
 #include <cstdlib>
 #include <initializer_list>
@@ -103,6 +104,21 @@ struct CLI {
     events.push_back(value ? "status:sleep" : "status:awake"); radioSleeping = value;
   }
 };
+struct ScheduleCLI {
+  mesh::powerschedule::State schedule;
+  uint32_t utc = 1577836800;
+  bool location = false;
+  int32_t latitude = 0, longitude = 0;
+  bool radioSleeping = false;
+  // Standalone scheduling is deliberately not an emergency activation.
+  bool emergencyActive() const { return false; }
+  uint32_t emergencySleepMilliseconds() {
+    return schedule.sleepMilliseconds(utc, location, latitude, longitude);
+  }
+  void setEmergencyRadioSleeping(bool value) {
+    events.push_back(value ? "status:sleep" : "status:awake"); radioSleeping = value;
+  }
+};
 struct Fixture {
   Wireless wireless;
   Mesh mesh;
@@ -125,7 +141,7 @@ static void command(Control& c, const char* text, uint32_t now = 100) {
 static void refused(Control& c, const char* text) {
   char reply[160] = {};
   assert(c.handle(text, reply, sizeof(reply), 1000, Independent));
-  assert(strstr(reply, "emergency sleep") && !c.pending());
+  assert(strstr(reply, "scheduled sleep") && !c.pending());
 }
 int main(int argc, char** argv) {
   assert(argc == 2);
@@ -341,6 +357,53 @@ int main(int argc, char** argv) {
     cli.budget = 0; assert(!runtime.service(mesh, radio, board, cli, false));
     for (const auto& event : events) assert(event.find("fem:") == std::string::npos);
     assert(levels[SX126X_POWER_EN] == HIGH);
+  } else if (scenario == 11) {
+    Wireless wireless; control().begin(wireless);
+    Mesh mesh; Radio radio; Board board; ScheduleCLI cli;
+    mesh::power::EmergencyPowerRuntime runtime;
+    mesh::powerschedule::Settings settings;
+    settings.hours = true; settings.startMinute = 8 * 60; settings.endMinute = 18 * 60;
+    cli.schedule.begin(settings);
+    cli.utc += 7 * 3600;
+    assert(!cli.emergencyActive());
+    assert(runtime.service(mesh, radio, board, cli, false));
+    assert(!mesh.available && cli.radioSleeping && wireless.active == 0);
+    assert(board.lastBudget == 10000);
+    events.clear(); cli.utc += 3600;
+    assert(!runtime.service(mesh, radio, board, cli, false));
+    assert(mesh.available && !cli.radioSleeping && wireless.active == All);
+    assert((events == std::vector<std::string>{"radio:wake", "mesh:on", "status:awake",
+        "espnow:on", "wifi:on", "ble:on"}));
+    cli.utc += 10 * 3600;
+    events.clear();
+    assert(!runtime.service(mesh, radio, board, cli, true)); // Live reply/TX gets to finish.
+    assert(mesh.available && events.empty());
+    assert(runtime.service(mesh, radio, board, cli, false));
+    assert(!mesh.available && wireless.active == 0);
+    board.ota = true;
+    assert(!runtime.service(mesh, radio, board, cli, false));
+    assert(mesh.available && wireless.active == All);
+  } else if (scenario == 12) {
+    Wireless wireless; control().begin(wireless);
+    Mesh mesh; Radio radio; Board board; ScheduleCLI cli;
+    mesh::power::EmergencyPowerRuntime runtime;
+    mesh::powerschedule::Settings settings; settings.daylight = true;
+    cli.schedule.begin(settings);
+    cli.location = true; cli.latitude = 47600000; cli.longitude = -122300000;
+    cli.utc = 1782000000 + 8 * 3600;
+    assert(!cli.emergencyActive());
+    assert(runtime.service(mesh, radio, board, cli, false));
+    assert(!mesh.available && cli.radioSleeping && wireless.active == 0);
+    events.clear(); cli.utc = 1782000000 + 20 * 3600;
+    assert(!runtime.service(mesh, radio, board, cli, false));
+    assert(mesh.available && !cli.radioSleeping && wireless.active == All);
+    assert((events == std::vector<std::string>{"radio:wake", "mesh:on", "status:awake",
+        "espnow:on", "wifi:on", "ble:on"}));
+    cli.utc = 1782000000 + 8 * 3600;
+    assert(runtime.service(mesh, radio, board, cli, false));
+    cli.location = false;
+    assert(!runtime.service(mesh, radio, board, cli, false)); // Unknown position leaves access available.
+    assert(mesh.available && wireless.active == All);
   } else assert(false);
 }
 '''
@@ -421,6 +484,12 @@ class EmergencyPowerRuntimeTests(unittest.TestCase):
 
     def test_rak3401_actual_fem_pin_restores_before_radio_wake_without_cutting_shared_rail(self):
         self.scenario(10)
+
+    def test_standalone_daily_hours_sleep_and_restore_rf_wireless_without_emergency_mode(self):
+        self.scenario(11)
+
+    def test_standalone_daylight_sleep_and_position_loss_restore_rf_wireless(self):
+        self.scenario(12)
 
     def test_room_maintenance_runs_before_emergency_early_return(self):
         source = (ROOT / "examples/simple_room_server/main.cpp").read_text()

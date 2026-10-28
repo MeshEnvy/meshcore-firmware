@@ -3172,8 +3172,9 @@ LoRa commands must arrive during an awake window. Local serial commands remain
 available through maintenance wakes while the radio sleeps.
 
 `get power.emergency` reports the mode, battery estimate, desired `window`,
-actual radio ownership, seconds until the next awake window, and remaining
-hold. With an implausible clock timestamp it reports `clock=uptime` and follows
+actual radio ownership, scheduled wake/check delay (`wake`), and remaining
+hold. Its window includes any enabled operating-hours or daylight filters.
+With an implausible clock timestamp it reports `clock=uptime` and follows
 the same 15/45-minute cycle from boot. Keep the clock set to UTC: a plausible
 timestamp alone does not prove it is synchronized. Queued
 future traffic does not keep a critically low node awake indefinitely.
@@ -3182,6 +3183,66 @@ This schedule uses resumable timed sleep, preserving identity and settings.
 WiFi/ESP-NOW services are temporarily stopped and their previous live subset
 is restored when the node wakes. Companion builds and flash-constrained
 profiles that omit battery-forwarding controls do not add this feature.
+
+#### Operating hours and daylight
+
+The same supported infrastructure images can sleep outside daylight or a
+daily time window, even when emergency mode is inactive. Both filters default
+to **off** and are saved across reboots. If both are enabled, the node must be
+inside the time window **and** daylight. Active emergency mode further limits
+operation to the first 15 minutes of each UTC hour.
+
+For daylight-only operation, starting from the defaults:
+
+```text
+set power.daylight on
+get power.schedule
+```
+
+Daylight is calculated from the UTC clock and the node's saved `lat`/`lon`,
+falling back to a fresh cached GPS fix when the saved position is unset. For
+a fixed installation, saved coordinates keep the schedule independent of GPS
+freshness. This does not start GPS. Sunrise and sunset are approximate; cloud
+cover, panel output and charging status do not determine this schedule. Set
+the node's position and synchronize its UTC clock before relying on daylight
+control.
+
+For a daily operating window:
+
+```text
+set power.hours 08:00-18:00
+```
+
+The start is included and the end excluded. Overnight windows such as
+`22:00-06:00` work, and an end of `24:00` is accepted. Equal start/end times
+are rejected; use `set power.hours off` for unrestricted hours.
+Times use UTC by default. `set power.hours.offset -420`, for example, makes
+the window use UTC-7. The offset is minutes east of UTC, from -720 to +840;
+it is fixed and does not adjust for daylight saving time. It affects only the
+hour window, not the UTC clock, solar calculation or emergency hourly cycle.
+
+To combine daylight with the emergency hourly duty cycle:
+
+```text
+set power.daylight on
+set power.emergency on
+```
+
+`get power.schedule` shows the combined policy. Its `check` value is the next
+candidate schedule decision; another filter may keep the node asleep afterward.
+The individual settings also have `get power.daylight`, `get power.hours` and
+`get power.hours.offset` readbacks. `set power.schedule off` disables both
+operating filters; it does not disable manual emergency mode or automatic
+low-battery protection.
+
+An unknown clock leaves the time-based filters open. A missing valid position
+leaves the daylight filter open; an independently configured hours filter
+still applies. Status reports the unavailable input rather than guessing.
+The existing emergency fallback to a boot-relative cycle remains in force.
+`set power.awake <minutes>` overrides all these schedules temporarily;
+hard low-voltage protection and existing active-operation sleep deferrals
+remain in force. These commands use the same USB/admin CLI and authorized
+management-command paths as `power.emergency`.
 
 #### Set the battery percentage voltage range
 

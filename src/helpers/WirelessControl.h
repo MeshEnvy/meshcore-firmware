@@ -155,7 +155,7 @@ public:
     }
 #if MESH_ENABLE_EMERGENCY_POWER
     if (emergency_suspended_) {
-      snprintf(reply, size, "Error: emergency sleep; use set power.awake <minutes> first");
+      snprintf(reply, size, "Error: scheduled sleep; use set power.awake <minutes> first");
       return true;
     }
 #endif
