@@ -10,6 +10,9 @@
 #define ESP32_PLATFORM
 #define ESP_PLATFORM
 #define WIFI_SSID ""
+struct HardwareSerial {};
+HardwareSerial Serial;
+#include <helpers/UsbMode.h>
 #include <helpers/esp32/ManagementPassword.h>
 #include <helpers/CLICommandUtils.h>
 #include <helpers/WebConfigBatch.h>

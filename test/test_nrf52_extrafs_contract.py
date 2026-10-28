@@ -1113,27 +1113,36 @@ class Nrf52ExtraFsContractTest(unittest.TestCase):
             with self.subTest(key_bytes=key_bytes):
                 channel_update = function_body(mesh,
                     f"if (cmd_frame[0] == CMD_SET_CHANNEL && len >= 2 + 32 + {key_bytes})")
+                if key_bytes == 16:
+                    self.assertEqual(channel_update.strip(),
+                                     "handleSetChannelFrame(cmd_frame);")
+                    channel_update = function_body(mesh,
+                        "void MyMesh::handleSetChannelFrame(")
                 snapshot_at = channel_update.index(
-                    "getChannelForSave(channel_idx, previous)"
+                    "const bool have_previous = getChannelForSave(channel_idx, previous)"
+                    if key_bytes == 16 else "getChannelForSave(channel_idx, previous)"
                 )
                 self.assertNotIn("getChannel(channel_idx, previous)", channel_update)
                 mutate_at = channel_update.index(
                     "setChannel(channel_idx, channel)"
                 )
                 save_at = channel_update.index("saveChannels()")
-                rollback_at = channel_update.index(
-                    "setChannel(channel_idx, previous)", save_at
-                )
-                error_at = channel_update.index(
-                    "writeErrFrame(ERR_CODE_FILE_IO_ERROR)", rollback_at
-                )
+                # The legacy handler also compensates a failed radio-preset
+                # commit. Inspect the channel-save failure branch itself so
+                # that separate rollback cannot mask a missing ordinary one.
+                save_failure = function_body(channel_update,
+                    "} else {" if key_bytes == 16
+                    else "else if (!saveChannels())")
+                rollback_at = save_failure.index("setChannel(channel_idx, previous)")
+                error_at = save_failure.index(
+                    "writeErrFrame(ERR_CODE_FILE_IO_ERROR)")
                 ok_at = channel_update.index("writeOKFrame()")
 
                 self.assertLess(snapshot_at, mutate_at)
                 self.assertLess(mutate_at, save_at)
                 self.assertLess(save_at, ok_at)
-                self.assertLess(save_at, rollback_at)
                 self.assertLess(rollback_at, error_at)
+                self.assertNotIn("writeOKFrame()", save_failure)
                 self.assertEqual(channel_update.count("writeOKFrame()"), 1)
 
     def test_absent_advert_delete_avoids_bucket_rewrite_without_legacy_cache(self):
