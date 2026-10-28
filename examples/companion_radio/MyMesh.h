@@ -332,6 +332,7 @@ public:
   // constrained STM32 targets; merging their branches increases code size.
   __attribute__((noinline))
 #endif
+  void handleSetChannelFrame(const uint8_t* cmd_frame);
   void handleCmdFrame(size_t len);
   bool advert();
   void enterCLIRescue();

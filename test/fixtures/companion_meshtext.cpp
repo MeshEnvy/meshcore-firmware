@@ -206,6 +206,7 @@ public:
   void writeErrFrame(uint8_t value) { error=value; }
   void writeOKFrame() { ok=true; }
   bool sendGroupMessage(uint32_t,mesh::GroupChannel&,const char*,const char*,int) { ++meshcore_sends; return true; }
+  void handleSetChannelFrame(const uint8_t*);
   void command(uint8_t* cmd_frame,int len);
   void commit(int index,const ChannelDetails& value) {
     assert(setChannel(index,value)); _mt_profile_dirty=true; refreshMeshtextProfile();

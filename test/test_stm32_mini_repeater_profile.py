@@ -39,6 +39,15 @@ def read_config(path):
 
 
 class FakeEnvironment(dict):
+    def AddBuildMiddleware(self, callback, pattern):
+        self.middleware = getattr(self, "middleware", []) + [(callback, pattern)]
+
+    def subst(self, value):
+        return value.replace("$PROJECT_DIR", str(ROOT))
+
+    def Object(self, node, **flags):
+        return node, flags
+
     def Append(self, **values):
         for name, items in values.items():
             self.setdefault(name, []).extend(items)
@@ -126,6 +135,29 @@ class MiniRepeaterProfileTest(unittest.TestCase):
                 expected = ["keep-existing-flag", *(LINK_SIZE_FLAGS if target == TARGET else ())]
                 self.assertEqual(environment["LINKFLAGS"], expected)
                 self.assertEqual(set(environment), {"PIOENV", "LINKFLAGS"})
+                self.assertEqual(len(getattr(environment, "middleware", [])),
+                                 int(target == TARGET))
+
+    def test_shared_reply_copy_policy_changes_only_the_exact_mini_cli_object(self):
+        class Node:
+            def __init__(self, path): self.path = path
+            def srcnode(self): return self
+            def get_abspath(self): return str(self.path)
+
+        environment = FakeEnvironment(PIOENV=TARGET, CCFLAGS=["-Oz", "-flto"])
+        runpy.run_path(str(ROOT / "scripts/stm32_mini_size.py"), init_globals={
+            "env": environment, "Import": lambda name: self.assertEqual(name, "env")})
+        callback, pattern = environment.middleware[0]
+        self.assertEqual(pattern, "*CommonCLI.cpp")
+        cli = Node(ROOT / "src/helpers/CommonCLI.cpp")
+        same, flags = callback(environment, cli)
+        self.assertIs(same, cli)
+        self.assertEqual(flags["CCFLAGS"], ["-Oz", "-flto", "-fno-builtin-strcpy"])
+        self.assertEqual(environment["CCFLAGS"], ["-Oz", "-flto"])
+        for path in ("test/fixtures/CommonCLI.cpp", "src/helpers/RadioProfileCLI.cpp",
+                     "src/helpers/UsbLogging.cpp"):
+            other = Node(ROOT / path)
+            self.assertIs(callback(environment, other), other)
 
     def test_capability_contract_declares_only_exact_mini_repeater_omissions(self):
         command = r'''

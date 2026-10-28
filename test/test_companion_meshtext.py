@@ -60,7 +60,7 @@ class CompanionMeshtextTest(unittest.TestCase):
                       "static bool isEmergencyNoticeChannelName(",
                       "void MyMesh::seedEmergencyChannelNotice(",
                       "void MyMesh::servicePendingChannelNotices(", "bool MyMesh::queueChannelText(",
-                      "bool MyMesh::saveAdvertName(")
+                      "bool MyMesh::saveAdvertName(", "void MyMesh::handleSetChannelFrame(")
         methods = "\n".join(body(source, signature) for signature in signatures)
         utils_source = (ROOT / "src/Utils.cpp").read_text(encoding="utf-8")
         # CLI keys use the production strict hexadecimal parser as well.

@@ -6426,6 +6426,105 @@ bool MyMesh::handleDirectOtaCommand(const char* command, uint32_t timestamp,
 }
 #endif
 
+__attribute__((noinline))
+void MyMesh::handleSetChannelFrame(const uint8_t* cmd_frame) {
+  uint8_t channel_idx = cmd_frame[1];
+  ChannelDetails previous{};
+  ChannelDetails channel;
+  StrHelper::strncpy(channel.name, (char *)&cmd_frame[2], 32);
+  memset(channel.channel.secret, 0, sizeof(channel.channel.secret));
+  memcpy(channel.channel.secret, &cmd_frame[2 + 32], 16); // NOTE: only 128-bit supported
+  const auto alias = parseCompanionChannelAlias(channel.name);
+  if (alias.kind == CompanionChannelKind::Invalid) {
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    return;
+  }
+#if MESH_ENABLE_MESHTEXT_CHAT
+  // Legacy apps fetch only 16 bytes. A label-only edit must not silently
+  // truncate a provisioned MT AES-256 key to AES-128. An explicit 32-byte SET
+  // (zero upper half for AES-128) is the unambiguous way to replace that key.
+  if (alias.kind == CompanionChannelKind::Meshtext
+      && getChannelForSave(channel_idx, previous) && isMeshtextChannel(previous)
+      && !memcmp(channel.channel.secret, previous.channel.secret, 16)) {
+    memcpy(channel.channel.secret + 16, previous.channel.secret + 16, 16);
+  }
+  if (!validateMeshtextChannelChange(channel_idx, channel)) {
+    writeErrFrame(ERR_CODE_BAD_STATE); // Conflicting preset, manual RF, region or busy owner.
+    return;
+  }
+#else
+  if (alias.kind == CompanionChannelKind::Meshtext && isAliasRadio2Defined()) {
+    writeErrFrame(ERR_CODE_UNSUPPORTED_CMD); // Meshtext transport not implemented yet.
+    return;
+  }
+#endif
+  const bool have_previous = getChannelForSave(channel_idx, previous);
+  ChannelDetails wire_channel = channel;
+  ChannelDetails previous_wire_channel = previous;
+  resolveChannelAlias(wire_channel);
+  if (have_previous) resolveChannelAlias(previous_wire_channel);
+  if (have_previous && channel.name[0] != 0 && previous.name[0] != 0
+      && !memcmp(wire_channel.channel.secret, previous_wire_channel.channel.secret, sizeof(channel.channel.secret))) {
+    channel.channel.tx_radio = previous.channel.tx_radio;
+  }
+  const char* preset = companionChannelRadio2Preset(channel.name);
+  const char* previous_preset = companionChannelRadio2Preset(previous.name);
+  // A join or rename selects the saved preset, just like set radio2. App
+  // replays/key edits must not undo a later manual Off or custom RF setting.
+  const bool setup_preset = have_previous && preset
+      && (!previous_preset || strcmp(preset, previous_preset));
+  if (setup_preset) {
+#if !MESH_ENABLE_MESHTEXT_CHAT
+    // Even without the foreign-protocol backend, do not turn old fallback
+    // mt- channels into inactive protocol requests as a hidden side effect.
+    for (int i = 0; i < MAX_GROUP_CHANNELS; ++i) {
+      ChannelDetails other;
+      if (i != channel_idx && BaseChatMesh::getChannel(i, other)
+          && parseCompanionChannelAlias(other.name).kind == CompanionChannelKind::Meshtext) {
+        writeErrFrame(ERR_CODE_BAD_STATE);
+        return;
+      }
+    }
+#endif
+    if (!_radio_profiles.stageChannelPreset(preset)) {
+      writeErrFrame(ERR_CODE_BAD_STATE);
+      return;
+    }
+  }
+  if (!have_previous
+      || !setChannel(channel_idx, channel)) {
+    if (setup_preset) _radio_profiles.finishChannelPreset(false);
+    writeErrFrame(ERR_CODE_NOT_FOUND); // bad channel_idx
+  } else if (saveChannels()) {
+    if (setup_preset && !_radio_profiles.finishChannelPreset(true)) {
+      // Never report a complete setup when the RF image did not commit.
+      // Restore the channel when storage permits; report failure even if
+      // an indeterminate channels write has quarantined further saves.
+      setChannel(channel_idx, previous);
+      saveChannels();
+      _radio_profiles.finishChannelPreset(false);
+      writeErrFrame(ERR_CODE_FILE_IO_ERROR);
+      return;
+    }
+#if MESH_ENABLE_MESHTEXT_CHAT
+    _mt_seen.clear();
+    _mt_profile_dirty = true;
+    refreshMeshtextProfile();
+#endif
+    writeOKFrame();
+    // Local history seed only after the durable save and its acknowledgement.
+    seedEmergencyChannelNotice(channel_idx, previous);
+  } else {
+    // AtomicFileWriter preserves the last complete channels file. Keep the
+    // live table consistent with it when a full or failing filesystem cannot
+    // commit this update, and never acknowledge a change that will disappear
+    // after reboot.
+    setChannel(channel_idx, previous);
+    if (setup_preset) _radio_profiles.finishChannelPreset(false);
+    writeErrFrame(ERR_CODE_FILE_IO_ERROR);
+  }
+}
+
 void MyMesh::handleCmdFrame(size_t len) {
   if (len == 0) {
     writeErrFrame(ERR_CODE_ILLEGAL_ARG);
@@ -7453,101 +7552,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
 #endif
   } else if (cmd_frame[0] == CMD_SET_CHANNEL && len >= 2 + 32 + 16) {
-    uint8_t channel_idx = cmd_frame[1];
-    ChannelDetails previous{};
-    ChannelDetails channel;
-    StrHelper::strncpy(channel.name, (char *)&cmd_frame[2], 32);
-    memset(channel.channel.secret, 0, sizeof(channel.channel.secret));
-    memcpy(channel.channel.secret, &cmd_frame[2 + 32], 16); // NOTE: only 128-bit supported
-    const auto alias = parseCompanionChannelAlias(channel.name);
-    if (alias.kind == CompanionChannelKind::Invalid) {
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-      return;
-    }
-#if MESH_ENABLE_MESHTEXT_CHAT
-    // Legacy apps fetch only 16 bytes. A label-only edit must not silently
-    // truncate a provisioned MT AES-256 key to AES-128. An explicit 32-byte SET
-    // (zero upper half for AES-128) is the unambiguous way to replace that key.
-    if (alias.kind == CompanionChannelKind::Meshtext
-        && getChannelForSave(channel_idx, previous) && isMeshtextChannel(previous)
-        && !memcmp(channel.channel.secret, previous.channel.secret, 16)) {
-      memcpy(channel.channel.secret + 16, previous.channel.secret + 16, 16);
-    }
-    if (!validateMeshtextChannelChange(channel_idx, channel)) {
-      writeErrFrame(ERR_CODE_BAD_STATE); // Conflicting preset, manual RF, region or busy owner.
-      return;
-    }
-#else
-    if (alias.kind == CompanionChannelKind::Meshtext && isAliasRadio2Defined()) {
-      writeErrFrame(ERR_CODE_UNSUPPORTED_CMD); // Meshtext transport not implemented yet.
-      return;
-    }
-#endif
-    const bool have_previous = getChannelForSave(channel_idx, previous);
-    ChannelDetails wire_channel = channel;
-    ChannelDetails previous_wire_channel = previous;
-    resolveChannelAlias(wire_channel);
-    if (have_previous) resolveChannelAlias(previous_wire_channel);
-    if (have_previous && channel.name[0] != 0 && previous.name[0] != 0
-        && !memcmp(wire_channel.channel.secret, previous_wire_channel.channel.secret, sizeof(channel.channel.secret))) {
-      channel.channel.tx_radio = previous.channel.tx_radio;
-    }
-    const char* preset = companionChannelRadio2Preset(channel.name);
-    const char* previous_preset = companionChannelRadio2Preset(previous.name);
-    // A join or rename selects the saved preset, just like set radio2. App
-    // replays/key edits must not undo a later manual Off or custom RF setting.
-    const bool setup_preset = have_previous && preset
-        && (!previous_preset || strcmp(preset, previous_preset));
-    if (setup_preset) {
-#if !MESH_ENABLE_MESHTEXT_CHAT
-      // Even without the foreign-protocol backend, do not turn old fallback
-      // mt- channels into inactive protocol requests as a hidden side effect.
-      for (int i = 0; i < MAX_GROUP_CHANNELS; ++i) {
-        ChannelDetails other;
-        if (i != channel_idx && BaseChatMesh::getChannel(i, other)
-            && parseCompanionChannelAlias(other.name).kind == CompanionChannelKind::Meshtext) {
-          writeErrFrame(ERR_CODE_BAD_STATE);
-          return;
-        }
-      }
-#endif
-      if (!_radio_profiles.stageChannelPreset(preset)) {
-        writeErrFrame(ERR_CODE_BAD_STATE);
-        return;
-      }
-    }
-    if (!have_previous
-        || !setChannel(channel_idx, channel)) {
-      if (setup_preset) _radio_profiles.finishChannelPreset(false);
-      writeErrFrame(ERR_CODE_NOT_FOUND); // bad channel_idx
-    } else if (saveChannels()) {
-      if (setup_preset && !_radio_profiles.finishChannelPreset(true)) {
-        // Never report a complete setup when the RF image did not commit.
-        // Restore the channel when storage permits; report failure even if
-        // an indeterminate channels write has quarantined further saves.
-        setChannel(channel_idx, previous);
-        saveChannels();
-        _radio_profiles.finishChannelPreset(false);
-        writeErrFrame(ERR_CODE_FILE_IO_ERROR);
-        return;
-      }
-#if MESH_ENABLE_MESHTEXT_CHAT
-      _mt_seen.clear();
-      _mt_profile_dirty = true;
-      refreshMeshtextProfile();
-#endif
-      writeOKFrame();
-      // Local history seed only after the durable save and its acknowledgement.
-      seedEmergencyChannelNotice(channel_idx, previous);
-    } else {
-      // AtomicFileWriter preserves the last complete channels file. Keep the
-      // live table consistent with it when a full or failing filesystem cannot
-      // commit this update, and never acknowledge a change that will disappear
-      // after reboot.
-      setChannel(channel_idx, previous);
-      if (setup_preset) _radio_profiles.finishChannelPreset(false);
-      writeErrFrame(ERR_CODE_FILE_IO_ERROR);
-    }
+    handleSetChannelFrame(cmd_frame);
   } else if (cmd_frame[0] == CMD_SIGN_START) {
     BaseSerialInterface* signing_route = _serial->captureReplyRoute();
     if (signing_route == NULL) {

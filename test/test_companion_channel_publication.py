@@ -88,6 +88,7 @@ def publication_fixture(work, missing_latch, skip_noop_save=False):
     methods = recovery + "\n" + route
     methods += "\n" + method(store, "void DataStore::loadChannels(")
     methods += "\n" + save + "\n" + method(store, "bool DataStore::hasIncompleteContactLoad(")
+    methods += "\n" + method(mesh, "void MyMesh::handleSetChannelFrame(")
     binary_start = mesh.index("  } else if (cmd_frame[0] == CMD_SET_CHANNEL && len >= 2 + 32 + 16) {")
     binary_end = mesh.index("  } else if (cmd_frame[0] == CMD_SIGN_START)", binary_start)
     methods += ("\nvoid MyMesh::applyChannelFrame(const uint8_t* cmd_frame, size_t len) {\n"
@@ -129,6 +130,7 @@ struct StrHelper {
  void writeOKFrame() { binary_ack = true; }
  void seedEmergencyChannelNotice(uint8_t, const ChannelDetails&) {}
  bool resolveChannelAlias(ChannelDetails&) const { return true; }
+ void handleSetChannelFrame(const uint8_t*);
  void applyChannelFrame(const uint8_t*, size_t);
 """, 1)
     source = source.replace("@RECOVERY_METHOD@", method(header, "  bool contactRecoveryPending() const"))

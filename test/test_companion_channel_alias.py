@@ -404,6 +404,7 @@ struct Serial {
 '''
 
 COMMAND_MEMBERS = r'''
+  void handleSetChannelFrame(const uint8_t*);
   Serial serial; Serial* _serial = &serial;
   struct ProfileSetup {
     bool stage_ok = true, commit_ok = true, pending = false;
@@ -1027,6 +1028,7 @@ class CompanionChannelAliasTest(unittest.TestCase):
             "if (cmd_frame[0] == CMD_SET_CHANNEL && len >= 2 + 32 + 32)",
             "if (cmd_frame[0] == CMD_SET_CHANNEL && len >= 2 + 32 + 16)",
         )
+        methods += "\n" + body(companion, "void MyMesh::handleSetChannelFrame(")
         branches = " else ".join(body(companion, signature) for signature in command_signatures)
         macros = ("CMD_GET_CHANNEL", "CMD_SET_CHANNEL", "RESP_CODE_CHANNEL_INFO",
                   "ERR_CODE_UNSUPPORTED_CMD", "ERR_CODE_NOT_FOUND", "ERR_CODE_FILE_IO_ERROR",
@@ -1166,6 +1168,7 @@ int main() {
                 "MyMesh::Frame& MyMesh::heldDMFrameAt(",
                 "void MyMesh::removeHeldOneKeyDM(",
             )) + "\n#endif\n"
+        methods += "\n" + body(companion, "void MyMesh::handleSetChannelFrame(")
         branches = " else ".join(body(companion, signature) for signature in (
             "if (cmd_frame[0] == CMD_GET_CHANNEL && len >= 2)",
             "if (cmd_frame[0] == CMD_SET_CHANNEL && len >= 2 + 32 + 32)",

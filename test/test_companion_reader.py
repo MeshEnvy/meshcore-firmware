@@ -392,6 +392,7 @@ int main() {
 #include <cstring>
 #include <string>
 #include "battery_calibration_cli_stub.h"
+#include "usb_mode_console.h"
 struct BatteryBoard {} board;
 struct Radio { bool active = false; };
 namespace mesh {

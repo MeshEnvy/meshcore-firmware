@@ -29,6 +29,7 @@ HARNESS = r'''
 #include <helpers/FleetCommand.h>
 #include <helpers/TempRadioReplyBarrier.h>
 #include "regulator_cli_stub.h"
+#include "usb_mode_console.h"
 #include <helpers/CompanionFrameLimits.h>
 #include <helpers/HostKissCodec.h>
 #include <openssl/evp.h>
@@ -364,6 +365,10 @@ static void compactBroadcast(MyMesh& node, const char* command) {
 
 int main(int argc, char** argv) {
   assert(argc == 2);
+  MyMesh usb_probe;
+  char usb_reply[160] = {};
+  assert(usb_probe.handleCommand("AB|get usb.mode", 0, usb_reply));
+  assert(std::string(usb_reply) == "AB|usb.mode unknown" && usb_probe.queued == 0);
   const std::string scenario = argv[1];
   MyMesh node; char reply[160] = {};
   if (scenario == "local_boundary") {
@@ -1513,6 +1518,7 @@ class CompanionFleetControlTests(unittest.TestCase):
 #include <cstring>
 #include <helpers/FleetCommand.h>
 #include "regulator_cli_stub.h"
+#include "usb_mode_console.h"
 static_assert(MESH_ENABLE_FLEET_CONTROL == 0, "compact profile must disable fleet");
 // No channels, clock, signing identity, codec definitions or sendGroupData.
 class MyMesh {
