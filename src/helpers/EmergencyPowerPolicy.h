@@ -44,18 +44,19 @@ inline bool decode(const uint8_t* in, size_t size, Settings& settings) {
 }
 
 struct State {
-  Settings settings;
+  // Runtime only: keep aligned timers together without packing accesses.
   uint32_t sampledAt = 0;
-  uint16_t millivolts = 0;
-  uint8_t percentage = 0;
-  bool sampled = false;
-  bool valid = false;
-  bool lowBattery = false;
   uint32_t phaseMs = 0;
   uint32_t lastTick = 0;
   uint32_t activationStarted = 0;
   uint32_t awakeStarted = 0;
   uint32_t awakeDuration = 0;
+  uint16_t millivolts = 0;
+  uint8_t percentage = 0;
+  Settings settings;
+  bool sampled = false;
+  bool valid = false;
+  bool lowBattery = false;
   bool activationHold = false;
 
   void begin(const Settings& loaded, uint32_t now) {
@@ -118,5 +119,7 @@ struct State {
     return phase < AwakeWindowMs ? 0 : HourMs - phase;
   }
 };
+static_assert(sizeof(State) <= 32, "Emergency timers must retain their compact RAM layout");
+static_assert(alignof(State) >= alignof(uint32_t), "Emergency timers must remain aligned");
 
 }} // namespace mesh::emergencypower

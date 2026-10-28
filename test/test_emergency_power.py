@@ -174,6 +174,7 @@ class EmergencyPowerTests(unittest.TestCase):
             start = header.index(marker)
             return header[start:header.index("#endif", start) + len("#endif")]
         private = api_block("#if MESH_ENABLE_EMERGENCY_POWER\n  FILESYSTEM* _emergency_power_fs")
+        private += "\n" + api_block("#if MESH_ENABLE_EMERGENCY_POWER\n  bool _emergency_radio_sleeping")
         public = api_block("#if MESH_ENABLE_EMERGENCY_POWER\n  uint32_t emergencySleepMilliseconds")
         implementation = (ROOT / "src/helpers/CommonCLI_Emergency.cpp").read_text(encoding="ascii")
         implementation = re.sub(r"^#include[^\n]*\n", "", implementation, flags=re.MULTILINE)

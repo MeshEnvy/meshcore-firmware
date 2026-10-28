@@ -944,7 +944,6 @@ class CommonCLI {
 #if MESH_ENABLE_EMERGENCY_POWER
   FILESYSTEM* _emergency_power_fs = nullptr;
   mesh::emergencypower::State _emergency_power;
-  bool _emergency_radio_sleeping = false;
   void loadEmergencyPower(FILESYSTEM* fs);
   bool saveEmergencyPower(const mesh::emergencypower::Settings& settings);
   void loopEmergencyPower();
@@ -968,7 +967,6 @@ class CommonCLI {
   SensorManager* _sensors;
   RegionMap* _region_map;
   uint32_t _media_regions_retry_ms = 0;
-  bool _media_regions_ready = false;
   static bool mediaMeshRegionStoreMissing(FILESYSTEM* fs);
   void recoverMediaMeshRegions();
   static bool updateMediaMeshScope(void* context, bool enable, bool commit);
@@ -989,6 +987,12 @@ class CommonCLI {
   bool _observer_save_result_known = false;
   bool _observer_save_succeeded = false;
 #endif
+  // Runtime flags share padding; persisted NodePrefs retains its own layout.
+  bool _media_regions_ready = false;
+#if MESH_ENABLE_EMERGENCY_POWER
+  bool _emergency_radio_sleeping = false;
+#endif
+  uint8_t _rx_settings_pending = 0;
   bool _com_prefs_needs_upgrade = false;  // old-format legacy prefs detected; rewrite once after load
   bool _common_save_result_known = false;
   bool _common_save_succeeded = false;
@@ -1004,7 +1008,6 @@ class CommonCLI {
     RxGain = 1, RxPowerSaving = 2, RxSideDetectors = 4, RxRfRx = 8,
     RxPendingMask = 15, RxRfRxDisabled = 128
   };
-  uint8_t _rx_settings_pending = 0;
   uint32_t _rx_settings_retry_at = 0;
   uint32_t _prefs_save_failures = 0;
   mesh::RadioProfileCLI _radio_profiles;

@@ -355,53 +355,59 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   size_t serial_log_remaining = 0;
   size_t serial_log_pending_size = 0;
   char serial_log_pending[640];
+  int serial_acl_next = -1;
+  int serial_acl_count = 0;
+  int serial_recent_next = -1;
+  int serial_recent_count = 0;
+  SimpleMeshTables::RecentRepeaterInfo serial_recent_cursor;
+  int serial_recent_cursor_index = -1;
   bool serial_log_active = false;
   bool serial_log_eof_pending = false;
   bool serial_log_skip_line = false;
-  int serial_acl_next = -1;
-  int serial_acl_count = 0;
   bool serial_acl_header = false;
-  int serial_recent_next = -1;
-  int serial_recent_count = 0;
   bool serial_recent_header = false;
   bool serial_recent_has_cursor = false;
-  SimpleMeshTables::RecentRepeaterInfo serial_recent_cursor;
-  int serial_recent_cursor_index = -1;
+#endif
+  // Runtime only: group scalar timers and flags to avoid gaps before aligned
+  // members. No persisted preferences or queue capacities depend on this order.
+  uint64_t uptime_millis;
+  uint64_t last_battery_alert_sent;
+#if MESH_ENABLE_HOST_CLI
+  uint64_t host_cli_nonce;
+  uint64_t host_cli_claim_challenge;
 #endif
   uint32_t last_millis;
-  uint64_t uptime_millis;
   unsigned long next_local_advert, next_flood_advert;
+  uint32_t primary_radio_mutation_generation = 0;
+  uint32_t radio_reply_deadline = 0;
+#if MESH_ENABLE_HOST_CLI
+  unsigned long host_cli_deadline;
+  unsigned long host_cli_claim_emit_at;
+#endif
+  uint32_t pending_self_advert_delay;
+  unsigned long next_battery_alert_check;
+  unsigned long next_recent_repeater_sweep;
   mesh::DeferredCliCommand deferred_cli_command;
   mesh::RemoteCliReplyCache remote_cli_reply_cache;
   mesh::ReplayResetNonce replay_reset_nonce;
-  bool replay_clock_set = false;
   mesh::TempRadioReplyBarrier temp_radio_reply_barrier;
-  uint32_t primary_radio_mutation_generation = 0;
-  bool primary_radio_mutation_starts_temp = false;
-  uint32_t radio_reply_deadline = 0;
-  bool radio_reply_secondary = false;
   void finishRadioReply(bool delivered);
   void serviceRadioReplyDeadline();
   TransportKey deferred_cli_reply_scope;
+  mesh::RxInactivityWatchdog rx_inactivity_watchdog;
+  mesh::RepeaterRadioTiming radio_timing;
+  mesh::Packet* pending_battery_alert_packet;
+  bool replay_clock_set = false;
+  bool primary_radio_mutation_starts_temp = false;
+  bool radio_reply_secondary = false;
   bool deferred_cli_reply_scoped;
 #if MESH_ENABLE_HOST_CLI
   bool host_cli_waiting;
   bool host_cli_claimed;
   bool host_cli_claim_emit;
-  unsigned long host_cli_deadline;
-  unsigned long host_cli_claim_emit_at;
-  uint64_t host_cli_nonce;
-  uint64_t host_cli_claim_challenge;
 #endif
-  uint32_t pending_self_advert_delay;
   bool pending_self_advert;
   bool pending_self_advert_flood;
-  unsigned long next_battery_alert_check;
-  mesh::RxInactivityWatchdog rx_inactivity_watchdog;
-  mesh::RepeaterRadioTiming radio_timing;
-  unsigned long next_recent_repeater_sweep;
-  uint64_t last_battery_alert_sent;
-  mesh::Packet* pending_battery_alert_packet;
   bool battery_alert_sent;
   bool _logging;
 #ifdef DISPLAY_ACTIVITY_DASHBOARD
