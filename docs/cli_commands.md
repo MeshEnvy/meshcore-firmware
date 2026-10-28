@@ -1631,6 +1631,28 @@ For other roles, use the separately named `-ota-` artifact when required. A
 LoRa OTA, and the expanded FULL feature set. A `-full-logging-ota-` artifact is
 emitted only when that hardware/role has no matching WiFi MQTT environment.
 
+### Report the USB connection mode
+
+`get usb.mode` reports the primary serial backend compiled into the running
+application, checking its actual primary `Serial` type as well as the USB
+build flags. It is available on Repeaters, Room Servers, Sensors and Full
+Companions, including the Companion protocol-14 CLI command. It is read-only:
+no reset, settings write, logging toggle or packet-capture pause is performed.
+
+The exact reply is one of:
+
+- `usb.mode hardware-cdc-jtag`: ESP32 hardware USB Serial/JTAG, with CDC on boot.
+- `usb.mode tinyusb`: ESP32 TinyUSB CDC on boot, or nRF52 using TinyUSB.
+- `usb.mode uart`: ESP32 primary `Serial` is UART, not native USB CDC.
+- `usb.mode unknown`: this build does not provide a proven backend mapping.
+
+The result describes the application, not a connected adapter, host COM-port
+name, optional second logging interface or current ROM/DFU bootloader. There
+is no `set usb.mode`; changing the backend requires another firmware build.
+Older firmware may reject this command. A flasher should retain its manual
+connection option when the report is absent, unknown or conflicts with the
+selected USB device; it must not guess from the board name or shared USB ID.
+
 ### Control live USB logging
 
 **Search terms:** serial logging, USB debug log, enable logging, disable logging, debug output.
