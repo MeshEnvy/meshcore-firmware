@@ -3149,6 +3149,10 @@ defer sleep. Existing hard low-voltage protection remains in force.
 On ESP32, an active native USB connection uses short CPU idle waits to keep
 the console usable while the radio sleeps. Timed light sleep resumes after
 USB detaches and its disconnect grace expires.
+On nRF52, an enumerated USB host limits each CPU idle slice to 100 ms so
+reconnects and replies can progress while LoRa remains asleep. Detached
+maintenance intervals remain up to ten seconds; command completion can need
+several passes through the main loop.
 
 ```text
 get power.emergency
@@ -3164,8 +3168,8 @@ five seconds for its reply. `power.awake` keeps the node up for the next given
 number of minutes (0 cancels; maximum 10080), even outside the hourly window.
 That override is held in RAM and ends on reboot; it never disables hard
 low-voltage shutdown. Use it before maintenance that needs continuous uptime.
-LoRa commands must arrive during an awake window. Local USB commands can wait
-up to one ten-second maintenance interval while the node is sleeping.
+LoRa commands must arrive during an awake window. Local serial commands remain
+available through maintenance wakes while the radio sleeps.
 
 `get power.emergency` reports the mode, battery estimate, desired `window`,
 actual radio ownership, seconds until the next awake window, and remaining

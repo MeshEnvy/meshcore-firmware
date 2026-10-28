@@ -58,6 +58,7 @@ Completed validation reports, experiments, and test guides are collected here. O
 
 ## Companion, USB, BLE, and display
 
+- [Mercerwood 1.18.0.2 candidate checks, 2026-10-28](hardware_validation_mercerwood_1_18_0_2_2026-10-28.md)
 - [Mercerwood qualification: 12 active radios, 2026-10-20](hardware_validation_mercerwood_1_18_0_1_2026-10-20.md)
 - [Mercerwood Companion qualification follow-up, 2026-10-19](companion_qualification_followup_2026-10-19.md)
 - [ESP32 management password hardware check, 2026-10-19](esp32_management_password_2026-10-19.md)

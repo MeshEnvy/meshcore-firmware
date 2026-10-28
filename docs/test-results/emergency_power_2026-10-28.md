@@ -12,6 +12,11 @@ SolarXiao 33S, RAK3401 and Heltec V4.3 passed physical sleep, override, automati
 wake and reboot-persistence trials. Current savings and operation with a real
 battery at 5% were not measured.
 
+The later [1.18.0.2 bench campaign](hardware_validation_mercerwood_1_18_0_2_2026-10-28.md)
+found and fixed nRF52 USB reconnect starvation during automatic emergency
+sleep. Attached USB hosts now use CPU idle slices of at most 100 ms while
+LoRa stays asleep. The measurements below retain their original source.
+
 ## Behavior
 
 Supported infrastructure images enter automatic emergency mode at **5% or
